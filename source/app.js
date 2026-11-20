@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 168, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 190, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 230, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -9,10 +9,10 @@ const WAVES = [
   [1.00, 0.02, 0.28, 22, 0.75],
   [0.996, 0.09, 0.07, 68, 0.18],
   [0.996, -0.09, 0.045, 33, 0.14],
-  [0.98, 0.18, 0.018, 13, 0.08],
-  [0.98, -0.20, 0.012, 9, 0.06],
-  [0.12, 0.99, 0.02, 52, 0.08],
-  [-0.06, 1.00, 0.01, 27, 0.05]
+  [0.86, 0.42, 0.018, 17, 0.08],
+  [0.72, -0.62, 0.012, 11, 0.06],
+  [0.22, 0.97, 0.02, 52, 0.08],
+  [-0.38, 0.92, 0.01, 29, 0.05]
 ];
 
 const SUN = (function () {
@@ -1613,7 +1613,7 @@ async function main() {
       const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
       // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
       const eyeH = Math.max(camY, 0.4);
-      const cover = Math.min(18000, 2800 + eyeH * 55) * 2;
+      const cover = Math.min(6400, 2200 + eyeH * 28) * 2;
       const snap = 4;
       const ox = Math.floor(camX / snap) * snap - cover * 0.5;
       const oz = Math.floor(camZ / snap) * snap - cover * 0.5;

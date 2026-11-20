@@ -186,15 +186,16 @@ fn caustic(xz: vec2<f32>) -> f32 {
     let k = net[e].z;
     let phase = k * dot(dir, p) - sqrt(G * k) * F.time * 1.35;
     let s = sin(phase);
-    let wa = k * net[e].w * 0.9;
+    let wa = k * net[e].w * 0.28;
     jxx += dir.x * dir.x * wa * s;
     jzz += dir.y * dir.y * wa * s;
     jxz += dir.x * dir.y * wa * s;
   }
   let jac = (1.0 - jxx) * (1.0 - jzz) - jxz * jxz;
   // The swell is long, so its area change is small. Scale it until the bright lines read on the sand.
-  let pinch = sat((1.0 - jac) * 6.5);
-  return pow(pinch, 3.0) * exp(-depth * 0.45);
+  // Soft focus, not a bright lattice. The extra waves only break the pattern up.
+  let pinch = sat((0.42 - jac) * 2.4);
+  return pow(pinch, 1.7) * exp(-depth * 0.4) * 0.45;
 }
 
 fn shadowAt(p: vec3<f32>) -> f32 {
@@ -224,7 +225,7 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
     let depth = max(-world.y, 0.0);
     let absorb = exp(-depth * vec3<f32>(0.38, 0.08, 0.05));
     light *= absorb;
-    if (world.y < -0.04) { light += F.sunCol * caustic(world.xz) * absorb * 1.15; }
+    if (world.y < -0.04) { light += F.sunCol * caustic(world.xz) * absorb * 0.55; }
   }
   if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
   var col = albedo * light;
@@ -409,8 +410,53 @@ fn waveGain(len: f32, dist: f32) -> f32 {
 }
 
 fn seaFade(dist: f32) -> f32 {
-  let reach = mix(2200.0, 380.0, sat(F.camPos.y / 32.0));
-  return smoothstep(reach, reach * 0.28, dist);
+  let reach = mix(5200.0, 1200.0, sat(F.camPos.y / 70.0));
+  return smoothstep(reach, reach * 0.32, dist);
+}
+
+fn ggxSun(N: vec3<f32>, V: vec3<f32>, rough: f32, fres: f32) -> vec3<f32> {
+  let a = max(rough, 0.004);
+  let a2 = a * a;
+  let H = normalize(V + F.sunDir);
+  let ndh = max(dot(N, H), 0.0);
+  let ndv = max(dot(N, V), 0.001);
+  let ndl = max(dot(N, F.sunDir), 0.0);
+  let d = ndh * ndh * (a2 - 1.0) + 1.0;
+  let D = a2 / max(PI * d * d, 1e-6);
+  let k = a2 * 0.5;
+  let G = (ndv / (ndv * (1.0 - k) + k)) * (ndl / (ndl * (1.0 - k) + k));
+  // The peak is narrow. Scale it so a whole crest cannot clip to white.
+  return F.sunCol * (D * G * fres * ndl) / (4.0 * ndv) * 0.16;
+}
+
+fn capillary(xz: vec2<f32>, dist: f32) -> vec2<f32> {
+  // Wind waves at several lengths. Each band drops out once it is smaller than a pixel.
+  let pix = max(dist * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.012);
+  let chop = mix(0.22, 1.0, sat(F.ctrl.x));
+  let wind = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+  var slope = vec2<f32>(0.0);
+  let bands = array<vec3<f32>, 4>(
+    vec3<f32>(3.1, 0.045, 0.85),
+    vec3<f32>(1.15, 0.055, 1.15),
+    vec3<f32>(0.42, 0.05, 1.55),
+    vec3<f32>(0.16, 0.035, 2.1)
+  );
+  for (var b = 0; b < 4; b++) {
+    let len = bands[b].x;
+    let keep = smoothstep(pix * 1.4, pix * 3.6, len);
+    if (keep <= 0.001) { continue; }
+    for (var k = 0; k < 3; k++) {
+      let ang = (f32(k) - 1.0) * 0.62 + f32(b) * 0.31;
+      let ca = cos(ang);
+      let sa = sin(ang);
+      let dir = vec2<f32>(wind.x * ca - wind.y * sa, wind.x * sa + wind.y * ca);
+      let kk = 6.2831853 / len;
+      let ph = kk * dot(dir, xz) - sqrt(G * kk) * F.time * bands[b].z * max(F.ctrl.y, 0.0);
+      let w = bands[b].y * keep * chop * select(0.4, 0.75, k < 2);
+      slope += dir * cos(ph) * w;
+    }
+  }
+  return slope;
 }
 
 struct Sea {
@@ -472,18 +518,6 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
   n.x *= flatten;
   n.z *= flatten;
   n.y = mix(1.0, n.y, flatten);
-  let detail = sat(1.0 - dist / 80.0) * scale;
-  let fine = sat(1.0 - dist / 22.0) * scale;
-  let wind = vec2<f32>(0.998, 0.05);
-  let cross = vec2<f32>(-wind.y, wind.x);
-  let along = dot(xz, wind);
-  let rip = cos(along * 2.3 + F.time * 2.5) * 0.5
-          + cos(along * 6.2 - F.time * 4.0) * 0.3
-          + cos(along * 15.0 + F.time * 6.4) * 0.16 * fine
-          + cos(dot(xz, cross) * 9.0 + F.time * 4.6) * 0.1 * fine;
-  let amp = 0.06 * detail * F.shalC.w * max(F.ripO.w, 0.0);
-  n.x += (wind.x * rip + cross.x * rip * 0.25) * amp;
-  n.z += (wind.y * rip + cross.y * rip * 0.25) * amp;
   var o: Sea;
   o.disp = d;
   o.nrm = normalize(n);
@@ -495,27 +529,26 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
 fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   // Past the mesh the bottom is deep, so this pass does not read the heightfield.
   let S = seaAt(xz, 1.0, 30.0);
-  let N = S.nrm;
   let world = vec3<f32>(xz.x, 0.0, xz.y);
+  let distS = length(world - F.camPos);
+  let cap = capillary(xz, distS);
+  let N = normalize(S.nrm + vec3<f32>(cap.x, 0.0, cap.y));
   let V = normalize(F.camPos - world);
   let ndv = max(dot(N, V), 0.02);
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   var reflCol = skyColor(reflect(-V, N));
   let Rd = reflect(-V, N);
-  if (Rd.y < 0.04) {
-    reflCol = mix(vec3<f32>(0.015, 0.06, 0.09), reflCol, sat(Rd.y * 10.0 + 0.25));
+  if (Rd.y < 0.02) {
+    reflCol = mix(F.deepC.rgb, reflCol, sat(Rd.y * 12.0 + 0.15));
   }
-  let ndl = max(dot(N, F.sunDir), 0.0);
-  let distS = length(world - F.camPos);
-  let nearW = seaFade(distS);
-  let crest = smoothstep(0.78, 0.42, S.jac);
-  let foam = sat(max(crest, S.brk * 0.85)) * nearW;
-  var base = vec3<f32>(0.012, 0.055, 0.12) * (0.86 + 0.2 * ndl * nearW);
-  base = mix(base, vec3<f32>(0.92, 0.94, 0.92), foam * 0.8);
-  var col = mix(base, reflCol, fres * (1.0 - foam * 0.65));
-  let H = normalize(V + F.sunDir);
-  let power = mix(360.0, 80.0, sat(distS / 200.0));
-  col += F.sunCol * pow(max(dot(N, H), 0.0), power) * fres * 8.0 * nearW;
+  let rough = clamp(0.01 + sat(F.mat.x) * 0.06, 0.008, 0.07);
+  let crest = smoothstep(0.5, 0.18, S.jac);
+  let grain = n2(xz * 0.11 + vec2<f32>(F.time * 0.04, 0.0));
+  let foam = sat(crest - 0.55) * smoothstep(0.42, 0.78, grain) * seaFade(distS) * max(F.mood.w, 0.0);
+  var base = F.deepC.rgb;
+  base = mix(base, vec3<f32>(0.86, 0.88, 0.86), foam * 0.45);
+  var col = mix(base, reflCol, fres * (1.0 - foam * 0.5));
+  col += ggxSun(N, V, rough, fres) * (1.0 - foam);
   let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));
   return mix(F.horiz, col, sat(exp(-distS * dens)));
 }
@@ -527,8 +560,8 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
     let t = -F.camPos.y / rd.y;
     if (t > 1.0 && t < 250000.0) {
       let xz = F.camPos.xz + rd.xz * t;
-      let inside = xz.x > F.gridO.x && xz.y > F.gridO.y && xz.x < F.gridO.x + F.cover && xz.y < F.gridO.y + F.cover;
-      if (!inside) { return vec4<f32>(farOcean(xz), 1.0); }
+      // The mesh covers the near water. This fills anything it does not, including the horizon.
+      return vec4<f32>(farOcean(xz), 1.0);
     }
   }
   return vec4<f32>(skyColor(rd), 1.0);
@@ -538,13 +571,6 @@ struct WaterV {
   @builtin(position) clip: vec4<f32>,
   @location(0) world: vec3<f32>,
   @location(1) xz0: vec2<f32>,
-}
-fn warp(t: f32) -> f32 {
-  // Exponential pack: a few meters between vertices at the camera, the outer ring at the horizon.
-  let x = t * 2.0 - 1.0;
-  let k = 5.5;
-  let u = (exp(k * abs(x)) - 1.0) / (exp(k) - 1.0);
-  return sign(x) * u * 0.5 + 0.5;
 }
 fn ripAt(xz: vec2<f32>) -> vec3<f32> {
   let dom = max(F.ripO.z, 1.0);
@@ -560,15 +586,22 @@ fn ripAt(xz: vec2<f32>) -> vec3<f32> {
   let k = F.shalC.w * fade;
   return vec3<f32>(h * k, (h - hx) / e * k * 0.85, (h - hz) / e * k * 0.85);
 }
+fn warp(t: f32) -> f32 {
+  // Dense under the camera. The outer ring is allowed to be coarse because those
+  // triangles are not asked to hold a wave.
+  let x = t * 2.0 - 1.0;
+  let k = 4.2;
+  let u = (exp(k * abs(x)) - 1.0) / (exp(k) - 1.0);
+  return sign(x) * u * 0.5 + 0.5;
+}
 @vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
   let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
   let field = sampleField(xz);
   let s = seaAt(xz, field.y, max(-field.x, 0.2));
-  // Distant swell is smaller than a pixel, so the horizon stays a line. The normals still carry it.
   let dist = length(xz - F.camPos.xz);
-  let reach = mix(900.0, 260.0, sat(F.camPos.y / 32.0));
-  let geom = smoothstep(reach, reach * 0.2, dist);
-  var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.04, 1.0, geom), xz.y + s.disp.z * geom);
+  // Height fades with distance, not along a grid row, so the swell does not end in a straight ridge.
+  let geom = smoothstep(1100.0, 140.0, dist);
+  var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.05, 1.0, geom), xz.y + s.disp.z * geom);
   w.y += ripAt(xz).x * geom;
   var o: WaterV;
   o.world = w;
@@ -589,27 +622,35 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let scale = field.y;
   let bed = field.x;
   let S = seaAt(in.xz0, scale, max(-bed, 0.2));
+  let distS = length(in.world - F.camPos);
   let rip = ripAt(in.xz0);
-  let N = normalize(S.nrm + vec3<f32>(rip.y, 0.0, rip.z));
+  let cap = capillary(in.xz0, distS);
+  let N = normalize(S.nrm + vec3<f32>(rip.y + cap.x, 0.0, rip.z + cap.y));
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
+  // Schlick, F0 for water against air (IOR 1.333).
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   let reflK = sat(F.mat.y);
-  let distS = length(in.world - F.camPos);
-  let crest = smoothstep(0.78, 0.42, S.jac) * smoothstep(0.25, 0.7, scale);
-  let foam = sat(max(crest, S.brk * 0.85));
+  let rough = clamp(0.008 + sat(F.mat.x) * 0.055, 0.006, 0.065);
+  let grain = n2(in.xz0 * 0.13 + vec2<f32>(F.time * 0.04, 0.0));
+  let grain2 = n2(in.xz0 * 0.37 - vec2<f32>(0.0, F.time * 0.07));
+  let crest = smoothstep(0.58, 0.2, S.jac) * smoothstep(0.2, 0.65, scale);
+  let crestFoam = sat(max(crest, S.brk) - 0.62) * smoothstep(0.4, 0.78, grain * 0.65 + grain2 * 0.35);
+  let shore = smoothstep(1.05, 0.18, max(-bed, 0.0)) * smoothstep(0.02, 0.16, max(-bed, 0.0));
+  let foam = sat(max(crestFoam, shore * smoothstep(0.45, 0.8, grain2))) * max(F.mood.w, 0.0);
 
   if (F.under > 0.5) {
     let I = normalize(in.world - F.camPos);
     let R = refract(I, -N, 1.333);
     var col: vec3<f32>;
     if (dot(R, R) < 1e-4) {
-      col = vec3<f32>(0.012, 0.055, 0.075);
-      col += vec3<f32>(0.03, 0.08, 0.09) * pow(1.0 - max(dot(-I, N), 0.0), 3.0);
+      col = vec3<f32>(0.01, 0.04, 0.055);
+      col += vec3<f32>(0.04, 0.07, 0.08) * pow(1.0 - max(dot(-I, N), 0.0), 3.0);
     } else {
       col = skyColor(normalize(R));
     }
-    col = mix(col, vec3<f32>(0.75, 0.78, 0.76), foam * 0.45);
+    col = mix(vec3<f32>(0.02, 0.09, 0.1), col, exp(-distS * 0.06));
+    col = mix(col, vec3<f32>(0.75, 0.78, 0.76), foam * 0.35);
     return vec4<f32>(tonemap(col), 1.0);
   }
 
@@ -619,64 +660,60 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   // Land, trees and boats in front of this fragment stay as the blit left them.
   if (dep < 0.999 && dep < frag.z - 0.00015) { discard; }
 
+  // The reflection image is the mirrored camera. On flat water it lines up with this pixel.
+  // The normal slides that sample, which is what makes the shore move with the surface.
   var reflCol = skyColor(reflect(-V, N));
-  if (reflect(-V, N).y < 0.04) {
-    reflCol = mix(vec3<f32>(0.015, 0.06, 0.09), reflCol, sat(reflect(-V, N).y * 10.0 + 0.25));
+  let Rd = reflect(-V, N);
+  if (Rd.y < 0.02) {
+    reflCol = mix(F.deepC.rgb, reflCol, sat(Rd.y * 14.0 + 0.2));
   }
   if (F.reflOn > 0.5) {
-    let q = vec3<f32>(in.world.x + N.x * 1.6, in.world.y, in.world.z + N.z * 1.6);
-    let c = F.reflVP * vec4<f32>(q, 1.0);
-    if (c.w > 0.05) {
-      let ndc = c.xy / c.w;
-      let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-      if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
-        let edge = smoothstep(0.0, 0.05, uv.x) * smoothstep(1.0, 0.95, uv.x)
-                 * smoothstep(0.0, 0.05, uv.y) * smoothstep(1.0, 0.95, uv.y);
-        let rs = textureSampleLevel(reflTex, reflSamp, uv, 0.0);
-        reflCol = mix(reflCol, rs.rgb, rs.a * edge * (1.0 - foam) * reflK);
-      }
+    var uv = frag.xy / F.res;
+    uv += N.xz * vec2<f32>(0.055, -0.055) * reflK;
+    let edge = smoothstep(0.0, 0.04, uv.x) * smoothstep(1.0, 0.96, uv.x)
+             * smoothstep(0.0, 0.04, uv.y) * smoothstep(1.0, 0.96, uv.y);
+    if (edge > 0.001) {
+      let blur = rough * 0.012;
+      let c0 = textureSampleLevel(reflTex, reflSamp, uv, 0.0).rgb;
+      let c1 = textureSampleLevel(reflTex, reflSamp, uv + vec2<f32>(blur, blur * 0.4), 0.0).rgb;
+      let c2 = textureSampleLevel(reflTex, reflSamp, uv - vec2<f32>(blur * 0.5, blur), 0.0).rgb;
+      let rs = (c0 + c1 + c2) * 0.333;
+      reflCol = mix(reflCol, rs, edge * (1.0 - foam * 0.65) * reflK);
     }
   }
 
-  let ndl = max(dot(N, F.sunDir), 0.0);
   var base = F.deepC.rgb;
-  var seeBottom = 0.0;
   if (dep < 0.9995) {
     var look = in.clip.xy;
     var sp = worldAt(look, dep);
     var d = in.world.y - sp.y;
     if (d > -0.05) {
-      // The surface bends the view of the bottom. Reject a sample that lands on something above the water.
-      let bend = N.xz * clamp(d, 0.0, 2.4) * 16.0 * F.mat.z;
+      let bend = N.xz * clamp(d, 0.0, 3.0) * 7.0 * F.mat.z;
       let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
       let rd = textureLoad(sceneDepth, vec2<i32>(shifted), 0);
       if (rd < 0.999) {
         let rw = worldAt(shifted, rd);
         if (rw.y < in.world.y - 0.03) { look = shifted; sp = rw; d = in.world.y - rw.y; }
       }
-      let trans = exp(-max(d, 0.04) * vec3<f32>(0.45, 0.13, 0.08) * max(F.deepC.w, 0.05));
+      let depth = max(d, 0.02);
+      let sigma = vec3<f32>(0.48, 0.075, 0.04) * max(F.deepC.w, 0.08);
+      let trans = exp(-depth * sigma);
       let sceneCol = textureLoad(sceneTex, vec2<i32>(look), 0).rgb;
-      base = sceneCol * trans + F.shalC.rgb * (1.0 - trans);
-      seeBottom = exp(-max(d, 0.0) * 0.85);
+      let scatter = mix(F.shalC.rgb, F.deepC.rgb, sat(depth / 7.0));
+      base = sceneCol * trans + scatter * (1.0 - trans);
     }
   }
-  let nearW = seaFade(distS);
-  base *= 0.9 + 0.16 * ndl * nearW;
-  base = mix(base, vec3<f32>(0.93, 0.95, 0.93), foam * nearW * 0.75 * max(F.mood.w, 0.0));
   base = mix(F.deepC.rgb, base, sat(F.mat.w));
+  base = mix(base, vec3<f32>(0.9, 0.91, 0.9), foam * 0.5);
 
-  let fresB = fres * reflK * (1.0 - seeBottom * 0.72);
-  var col = mix(base, reflCol, fresB * (1.0 - foam * nearW * 0.65));
-  let H = normalize(V + F.sunDir);
-  let ndh = max(dot(N, H), 0.0);
-  let power = mix(360.0, 72.0, sat(distS / 200.0)) * mix(1.0, 0.22, sat(F.mat.x));
-  col += F.sunCol * pow(ndh, power) * fres * reflK * 8.0 * nearW;
-  let sss = pow(sat(dot(-V, F.sunDir)), 4.0) * sat(S.disp.y) * sat(1.0 - N.y);
-  col += vec3<f32>(0.2, 0.55, 0.38) * sss * 0.7;
+  // Fresnel is the only thing that chooses reflection versus the water beneath it.
+  var col = mix(base, reflCol, fres * reflK * (1.0 - foam * 0.55));
+  col += ggxSun(N, V, rough, fres * reflK) * (1.0 - foam * 0.8);
+  let crestLight = pow(sat(1.0 - N.y), 1.6) * sat(S.disp.y * 0.8) * max(dot(F.sunDir, vec3<f32>(0.0, 1.0, 0.0)), 0.0);
+  col += F.sunCol * vec3<f32>(0.45, 0.62, 0.55) * crestLight * 0.12;
 
-  let dist = length(in.world - F.camPos);
   let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));
-  col = mix(F.horiz, col, sat(exp(-dist * dens)));
+  col = mix(F.horiz, col, sat(exp(-distS * dens)));
   return vec4<f32>(tonemap(col), 1.0);
 }
 
