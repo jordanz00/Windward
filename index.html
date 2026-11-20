@@ -660,7 +660,9 @@ struct MeshV {
 }
 @fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
-  return vec4<f32>(shade(in.world, in.nrm, in.col), 1.0);
+  var n = in.nrm;
+  if (dot(n, F.camPos - in.world) < 0.0) { n = -n; }
+  return vec4<f32>(shade(in.world, n, in.col), 1.0);
 }
 
 struct GrassV {
@@ -694,7 +696,7 @@ struct GrassV {
 @fragment fn fsGrass(in: GrassV) -> @location(0) vec4<f32> {
   let halfW = mix(0.5, 0.04, in.uv.y);
   if (abs(in.uv.x - 0.5) > halfW) { discard; }
-  var col = mix(vec3<f32>(0.16, 0.28, 0.10), vec3<f32>(0.42, 0.46, 0.18), in.uv.y);
+  var col = mix(vec3<f32>(0.09, 0.22, 0.06), vec3<f32>(0.28, 0.36, 0.10), in.uv.y);
   if (in.kind > 0.5) { col = mix(vec3<f32>(0.05, 0.16, 0.10), vec3<f32>(0.20, 0.32, 0.14), in.uv.y); }
   col *= 0.85 + 0.3 * n2(in.world.xz * 2.0);
   return vec4<f32>(shade(in.world, in.nrm, col), 1.0);
@@ -1218,18 +1220,19 @@ function cylinder(sides, rings, r0, r1, h, col, swayTop) {
 
 function makePalm() {
   const m = new Mesh();
-  const sides = 6, seg = 6;
+  const sides = 7, seg = 9;
   const rings = [];
   for (let i = 0; i <= seg; i++) {
     const t = i / seg;
-    const y = t * 1.05;
-    const lean = t * t * 0.42;
-    const r = 0.055 * (1 - t * 0.55);
+    const y = t * 1.02;
+    const lean = t * t * 0.1;
+    const scar = (i & 1) ? 1.1 : 0.9;
+    const r = (0.078 * (1 - t * 0.58) + 0.016) * scar;
+    const shade = (i & 1) ? 0.72 : 1;
     const row = [];
     for (let k = 0; k < sides; k++) {
       const a = k / sides * Math.PI * 2;
-      const lx = lean + Math.cos(a) * r, lz = Math.sin(a) * r;
-      row.push(m.v(lx, y, lz, Math.cos(a), 0.15, Math.sin(a), 0.42, 0.30, 0.16, t * 0.35));
+      row.push(m.v(lean + Math.cos(a) * r, y, Math.sin(a) * r, Math.cos(a), 0.08, Math.sin(a), 0.40 * shade, 0.29 * shade, 0.16 * shade, t * 0.08));
     }
     rings.push(row);
   }
@@ -1239,50 +1242,113 @@ function makePalm() {
       m.tri(a, c, b); m.tri(b, c, d);
     }
   }
-  function frondRing(count, len, drop, width, phase) {
-    const steps = 5;
-    for (let f = 0; f < count; f++) {
-      const ang = f / count * Math.PI * 2 + phase;
-      const dx = Math.cos(ang), dz = Math.sin(ang);
-      const px = -dz, pz = dx;
-      let prev = null;
-      for (let s = 0; s <= steps; s++) {
-        const t = s / steps;
-        const rad = 0.06 + t * len;
-        const y = 1.04 - t * t * drop;
-        const w = width * Math.sin(t * Math.PI) * (1.05 - t * 0.35);
-        const cx = 0.42 + dx * rad, cz = dz * rad;
-        const col = [0.10 + t * 0.12, 0.32 + (1 - t) * 0.12, 0.07];
-        const sway = 0.4 + t * 0.85;
-        const ny = 0.85;
-        const a = m.v(cx + px * w, y, cz + pz * w, dx, ny, dz, col[0], col[1], col[2], sway);
-        const b = m.v(cx - px * w, y, cz - pz * w, dx, ny, dz, col[0] * 0.75, col[1] * 0.85, col[2], sway);
-        if (prev) { m.tri(prev[0], prev[1], a); m.tri(prev[1], b, a); }
-        prev = [a, b];
+  // A frond is a rachis with two rows of leaflets that sag off it. The jagged
+  // width is what reads as separate leaflets once the tree is small on screen.
+  function frond(ang, len, rise, droop, width, col, sway0, steps) {
+    const dx = Math.cos(ang), dz = Math.sin(ang);
+    const px = -dz, pz = dx;
+    let pc = -1, pl = -1, pr = -1;
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const rad = 0.02 + t * len;
+      const y = 1.04 + Math.sin(t * Math.PI * rise) * 0.24 - t * t * droop;
+      const jag = (s & 1) ? 1.35 : 0.55;
+      const w = (Math.sin(Math.min(t * 1.05 + 0.08, 1) * Math.PI) * width + 0.01) * jag;
+      const cx = 0.1 + dx * rad, cz = dz * rad;
+      const g = col[1] * (0.7 + (1 - t) * 0.45);
+      const sway = sway0 + t * 0.7;
+      const C = m.v(cx, y, cz, dx, 0.8, dz, col[0] * 0.65, g * 0.7, col[2] * 0.5, sway * 0.45);
+      const L = m.v(cx + px * w, y - w * 0.62, cz + pz * w, px, 0.4, pz, col[0], g, col[2], sway);
+      const R = m.v(cx - px * w, y - w * 0.62, cz - pz * w, -px, 0.4, -pz, col[0] * 0.82, g * 0.88, col[2] * 0.9, sway);
+      if (pc >= 0) {
+        m.tri(pc, C, pl); m.tri(pl, C, L);
+        m.tri(pc, pr, C); m.tri(pr, R, C);
       }
+      pc = C; pl = L; pr = R;
     }
   }
-  frondRing(7, 1.25, 1.15, 0.22, 0.3);
-  frondRing(6, 0.72, 0.55, 0.16, 0.8);
+  for (let f = 0; f < 12; f++) frond(f / 12 * Math.PI * 2, 0.72, 0.48, 0.78, 0.11, [0.11, 0.32, 0.07], 0.42, 7);
+  for (let f = 0; f < 5; f++) frond(f / 5 * Math.PI * 2 + 0.3, 0.3, 1.15, 0.04, 0.055, [0.16, 0.44, 0.1], 0.22, 4);
+  for (let f = 0; f < 8; f++) frond(f / 8 * Math.PI * 2 + 0.15, 0.34, 0.12, 0.62, 0.04, [0.34, 0.26, 0.09], 0.12, 3);
   return m;
 }
 
 function makeBroad() {
   const m = new Mesh();
-  const trunk = cylinder(5, 4, 0.055, 0.03, 0.55, [0.30, 0.20, 0.11], 0.12);
+  const trunk = cylinder(7, 5, 0.14, 0.05, 0.4, [0.33, 0.23, 0.12], 0.04);
   appendMesh(m, trunk, 0, 0, 0, 0, 1, null, 1);
-  const layers = [[0.42, 0.46, 0.28, 0.22, 0.34, 0.14], [0.62, 0.32, 0.22, 0.16, 0.30, 0.11], [0.78, 0.16, 0.16, 0.20, 0.36, 0.12]];
-  for (let L = 0; L < layers.length; L++) {
-    const y = layers[L][0], rad = layers[L][1], h = layers[L][2];
-    const col = [layers[L][3], layers[L][4], layers[L][5]];
-    const sides = 7;
-    const top = m.v(0, y + h, 0, 0, 1, 0, col[0] * 1.25, col[1] * 1.2, col[2], 0.28);
-    const ring = [];
-    for (let k = 0; k < sides; k++) {
-      const a = k / sides * Math.PI * 2 + L * 0.4;
-      ring.push(m.v(Math.cos(a) * rad, y, Math.sin(a) * rad, Math.cos(a), 0.45, Math.sin(a), col[0], col[1], col[2], 0.32));
+  const flare = cylinder(7, 1, 0.22, 0.13, 0.1, [0.28, 0.19, 0.11], 0);
+  appendMesh(m, flare, 0, 0, 0, 0.35, 1, null, 1);
+  const leaf = icosphere(1, 0.4, [0.12, 0.27, 0.08]);
+  for (let i = 0; i < leaf.pos.length / 3; i++) {
+    const h = ((i * 7) % 5) / 5;
+    leaf.pos[i * 3] *= 0.82 + h * 0.36;
+    leaf.pos[i * 3 + 2] *= 1.08 - h * 0.22;
+    const ny = leaf.nrm[i * 3 + 1];
+    const up = ny > 0.2 ? 1.2 : 0.55;
+    leaf.col[i * 3] *= up * 0.8;
+    leaf.col[i * 3 + 1] *= up;
+    leaf.col[i * 3 + 2] *= up * 0.65;
+    leaf.sway[i] = 0.1 + Math.max(ny, 0) * 0.18;
+  }
+  function limb(x0, y0, z0, x1, y1, z1, r0, r1) {
+    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const ux = dx / len, uy = dy / len, uz = dz / len;
+    let hx = 0, hy = 1, hz = 0;
+    if (Math.abs(uy) > 0.85) { hx = 1; hy = 0; }
+    let sx = uy * hz - uz * hy, sy = uz * hx - ux * hz, sz = ux * hy - uy * hx;
+    const sl = Math.hypot(sx, sy, sz) || 1;
+    sx /= sl; sy /= sl; sz /= sl;
+    const tx = sy * uz - sz * uy, ty = sz * ux - sx * uz, tz = sx * uy - sy * ux;
+    const sides = 5, seg = 3, rows = [];
+    for (let i = 0; i <= seg; i++) {
+      const t = i / seg, r = r0 + (r1 - r0) * t;
+      const cx = x0 + dx * t, cy = y0 + dy * t - Math.sin(t * Math.PI) * 0.025, cz = z0 + dz * t;
+      const row = [];
+      for (let k = 0; k < sides; k++) {
+        const a = k / sides * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+        const ox = (sx * ca + tx * sa) * r, oy = (sy * ca + ty * sa) * r, oz = (sz * ca + tz * sa) * r;
+        row.push(m.v(cx + ox, cy + oy, cz + oz, ox, oy, oz, 0.31, 0.21, 0.11, 0.04));
+      }
+      rows.push(row);
     }
-    for (let k = 0; k < sides; k++) m.tri(top, ring[k], ring[(k + 1) % sides]);
+    for (let i = 0; i < seg; i++) {
+      for (let k = 0; k < sides; k++) {
+        const a = rows[i][k], b = rows[i][(k + 1) % sides];
+        const c = rows[i + 1][k], d = rows[i + 1][(k + 1) % sides];
+        m.tri(a, c, b); m.tri(b, c, d);
+      }
+    }
+  }
+  const arms = [
+    [0.46, 0.58, 0.06, 0.62],
+    [-0.44, 0.52, -0.1, 0.58],
+    [0.08, 0.66, -0.42, 0.55],
+    [-0.1, 0.5, 0.44, 0.56],
+    [0.3, 0.72, -0.22, 0.46],
+    [-0.26, 0.68, 0.2, 0.48]
+  ];
+  for (let i = 0; i < arms.length; i++) {
+    const a = arms[i];
+    limb(a[0] * 0.18, 0.3, a[2] * 0.18, a[0], a[1] - 0.06, a[2], 0.05, 0.022);
+    appendMesh(m, leaf, a[0], a[1], a[2], i * 0.9, a[3], [0.82 + (i % 3) * 0.08, 1, 0.78], 0.4);
+  }
+  appendMesh(m, leaf, 0, 0.58, 0, 0.4, 0.72, [0.95, 1, 0.86], 0.42);
+  return m;
+}
+
+function makeRock() {
+  const m = icosphere(1, 1, [0.45, 0.42, 0.37]);
+  for (let i = 0; i < m.pos.length / 3; i++) {
+    const h = ((i * 13) % 11) / 11;
+    const k = 0.78 + h * 0.4;
+    m.pos[i * 3] *= k;
+    m.pos[i * 3 + 1] *= 0.62 + h * 0.28;
+    m.pos[i * 3 + 2] *= 1.12 - h * 0.3;
+    m.col[i * 3] *= 0.85 + h * 0.3;
+    m.col[i * 3 + 1] *= 0.85 + h * 0.25;
+    m.col[i * 3 + 2] *= 0.82 + h * 0.2;
   }
   return m;
 }
@@ -1652,9 +1718,20 @@ async function main() {
     const staticMesh = new Mesh();
     const palm = makePalm();
     const broad = makeBroad();
-    const rock = icosphere(1, 1, [0.38, 0.36, 0.32]);
+    const rock = makeRock();
     let palms = 0, broads = 0, rocks = 0, stacks = 0;
     const clearR = 9;
+    const sideX = -sdz, sideZ = sdx;
+    for (let i = 0; i < 7 && palms < q.palms; i++) {
+      const along = (i - 3) * 9;
+      const back = 8 + (i % 2) * 5;
+      const x = beach.x - sdx * back + sideX * along;
+      const z = beach.z - sdz * back + sideZ * along;
+      const h = fieldSample(world, x, z);
+      if (h < 0.35 || h > 5) continue;
+      appendMesh(staticMesh, palm, x, h, z, rnd() * 6.28, 8.5 + (i % 3) * 1.6, [0.92, 1, 0.88], 1);
+      palms++;
+    }
     for (let i = 0; i < (q.palms + q.broad) * 14 && (palms < q.palms || broads < q.broad); i++) {
       const x = (rnd() - 0.5) * 460;
       const z = (rnd() - 0.5) * 400;
@@ -1664,10 +1741,10 @@ async function main() {
       const n = vnoise(x * 0.017, z * 0.017);
       const tint = [0.86 + rnd() * 0.28, 0.88 + rnd() * 0.24, 0.86 + rnd() * 0.2];
       if (palms < q.palms && h > 0.7 && h < 7.5 && s < 0.38 && n > 0.36) {
-        appendMesh(staticMesh, palm, x, h, z, rnd() * 6.28, 6.5 + rnd() * 3.5, tint, 1);
+        appendMesh(staticMesh, palm, x, h, z, rnd() * 6.28, 8 + rnd() * 4, tint, 1);
         palms++;
       } else if (broads < q.broad && h > 4.2 && h < 26 && s < 0.42 && n > 0.42) {
-        appendMesh(staticMesh, broad, x, h, z, rnd() * 6.28, 9 + rnd() * 6, tint, 1);
+        appendMesh(staticMesh, broad, x, h, z, rnd() * 6.28, 8 + rnd() * 4, tint, 1);
         broads++;
       }
     }

@@ -267,7 +267,9 @@ struct MeshV {
 }
 @fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
-  return vec4<f32>(shade(in.world, in.nrm, in.col), 1.0);
+  var n = in.nrm;
+  if (dot(n, F.camPos - in.world) < 0.0) { n = -n; }
+  return vec4<f32>(shade(in.world, n, in.col), 1.0);
 }
 
 struct GrassV {
@@ -301,7 +303,7 @@ struct GrassV {
 @fragment fn fsGrass(in: GrassV) -> @location(0) vec4<f32> {
   let halfW = mix(0.5, 0.04, in.uv.y);
   if (abs(in.uv.x - 0.5) > halfW) { discard; }
-  var col = mix(vec3<f32>(0.16, 0.28, 0.10), vec3<f32>(0.42, 0.46, 0.18), in.uv.y);
+  var col = mix(vec3<f32>(0.09, 0.22, 0.06), vec3<f32>(0.28, 0.36, 0.10), in.uv.y);
   if (in.kind > 0.5) { col = mix(vec3<f32>(0.05, 0.16, 0.10), vec3<f32>(0.20, 0.32, 0.14), in.uv.y); }
   col *= 0.85 + 0.3 * n2(in.world.xz * 2.0);
   return vec4<f32>(shade(in.world, in.nrm, col), 1.0);
