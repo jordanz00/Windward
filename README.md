@@ -50,7 +50,7 @@ The water is a Gerstner swell running with the wind, with a bound harmonic that 
 
 A click writes into a height field on the GPU. The impulse is a crest with a trough around it, so the ring reads as a disturbance in the surface rather than a flat circle. It travels, meets the next click, and dies away. The swell is a set of layered waves, and the finer texture is a wind-driven ripple that drops out once it is smaller than a pixel. Looking along the water reflects the shore and the sky. Looking down shows the bottom through the water, darker and bluer as it gets deeper. There is no control panel. Each place chooses the swell, the color of the water, the sky, and where the camera sits: Tropical Lagoon, Open Ocean, Hidden Cove, Calm Lake, Stormy Ocean, Shallow Reef, and Swimming Pool.
 
-The seabed is a height field filled on the CPU once, then read by the GPU. Trees, the skiff, and the stacks are meshes built from spheres, cylinders, and strips. Sound is filtered noise in the Web Audio API.
+The seabed is a height field filled on the CPU once, then read by the GPU. Each palm is its own trunk, with rings and a crown of separate leaflets, and the wind moves the tips more than the trunk. Shrubs, beach grass, and rocks are built the same way, with no shared model. Sound is filtered noise in the Web Audio API.
 
 Nothing is allocated per frame on purpose: the uniform buffer, the bird list, and the scratch matrices are reused.
 

@@ -230,7 +230,7 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
   if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
   var col = albedo * light;
   let back = sat(dot(-n, F.sunDir));
-  col += albedo * vec3<f32>(0.9, 1.2, 0.28) * back * sh * leaf * 0.8;
+  col += albedo * vec3<f32>(0.55, 0.95, 0.28) * back * sh * leaf * 1.15;
   if (world.y > -0.15 && world.y < 1.1) {
     let V = normalize(F.camPos - world);
     let H = normalize(V + F.sunDir);
@@ -251,11 +251,13 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   let m = n2(xz * 0.11);
   let fine = n2(xz * 0.85);
   let grain = n2(xz * 3.6);
-  var sandC = mix(vec3<f32>(0.66, 0.58, 0.42), vec3<f32>(0.52, 0.45, 0.32), fine);
-  sandC *= 0.9 + 0.16 * grain;
-  let wet = smoothstep(1.1, 0.02, y);
-  sandC = mix(sandC, sandC * vec3<f32>(0.58, 0.60, 0.56), wet * 0.5);
-  if (y < 0.05) { sandC = mix(vec3<f32>(0.72, 0.64, 0.46), sandC, sat(-y * 0.35 + 0.25)); }
+  var sandC = mix(vec3<f32>(0.74, 0.67, 0.50), vec3<f32>(0.58, 0.50, 0.36), fine);
+  let wash = sin(dot(xz, vec2<f32>(0.42, 0.07)) + n2(xz * 0.15) * 3.0);
+  sandC *= 0.9 + 0.1 * wash;
+  sandC *= 0.92 + 0.12 * grain;
+  let wet = smoothstep(1.15, 0.02, y);
+  sandC = mix(sandC, sandC * vec3<f32>(0.42, 0.46, 0.44), wet * 0.72);
+  if (y < 0.05) { sandC = mix(vec3<f32>(0.70, 0.64, 0.50), sandC, sat(-y * 0.4 + 0.3)); }
   var grassC = mix(vec3<f32>(0.13, 0.24, 0.06), vec3<f32>(0.30, 0.38, 0.10), m);
   grassC *= 0.78 + 0.36 * n2(xz * 0.22);
   grassC = mix(grassC, vec3<f32>(0.38, 0.36, 0.15), smoothstep(3.5, 0.9, y) * 0.32);
@@ -316,9 +318,11 @@ struct MeshV {
 }
 @vertex fn vsMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec3<f32>, @location(3) sway: f32) -> MeshV {
   var w = p;
-  let bend = sin(F.time * 1.25 + p.x * 0.15 + p.z * 0.11) * sway;
-  w.x += bend * 0.32;
-  w.z += bend * 0.1;
+  let phase = F.time * (0.85 + 0.35 * fract(p.x * 0.17)) + p.x * 0.11 + p.z * 0.07;
+  let gust = sin(phase) * 0.7 + sin(phase * 2.17 + 1.3) * 0.3;
+  w.x += gust * sway * 0.9;
+  w.z += gust * sway * 0.35;
+  w.y -= abs(gust) * sway * sway * 0.22;
   var o: MeshV;
   o.world = w;
   o.nrm = n;
@@ -330,7 +334,13 @@ struct MeshV {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
   var n = in.nrm;
   if (dot(n, F.camPos - in.world) < 0.0) { n = -n; }
-  return vec4<f32>(shade(in.world, n, in.col), 1.0);
+  var col = shade(in.world, n, in.col);
+  let ground = sampleField(in.world.xz).x;
+  let above = in.world.y - ground;
+  if (above > 0.02 && above < 1.8) {
+    col *= mix(0.48, 1.0, smoothstep(0.02, 0.9, above));
+  }
+  return vec4<f32>(col, 1.0);
 }
 
 struct GrassV {
@@ -362,11 +372,14 @@ struct GrassV {
   return o;
 }
 @fragment fn fsGrass(in: GrassV) -> @location(0) vec4<f32> {
-  let halfW = mix(0.5, 0.04, in.uv.y);
-  if (abs(in.uv.x - 0.5) > halfW) { discard; }
-  var col = mix(vec3<f32>(0.12, 0.24, 0.06), vec3<f32>(0.42, 0.48, 0.14), in.uv.y);
-  if (in.kind > 0.5) { col = mix(vec3<f32>(0.05, 0.16, 0.10), vec3<f32>(0.20, 0.32, 0.14), in.uv.y); }
-  col *= 0.85 + 0.3 * n2(in.world.xz * 2.0);
+  let ground = sampleField(in.world.xz).x;
+  var col = mix(vec3<f32>(0.10, 0.22, 0.05), vec3<f32>(0.40, 0.46, 0.16), in.uv.y);
+  if (ground < 1.6 && ground > 0.15) {
+    col = mix(vec3<f32>(0.28, 0.32, 0.10), vec3<f32>(0.55, 0.52, 0.22), in.uv.y);
+  }
+  if (in.kind > 0.5) { col = mix(vec3<f32>(0.04, 0.16, 0.09), vec3<f32>(0.18, 0.34, 0.16), in.uv.y); }
+  let rib = smoothstep(0.08, 0.0, abs(in.uv.x - 0.5));
+  col *= 0.82 + 0.22 * n2(in.world.xz * 1.6) - rib * 0.12;
   return vec4<f32>(shade(in.world, in.nrm, col), 1.0);
 }
 

@@ -226,21 +226,61 @@ function cylinder(sides, rings, r0, r1, h, col, swayTop) {
   return m;
 }
 
-function makePalm() {
+function seeded(seed) {
+  let s = (seed | 0) || 1;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway) {
+  const dl = Math.hypot(dirx, diry, dirz) || 1;
+  dirx /= dl; diry /= dl; dirz /= dl;
+  let sx = -dirz, sz = dirx;
+  const sl = Math.hypot(sx, sz) || 1;
+  sx /= sl; sz /= sl;
+  const tipC = [col[0] * 1.25, col[1] * 0.95, col[2] * 0.62];
+  const vert = (t, side) => {
+    const w = wid * (1 - t * 0.86);
+    const droop = t * t * len * 0.22;
+    const x = ox + dirx * len * t + sx * w * side;
+    const y = oy + diry * len * t - droop;
+    const z = oz + dirz * len * t + sz * w * side;
+    const c = t > 0.62 ? tipC : col;
+    return m.v(x, y, z, dirx * 0.2 + sx * side * 0.15, 0.92, dirz * 0.2 + sz * side * 0.15, c[0], c[1], c[2], sway * (0.2 + t * t * 1.15));
+  };
+  const bL = vert(0.0, 1), bR = vert(0.0, -1);
+  const mL = vert(0.42, 1), mR = vert(0.42, -1);
+  const tip = vert(1, 0);
+  m.tri(bL, mL, bR); m.tri(bR, mL, mR);
+  m.tri(mL, tip, mR);
+}
+
+function makePalm(seed) {
+  const rnd = seeded(seed);
   const m = new Mesh();
-  const sides = 7, seg = 9;
+  const sides = 10, seg = 18;
+  const leanX = (rnd() - 0.5) * 0.28;
+  const leanZ = (rnd() - 0.5) * 0.22;
+  const height = 0.9 + rnd() * 0.22;
   const rings = [];
   for (let i = 0; i <= seg; i++) {
     const t = i / seg;
-    const y = t * 1.02;
-    const lean = t * t * 0.1;
-    const scar = (i & 1) ? 1.1 : 0.9;
-    const r = (0.078 * (1 - t * 0.58) + 0.016) * scar;
-    const shade = (i & 1) ? 0.72 : 1;
+    const y = height * t;
+    const ox = leanX * t * t;
+    const oz = leanZ * t * t;
+    const groove = (i % 2) ? 0.96 : 1.03;
+    const flare = t < 0.12 ? 1.45 - t * 3.2 : 1;
+    const r = (0.084 * (1 - t * 0.6) + 0.022) * groove * flare;
+    const scar = (i % 2) ? 0.78 : 1.0;
     const row = [];
     for (let k = 0; k < sides; k++) {
-      const a = k / sides * Math.PI * 2;
-      row.push(m.v(lean + Math.cos(a) * r, y, Math.sin(a) * r, Math.cos(a), 0.08, Math.sin(a), 0.36 * shade, 0.32 * shade, 0.26 * shade, t * 0.08));
+      const a = k / sides * Math.PI * 2 + t * 0.55;
+      const bump = 1 + 0.05 * Math.sin(k * 3.1 + i * 0.7);
+      const nx = Math.cos(a), nz = Math.sin(a);
+      const streak = 0.85 + 0.15 * Math.sin(k * 2 + seed);
+      row.push(m.v(ox + nx * r * bump, y, oz + nz * r * bump, nx, 0.12, nz, 0.46 * scar * streak, 0.34 * scar, 0.22 * scar, t * t * 0.06));
     }
     rings.push(row);
   }
@@ -250,113 +290,113 @@ function makePalm() {
       m.tri(a, c, b); m.tri(b, c, d);
     }
   }
-  // A frond is a rachis with two rows of leaflets that sag off it. The jagged
-  // width is what reads as separate leaflets once the tree is small on screen.
-  function frond(ang, len, rise, droop, width, col, sway0, steps) {
+  const crownX = leanX, crownY = height, crownZ = leanZ;
+  function frond(ang, len, rise, droop, leafLen, col, pairs, sway0) {
     const dx = Math.cos(ang), dz = Math.sin(ang);
-    const px = -dz, pz = dx;
-    let pc = -1, pl = -1, pr = -1;
+    const sx = -dz, sz = dx;
+    const steps = 8;
+    const pts = [];
     for (let s = 0; s <= steps; s++) {
       const t = s / steps;
-      const rad = 0.02 + t * len;
-      const y = 1.04 + Math.sin(t * Math.PI * rise) * 0.24 - t * t * droop;
-      const jag = (s & 1) ? 1.35 : 0.55;
-      const w = (Math.sin(Math.min(t * 1.05 + 0.08, 1) * Math.PI) * width + 0.01) * jag;
-      const cx = 0.1 + dx * rad, cz = dz * rad;
-      const g = col[1] * (0.7 + (1 - t) * 0.45);
-      const sway = sway0 + t * 0.7;
-      const C = m.v(cx, y, cz, dx, 0.8, dz, col[0] * 0.65, g * 0.7, col[2] * 0.5, sway * 0.45);
-      const L = m.v(cx + px * w, y - w * 0.62, cz + pz * w, px, 0.4, pz, col[0], g, col[2], sway);
-      const R = m.v(cx - px * w, y - w * 0.62, cz - pz * w, -px, 0.4, -pz, col[0] * 0.82, g * 0.88, col[2] * 0.9, sway);
-      if (pc >= 0) {
-        m.tri(pc, C, pl); m.tri(pl, C, L);
-        m.tri(pc, pr, C); m.tri(pr, R, C);
+      const rad = 0.03 + t * len;
+      const y = crownY + Math.sin(t * Math.PI * rise) * 0.2 - t * t * droop;
+      pts.push([crownX + dx * rad, y, crownZ + dz * rad, t]);
+    }
+    for (let s = 0; s < steps; s++) {
+      const a = pts[s], b = pts[s + 1];
+      const w = 0.012 * (1 - a[3] * 0.5);
+      const sway = sway0 * (0.15 + a[3]);
+      const bark = [0.28, 0.32, 0.12];
+      const aL = m.v(a[0] + sx * w, a[1], a[2] + sz * w, dx, 0.8, dz, bark[0], bark[1], bark[2], sway);
+      const aR = m.v(a[0] - sx * w, a[1], a[2] - sz * w, dx, 0.8, dz, bark[0] * 0.8, bark[1] * 0.85, bark[2], sway);
+      const bL = m.v(b[0] + sx * w, b[1], b[2] + sz * w, dx, 0.8, dz, bark[0], bark[1], bark[2], sway + 0.05);
+      const bR = m.v(b[0] - sx * w, b[1], b[2] - sz * w, dx, 0.8, dz, bark[0] * 0.8, bark[1] * 0.85, bark[2], sway + 0.05);
+      m.tri(aL, bL, aR); m.tri(aR, bL, bR);
+    }
+    for (let s = 1; s <= steps; s++) {
+      const p = pts[s];
+      const along = Math.sin(Math.min(p[3] * 1.15, 1) * Math.PI);
+      const ll = leafLen * (0.35 + along * 0.75);
+      if (ll < 0.02) continue;
+      for (let side = -1; side <= 1; side += 2) {
+        const spread = 0.55 + p[3] * 0.35;
+        const dirx = dx * 0.35 + sx * side * spread;
+        const dirz = dz * 0.35 + sz * side * spread;
+        const diry = 0.05 - droop * 0.12;
+        const tone = [col[0] * (0.85 + rnd() * 0.3), col[1] * (0.82 + rnd() * 0.28), col[2]];
+        addLeaflet(m, p[0], p[1], p[2], dirx, diry, dirz, ll, 0.012 + along * 0.012, tone, sway0 * (0.35 + p[3]));
       }
-      pc = C; pl = L; pr = R;
     }
   }
-  for (let f = 0; f < 14; f++) frond(f / 14 * Math.PI * 2, 0.74, 0.46, 0.8, 0.125, [0.18, 0.38, 0.07], 0.42, 8);
-  for (let f = 0; f < 5; f++) frond(f / 5 * Math.PI * 2 + 0.3, 0.32, 1.15, 0.04, 0.06, [0.24, 0.50, 0.12], 0.22, 4);
-  for (let f = 0; f < 8; f++) frond(f / 8 * Math.PI * 2 + 0.15, 0.34, 0.12, 0.62, 0.04, [0.34, 0.26, 0.09], 0.12, 3);
+  const living = 9 + ((seed >>> 3) % 4);
+  for (let f = 0; f < living; f++) {
+    const ang = f / living * Math.PI * 2 + rnd() * 0.35;
+    frond(ang, 0.62 + rnd() * 0.18, 0.75 + rnd() * 0.25, 0.16 + rnd() * 0.12, 0.18 + rnd() * 0.05, [0.13, 0.44, 0.1], 8, 0.45 + rnd() * 0.15);
+  }
+  const young = 4 + (seed % 3);
+  for (let f = 0; f < young; f++) {
+    frond(f / young * Math.PI * 2 + 0.4, 0.28 + rnd() * 0.12, 0.9, 0.08, 0.1, [0.22, 0.52, 0.12], 6, 0.28);
+  }
+  for (let f = 0; f < 2; f++) {
+    frond(f * 2.4 + 0.5, 0.28, 0.2, 0.4, 0.07, [0.4, 0.32, 0.14], 4, 0.35);
+  }
   return m;
 }
 
-function makeBroad() {
+function makeBroad(seed) {
+  const rnd = seeded(seed || 3);
   const m = new Mesh();
-  const trunk = cylinder(7, 5, 0.14, 0.05, 0.4, [0.33, 0.23, 0.12], 0.04);
-  appendMesh(m, trunk, 0, 0, 0, 0, 1, null, 1);
-  const flare = cylinder(7, 1, 0.22, 0.13, 0.1, [0.28, 0.19, 0.11], 0);
-  appendMesh(m, flare, 0, 0, 0, 0.35, 1, null, 1);
-  const leaf = icosphere(1, 0.4, [0.12, 0.27, 0.08]);
-  for (let i = 0; i < leaf.pos.length / 3; i++) {
-    const h = ((i * 7) % 5) / 5;
-    leaf.pos[i * 3] *= 0.82 + h * 0.36;
-    leaf.pos[i * 3 + 2] *= 1.08 - h * 0.22;
-    const ny = leaf.nrm[i * 3 + 1];
-    const up = ny > 0.2 ? 1.2 : 0.55;
-    leaf.col[i * 3] *= up * 0.8;
-    leaf.col[i * 3 + 1] *= up;
-    leaf.col[i * 3 + 2] *= up * 0.65;
-    leaf.sway[i] = 0.1 + Math.max(ny, 0) * 0.18;
-  }
-  function limb(x0, y0, z0, x1, y1, z1, r0, r1) {
-    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    const ux = dx / len, uy = dy / len, uz = dz / len;
-    let hx = 0, hy = 1, hz = 0;
-    if (Math.abs(uy) > 0.85) { hx = 1; hy = 0; }
-    let sx = uy * hz - uz * hy, sy = uz * hx - ux * hz, sz = ux * hy - uy * hx;
-    const sl = Math.hypot(sx, sy, sz) || 1;
-    sx /= sl; sy /= sl; sz /= sl;
-    const tx = sy * uz - sz * uy, ty = sz * ux - sx * uz, tz = sx * uy - sy * ux;
-    const sides = 5, seg = 3, rows = [];
-    for (let i = 0; i <= seg; i++) {
-      const t = i / seg, r = r0 + (r1 - r0) * t;
-      const cx = x0 + dx * t, cy = y0 + dy * t - Math.sin(t * Math.PI) * 0.025, cz = z0 + dz * t;
-      const row = [];
-      for (let k = 0; k < sides; k++) {
-        const a = k / sides * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
-        const ox = (sx * ca + tx * sa) * r, oy = (sy * ca + ty * sa) * r, oz = (sz * ca + tz * sa) * r;
-        row.push(m.v(cx + ox, cy + oy, cz + oz, ox, oy, oz, 0.31, 0.21, 0.11, 0.04));
-      }
-      rows.push(row);
+  const trunk = cylinder(8, 6, 0.07, 0.035, 0.42, [0.30, 0.22, 0.13], 0.03);
+  appendMesh(m, trunk, 0, 0, 0, rnd() * 3, 1, null, 1);
+  const fans = 6 + (seed % 3);
+  for (let i = 0; i < fans; i++) {
+    const ang = i / fans * Math.PI * 2 + rnd() * 0.4;
+    const reach = 0.28 + rnd() * 0.22;
+    const x = Math.cos(ang) * reach;
+    const z = Math.sin(ang) * reach;
+    const y = 0.38 + rnd() * 0.22;
+    for (let k = 0; k < 5; k++) {
+      const a = ang + (k - 2) * 0.28;
+      const col = [0.1 + rnd() * 0.06, 0.28 + rnd() * 0.12, 0.07];
+      addLeaflet(m, x * 0.25, 0.36, z * 0.25, Math.cos(a), 0.35 + rnd() * 0.3, Math.sin(a), 0.22 + rnd() * 0.12, 0.045, col, 0.35);
     }
-    for (let i = 0; i < seg; i++) {
-      for (let k = 0; k < sides; k++) {
-        const a = rows[i][k], b = rows[i][(k + 1) % sides];
-        const c = rows[i + 1][k], d = rows[i + 1][(k + 1) % sides];
-        m.tri(a, c, b); m.tri(b, c, d);
-      }
-    }
+    addLeaflet(m, x * 0.15, y, z * 0.15, Math.cos(ang), 0.15, Math.sin(ang), 0.16, 0.05, [0.14, 0.32, 0.08], 0.22);
   }
-  const arms = [
-    [0.46, 0.58, 0.06, 0.62],
-    [-0.44, 0.52, -0.1, 0.58],
-    [0.08, 0.66, -0.42, 0.55],
-    [-0.1, 0.5, 0.44, 0.56],
-    [0.3, 0.72, -0.22, 0.46],
-    [-0.26, 0.68, 0.2, 0.48]
-  ];
-  for (let i = 0; i < arms.length; i++) {
-    const a = arms[i];
-    limb(a[0] * 0.18, 0.3, a[2] * 0.18, a[0], a[1] - 0.06, a[2], 0.05, 0.022);
-    appendMesh(m, leaf, a[0], a[1], a[2], i * 0.9, a[3], [0.82 + (i % 3) * 0.08, 1, 0.78], 0.4);
-  }
-  appendMesh(m, leaf, 0, 0.58, 0, 0.4, 0.72, [0.95, 1, 0.86], 0.42);
   return m;
 }
 
-function makeRock() {
-  const m = icosphere(1, 1, [0.45, 0.42, 0.37]);
-  for (let i = 0; i < m.pos.length / 3; i++) {
-    const h = ((i * 13) % 11) / 11;
-    const k = 0.78 + h * 0.4;
-    m.pos[i * 3] *= k;
-    m.pos[i * 3 + 1] *= 0.62 + h * 0.28;
-    m.pos[i * 3 + 2] *= 1.12 - h * 0.3;
-    m.col[i * 3] *= 0.85 + h * 0.3;
-    m.col[i * 3 + 1] *= 0.85 + h * 0.25;
-    m.col[i * 3 + 2] *= 0.82 + h * 0.2;
+function makeShrub(seed) {
+  const rnd = seeded(seed || 9);
+  const m = new Mesh();
+  const fans = 5 + (seed % 3);
+  for (let i = 0; i < fans; i++) {
+    const ang = i / fans * Math.PI * 2 + rnd();
+    const y = 0.02 + rnd() * 0.06;
+    for (let k = 0; k < 4; k++) {
+      const a = ang + (k - 1.5) * 0.4;
+      const col = [0.16 + rnd() * 0.08, 0.34 + rnd() * 0.1, 0.08];
+      addLeaflet(m, Math.cos(ang) * 0.04, y, Math.sin(ang) * 0.04, Math.cos(a), 0.55 + rnd() * 0.4, Math.sin(a), 0.18 + rnd() * 0.1, 0.035, col, 0.5);
+    }
+  }
+  return m;
+}
+
+function makeRock(seed) {
+  const m = icosphere(2, 1, [0.42, 0.40, 0.36]);
+  const n = m.pos.length / 3;
+  for (let i = 0; i < n; i++) {
+    const x = m.pos[i * 3], y = m.pos[i * 3 + 1], z = m.pos[i * 3 + 2];
+    const nx = m.nrm[i * 3], ny = m.nrm[i * 3 + 1], nz = m.nrm[i * 3 + 2];
+    const rough = vnoise(x * 2.4 + seed, z * 2.4) * 0.22 + vnoise(x * 6.5, y * 6.5 + seed) * 0.08;
+    const crevice = vnoise(x * 1.3 + 4.0, z * 1.3) > 0.72 ? -0.08 : 0;
+    m.pos[i * 3] = x + nx * (rough + crevice);
+    m.pos[i * 3 + 1] = (y + ny * rough) * (y < 0 ? 0.45 : 0.72);
+    m.pos[i * 3 + 2] = z + nz * (rough + crevice);
+    const lichen = ny > 0.45 ? vnoise(x * 3.0, z * 3.0) : 0;
+    const shade = 0.72 + rough * 1.4;
+    m.col[i * 3] = (0.40 * shade) * (1 - lichen * 0.35);
+    m.col[i * 3 + 1] = (0.38 * shade) * (1 - lichen * 0.1) + lichen * 0.08;
+    m.col[i * 3 + 2] = 0.34 * shade * (1 - lichen * 0.2);
   }
   return m;
 }
@@ -417,12 +457,15 @@ function makeSkiff() {
 function grassGeom() {
   const pos = [], uv = [], idx = [];
   let base = 0;
-  for (let a = 0; a < 3; a++) {
-    const ang = a * Math.PI / 3;
+  for (let a = 0; a < 4; a++) {
+    const ang = a * Math.PI / 4 + (a === 3 ? 0.2 : 0);
     const c = Math.cos(ang), s = Math.sin(ang);
-    const corn = [[-0.5, 0, 0, 0], [0.5, 0, 1, 0], [0.5, 1, 1, 1], [-0.5, 1, 0, 1]];
+    const lean = 0.18 + (a % 2) * 0.08;
+    const h = 0.85 + (a % 3) * 0.12;
+    const corn = [[-0.16, 0, 0, 0], [0.16, 0, 1, 0], [0.035, h, 1, 1], [-0.035, h, 0, 1]];
     for (let i = 0; i < 4; i++) {
-      pos.push(corn[i][0] * c, corn[i][1], corn[i][0] * s);
+      const px = corn[i][0], py = corn[i][1];
+      pos.push(px * c + lean * py * s, py, px * s - lean * py * c);
       uv.push(corn[i][2], corn[i][3]);
     }
     idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
@@ -1044,35 +1087,39 @@ async function main() {
     aerial.yaw = yp[0]; aerial.pitch = yp[1];
 
     const staticMesh = new Mesh();
-    const palm = makePalm();
-    const broad = makeBroad();
-    const rock = makeRock();
-    let palms = 0, broads = 0, rocks = 0, stacks = 0;
+    const rock = makeRock(4);
+    const stackRock = makeRock(11);
+    let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0;
     const clearR = 9;
     const sideX = -sdz, sideZ = sdx;
-    for (let i = 0; i < 7 && palms < q.palms; i++) {
-      const along = (i - 3) * 9;
-      const back = 8 + (i % 2) * 5;
+    const shrubBudget = Math.max(8, (q.broad * 0.45) | 0);
+    for (let i = 0; i < 9 && palms < q.palms; i++) {
+      const along = (i - 4) * (7.5 + (i % 3));
+      const back = 7 + (i % 3) * 3.5;
       const x = beach.x - sdx * back + sideX * along;
       const z = beach.z - sdz * back + sideZ * along;
       const h = fieldSample(world, x, z);
-      if (h < 0.35 || h > 5) continue;
-      appendMesh(staticMesh, palm, x, h, z, rnd() * 6.28, 8.5 + (i % 3) * 1.6, [0.92, 1, 0.88], 1);
+      if (h < 0.4 || h > 4.5) continue;
+      const tint = [0.9 + rnd() * 0.16, 0.92 + rnd() * 0.14, 0.84 + rnd() * 0.16];
+      appendMesh(staticMesh, makePalm((x * 13 + z * 7) | 0), x, h, z, rnd() * 6.28, 7.4 + rnd() * 2.8, tint, 0.88 + rnd() * 0.28);
       palms++;
     }
-    for (let i = 0; i < (q.palms + q.broad) * 14 && (palms < q.palms || broads < q.broad); i++) {
+    for (let i = 0; i < (q.palms + q.broad) * 16 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget); i++) {
       const x = (rnd() - 0.5) * 460;
       const z = (rnd() - 0.5) * 400;
       const h = fieldSample(world, x, z);
       const s = fieldSlope(world, x, z);
       if (Math.hypot(x - beach.x, z - beach.z) < clearR) continue;
-      const n = vnoise(x * 0.017, z * 0.017);
-      const tint = [0.86 + rnd() * 0.28, 0.88 + rnd() * 0.24, 0.86 + rnd() * 0.2];
-      if (palms < q.palms && h > 0.7 && h < 7.5 && s < 0.38 && n > 0.36) {
-        appendMesh(staticMesh, palm, x, h, z, rnd() * 6.28, 8 + rnd() * 4, tint, 1);
+      const clump = vnoise(x * 0.012, z * 0.012);
+      const tint = [0.86 + rnd() * 0.22, 0.9 + rnd() * 0.18, 0.84 + rnd() * 0.2];
+      if (palms < q.palms && h > 0.6 && h < 6.5 && s < 0.34 && clump > 0.46) {
+        appendMesh(staticMesh, makePalm((x * 19.1 + z * 3.7) | 0), x, h, z, rnd() * 6.28, 6.8 + rnd() * 3.6, tint, 0.86 + rnd() * 0.3);
         palms++;
-      } else if (broads < q.broad && h > 4.2 && h < 26 && s < 0.42 && n > 0.42) {
-        appendMesh(staticMesh, broad, x, h, z, rnd() * 6.28, 8 + rnd() * 4, tint, 1);
+      } else if (shrubs < shrubBudget && h > 0.45 && h < 2.8 && s < 0.4 && clump > 0.4) {
+        appendMesh(staticMesh, makeShrub((x * 5 + z) | 0), x, h, z, rnd() * 6.28, 2.2 + rnd() * 1.6, tint, 0.7 + rnd() * 0.5);
+        shrubs++;
+      } else if (broads < q.broad && h > 3.5 && h < 22 && s < 0.4 && clump > 0.48) {
+        appendMesh(staticMesh, makeBroad((x * 8.2 + z * 4.4) | 0), x, h, z, rnd() * 6.28, 6.5 + rnd() * 3.2, tint, 0.85 + rnd() * 0.3);
         broads++;
       }
     }
@@ -1081,20 +1128,20 @@ async function main() {
       const z = (rnd() - 0.5) * 420;
       const h = fieldSample(world, x, z);
       const s = fieldSlope(world, x, z);
-      if (h < 0.15 || h > 2.4 || s > 0.55) continue;
+      if (h < 0.15 || h > 3.2 || s > 0.62) continue;
       if (Math.hypot(x - beach.x, z - beach.z) < 4) continue;
-      if (vnoise(x * 0.05, z * 0.05) < 0.62) continue;
-      const sc = 0.25 + rnd() * 0.7;
-      appendMesh(staticMesh, rock, x, h - sc * 0.35, z, rnd() * 6, sc, [0.75 + rnd() * 0.3, 0.7 + rnd() * 0.25, 0.62 + rnd() * 0.2], 0.55 + rnd() * 0.5);
+      if (vnoise(x * 0.04, z * 0.04) < 0.58) continue;
+      const sc = 0.35 + rnd() * 1.1;
+      appendMesh(staticMesh, makeRock((x * 3 + z) | 0), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
       rocks++;
     }
     for (let i = 0; i < q.stacks * 30 && stacks < q.stacks; i++) {
       const x = -40 - rnd() * 160;
       const z = (rnd() - 0.5) * 220;
       const h = fieldSample(world, x, z);
-      if (h < -6 || h > -0.5) continue;
-      const sc = 1.6 + rnd() * 3.4;
-      appendMesh(staticMesh, rock, x, h - sc * 0.25, z, rnd() * 6, sc, [0.55, 0.52, 0.48], 1.3 + rnd() * 0.8);
+      if (h < -6 || h > -0.4) continue;
+      const sc = 2.2 + rnd() * 4.2;
+      appendMesh(staticMesh, stackRock, x, h - sc * 0.2, z, rnd() * 6, sc, [0.62, 0.58, 0.52], 1.15 + rnd() * 0.9);
       stacks++;
     }
     // Skiff and a buoy, so the beach and the bay have a scale.
