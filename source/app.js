@@ -71,6 +71,17 @@ const V = new Float32Array(16);
 const VP = new Float32Array(16);
 const INV = new Float32Array(16);
 const RVP = new Float32Array(16);
+const SHVP = new Float32Array(16);
+function ortho(out, l, r, b, t, n, f) {
+  out.fill(0);
+  out[0] = 2 / (r - l);
+  out[5] = 2 / (t - b);
+  out[10] = 1 / (n - f);
+  out[12] = (l + r) / (l - r);
+  out[13] = (t + b) / (b - t);
+  out[14] = n / (n - f);
+  out[15] = 1;
+}
 function perspective(out, fovy, aspect, near, far) {
   const f = 1 / Math.tan(fovy * 0.5);
   const ri = 1 / (near - far);
@@ -299,7 +310,7 @@ function makePalm(seed) {
     for (let s = 0; s <= steps; s++) {
       const t = s / steps;
       const rad = 0.03 + t * len;
-      const y = crownY + Math.sin(t * Math.PI * rise) * 0.2 - t * t * droop;
+      const y = crownY + Math.sin(t * Math.PI * rise) * 0.46 - t * t * droop;
       pts.push([crownX + dx * rad, y, crownZ + dz * rad, t]);
     }
     for (let s = 0; s < steps; s++) {
@@ -324,22 +335,20 @@ function makePalm(seed) {
         const dirz = dz * 0.35 + sz * side * spread;
         const diry = 0.05 - droop * 0.12;
         const tone = [col[0] * (0.85 + rnd() * 0.3), col[1] * (0.82 + rnd() * 0.28), col[2]];
-        addLeaflet(m, p[0], p[1], p[2], dirx, diry, dirz, ll, 0.012 + along * 0.012, tone, sway0 * (0.35 + p[3]));
+        addLeaflet(m, p[0], p[1], p[2], dirx, diry, dirz, ll, 0.042 + along * 0.028, tone, sway0 * (0.35 + p[3]));
       }
     }
   }
-  const living = 9 + ((seed >>> 3) % 4);
+  const living = 11 + ((seed >>> 3) % 3);
   for (let f = 0; f < living; f++) {
-    const ang = f / living * Math.PI * 2 + rnd() * 0.35;
-    frond(ang, 0.62 + rnd() * 0.18, 0.75 + rnd() * 0.25, 0.16 + rnd() * 0.12, 0.18 + rnd() * 0.05, [0.13, 0.44, 0.1], 8, 0.45 + rnd() * 0.15);
+    const ang = f / living * Math.PI * 2 + rnd() * 0.2;
+    frond(ang, 0.7 + rnd() * 0.16, 0.62 + rnd() * 0.12, 0.1 + rnd() * 0.08, 0.32 + rnd() * 0.06, [0.12, 0.42, 0.09], 8, 0.4 + rnd() * 0.12);
   }
   const young = 4 + (seed % 3);
   for (let f = 0; f < young; f++) {
-    frond(f / young * Math.PI * 2 + 0.4, 0.28 + rnd() * 0.12, 0.9, 0.08, 0.1, [0.22, 0.52, 0.12], 6, 0.28);
+    frond(f / young * Math.PI * 2 + 0.4, 0.32 + rnd() * 0.1, 0.95, 0.04, 0.16, [0.2, 0.5, 0.12], 6, 0.22);
   }
-  for (let f = 0; f < 2; f++) {
-    frond(f * 2.4 + 0.5, 0.28, 0.2, 0.4, 0.07, [0.4, 0.32, 0.14], 4, 0.35);
-  }
+  frond(0.7, 0.34, 0.35, 0.16, 0.1, [0.42, 0.34, 0.16], 4, 0.2);
   return m;
 }
 
@@ -1272,8 +1281,8 @@ async function main() {
       return;
     }
 
-    const uf = new Float32Array(160);
-    const ur = new Float32Array(160);
+    const uf = new Float32Array(176);
+    const ur = new Float32Array(176);
     for (let i = 0; i < 8; i++) {
       const w = WAVES[i];
       const L = Math.hypot(w[0], w[1]) || 1;
@@ -1282,8 +1291,8 @@ async function main() {
     }
     ur.set(uf);
 
-    const ubuf = device.createBuffer({ size: 640, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const rbuf = device.createBuffer({ size: 640, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const ubuf = device.createBuffer({ size: 704, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 704, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const htex = device.createTexture({
       size: [q.hres, q.hres],
@@ -1305,7 +1314,9 @@ async function main() {
       entries: [
         { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
         { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 2, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
+        { binding: 2, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 3, visibility: FS, texture: { sampleType: 'depth' } },
+        { binding: 4, visibility: FS, sampler: { type: 'comparison' } }
       ]
     });
     const simLayout = device.createBindGroupLayout({
@@ -1397,6 +1408,24 @@ async function main() {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: depthOn('depth32float', true, 'less')
     });
+    const shadowBias = { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2, depthBiasClamp: 0 };
+    pipes.shadowTerrain = await pipe({
+      layout: skyPL,
+      vertex: { module: mod, entryPoint: 'vsShadowTerrain', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
+      primitive: { topology: 'triangle-list', cullMode: 'back' },
+      depthStencil: shadowBias
+    });
+    pipes.shadowMesh = await pipe({
+      layout: skyPL,
+      vertex: { module: mod, entryPoint: 'vsShadowMesh', buffers: [{ arrayStride: 40, attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x3' },
+        { shaderLocation: 1, offset: 12, format: 'float32x3' },
+        { shaderLocation: 2, offset: 24, format: 'float32x3' },
+        { shaderLocation: 3, offset: 36, format: 'float32' }
+      ] }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: shadowBias
+    });
     pipes.grass = await pipe({
       layout: geoPL,
       vertex: { module: mod, entryPoint: 'vsGrass', buffers: [
@@ -1446,6 +1475,17 @@ async function main() {
     });
 
     const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+    const shadowSamp = device.createSampler({ compare: 'less-equal', magFilter: 'linear', minFilter: 'linear' });
+    const shadowTex = device.createTexture({
+      size: [2048, 2048],
+      format: 'depth32float',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    const shadowView = shadowTex.createView();
+    const shadowPass = {
+      colorAttachments: [],
+      depthStencilAttachment: { view: shadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
+    };
     let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null;
     const READ = qstr.has('read');
     let readTex = null, readDepth = null, readBuf = null, readBpr = 0;
@@ -1514,7 +1554,9 @@ async function main() {
         entries: [
           { binding: 0, resource: { buffer: buf } },
           { binding: 1, resource: hview },
-          { binding: 2, resource: view }
+          { binding: 2, resource: view },
+          { binding: 3, resource: shadowView },
+          { binding: 4, resource: shadowSamp }
         ]
       });
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
@@ -1609,6 +1651,19 @@ async function main() {
       arr[144] = wp.shal[0]; arr[145] = wp.shal[1]; arr[146] = wp.shal[2]; arr[147] = wp.rip;
       arr[148] = simOx; arr[149] = simOz; arr[150] = simDomain; arr[151] = wp.cx;
       arr[152] = wp.mood[0]; arr[153] = wp.mood[1]; arr[154] = wp.mood[2]; arr[155] = wp.mood[3];
+      // Sun-space matrix. The light sits up-sun of the island and looks back down its own rays.
+      const lx = arr[52], ly = arr[53], lz = arr[54];
+      const sfx = -lx, sfy = -ly, sfz = -lz;
+      let srx = lz, sry = 0, srz = -lx;
+      const srl = Math.hypot(srx, sry, srz) || 1;
+      srx /= srl; sry /= srl; srz /= srl;
+      const sux = sry * sfz - srz * sfy;
+      const suy = srz * sfx - srx * sfz;
+      const suz = srx * sfy - sry * sfx;
+      viewFrom([lx * 280, ly * 280, lz * 280], [srx, sry, srz], [sux, suy, suz], [sfx, sfy, sfz], V);
+      ortho(P, -340, 340, -260, 300, 6, 620);
+      matmul(P, V, SHVP);
+      arr.set(SHVP, 156);
       const over = wp.mood[1];
       arr[60] = 0.73 * (1 - over * 0.4) + over * 0.52;
       arr[61] = 0.79 * (1 - over * 0.35) + over * 0.54;
@@ -1809,6 +1864,18 @@ async function main() {
         ripIndex = 1 - ripIndex;
       }
       const geoNow = bgGeoSet[ripIndex];
+      {
+        const spass = enc.beginRenderPass(shadowPass);
+        spass.setPipeline(pipes.shadowTerrain); spass.setBindGroup(0, bgUB);
+        spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
+        spass.drawIndexed(terrain.idx.length);
+        if (packed.idx.length) {
+          spass.setPipeline(pipes.shadowMesh); spass.setBindGroup(0, bgUB);
+          spass.setVertexBuffer(0, meshVB); spass.setIndexBuffer(meshIB, 'uint32');
+          spass.drawIndexed(packed.idx.length);
+        }
+        spass.end();
+      }
       if (uf[86] > 0.5) {
         reflPass.colorAttachments[0].view = reflTex.createView();
         reflPass.depthStencilAttachment.view = reflDepth.createView();

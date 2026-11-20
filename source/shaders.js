@@ -35,10 +35,13 @@ function shaderCode(res, span) {
   shalC: vec4<f32>,
   ripO: vec4<f32>,
   mood: vec4<f32>,
+  shadowVP: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var htex: texture_2d<f32>;
 @group(0) @binding(2) var ripTex: texture_2d<f32>;
+@group(0) @binding(3) var shadowMap: texture_depth_2d;
+@group(0) @binding(4) var shadowSamp: sampler_comparison;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
@@ -210,13 +213,33 @@ fn shadowAt(p: vec3<f32>) -> f32 {
   return 1.0;
 }
 
+// The ray march only sees the ground. This map is the trees, rocks and hills
+// rendered from the sun, so a trunk can actually fall across the sand.
+fn sunShadow(p: vec3<f32>) -> f32 {
+  let c = F.shadowVP * vec4<f32>(p + F.sunDir * 0.45, 1.0);
+  let w = max(c.w, 1e-4);
+  let uv = clamp(vec2<f32>(c.x / w * 0.5 + 0.5, 0.5 - c.y / w * 0.5), vec2<f32>(0.001), vec2<f32>(0.999));
+  let z = clamp(c.z / w, 0.0, 1.0);
+  let t = 1.0 / 2048.0;
+  var s = 0.0;
+  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(-t, -t), z);
+  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(t, -t), z);
+  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(-t, t), z);
+  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(t, t), z);
+  s += textureSampleCompare(shadowMap, shadowSamp, uv, z);
+  let raw = vec2<f32>(c.x / w * 0.5 + 0.5, 0.5 - c.y / w * 0.5);
+  let inside = smoothstep(0.0, 0.03, raw.x) * smoothstep(1.0, 0.97, raw.x)
+             * smoothstep(0.0, 0.03, raw.y) * smoothstep(1.0, 0.97, raw.y);
+  return mix(shadowAt(p), s * 0.2, inside);
+}
+
 fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
   let n = normalize(nrm);
   // Green materials are leaves. They wrap the light and pass it when backlit.
   let leaf = sat((albedo.g - max(albedo.r, albedo.b)) * 4.0);
   let ndl = max(dot(n, F.sunDir), 0.0);
   let lit = mix(ndl, sat(ndl * 0.45 + 0.55), leaf);
-  let sh = shadowAt(world) * cloudShade(world.xz, world.y);
+  let sh = sunShadow(world) * cloudShade(world.xz, world.y);
   let hemi = n.y * 0.5 + 0.5;
   let sky = vec3<f32>(0.34, 0.48, 0.70) * hemi;
   let ground = vec3<f32>(0.26, 0.19, 0.11) * (1.0 - hemi);
@@ -370,7 +393,7 @@ struct GeoV {
     // Darken after the tonemap-bound lighting, or the wet sand stays as bright as the dry.
     col *= mix(1.0, 0.38, washWet * (1.0 - washFoam * 0.85));
     let sun = 0.62 + 0.5 * max(dot(n, F.sunDir), 0.0);
-    col = mix(col, vec3<f32>(0.7, 0.74, 0.7) * sun, washFoam);
+    col = mix(col, vec3<f32>(0.7, 0.74, 0.7) * sun, washFoam * 0.5);
   }
   return vec4<f32>(col, 1.0);
 }
@@ -393,6 +416,23 @@ struct MeshV {
   o.nrm = n;
   o.col = c;
   o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  return o;
+}
+struct ShadowV { @builtin(position) clip: vec4<f32> }
+@vertex fn vsShadowTerrain(@location(0) p: vec3<f32>) -> ShadowV {
+  var o: ShadowV;
+  o.clip = F.shadowVP * vec4<f32>(p, 1.0);
+  return o;
+}
+@vertex fn vsShadowMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec3<f32>, @location(3) sway: f32) -> ShadowV {
+  var w = p;
+  let phase = F.time * (0.85 + 0.35 * fract(p.x * 0.17)) + p.x * 0.11 + p.z * 0.07;
+  let gust = sin(phase) * 0.7 + sin(phase * 2.17 + 1.3) * 0.3;
+  w.x += gust * sway * 0.9;
+  w.z += gust * sway * 0.35;
+  w.y -= abs(gust) * sway * sway * 0.22;
+  var o: ShadowV;
+  o.clip = F.shadowVP * vec4<f32>(w, 1.0);
   return o;
 }
 @fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
@@ -802,12 +842,20 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
 
   // Fresnel is the only thing that chooses reflection versus the water beneath it.
   var col = mix(base, reflCol, fres * reflK * (1.0 - foam * 0.55));
-  col += ggxSun(N, V, rough, fres * reflK) * (1.0 - foam * 0.8);
+  // A second, rougher normal breaks the sun reflection into glitter instead of one disc.
+  let glitter = vec3<f32>(
+    n2(in.xz0 * 13.0 + vec2<f32>(F.time * 0.55, 0.0)) - 0.5,
+    0.0,
+    n2(in.xz0 * 13.0 + vec2<f32>(1.7, -F.time * 0.4)) - 0.5
+  );
+  let Ng = normalize(N + vec3<f32>(cap.x, 0.0, cap.y) * 1.6 + glitter * 0.85);
+  col += ggxSun(Ng, V, max(rough * 0.45, 0.005), fres * reflK) * (1.0 - foam * 0.8);
   let crestLight = pow(sat(1.0 - N.y), 1.6) * sat(S.disp.y * 0.8) * max(dot(F.sunDir, vec3<f32>(0.0, 1.0, 0.0)), 0.0);
   col += F.sunCol * vec3<f32>(0.45, 0.62, 0.55) * crestLight * 0.12;
 
   let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));
   col = mix(F.horiz, col, sat(exp(-distS * dens)));
+  col *= mix(0.58, 1.0, sunShadow(in.world));
   return vec4<f32>(tonemap(col), 1.0);
 }
 
