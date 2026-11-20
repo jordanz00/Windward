@@ -1077,7 +1077,7 @@ async function main() {
     }
 
     const fov = 60 * Math.PI / 180;
-    const near = 0.08, far = 5000;
+    const near = 0.08, far = 36000;
     let time = parseFloat(qstr.get('t') || '2.5') || 0;
     let last = performance.now();
     const ft = new Float32Array(40);
@@ -1206,13 +1206,12 @@ async function main() {
       lookX = 0; lookY = 0;
 
       const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
-      // Water grid. Cover grows in steps so the vertices don't crawl.
-      let cover = 1100;
-      if (camY > 40) cover = 1500;
-      if (camY > 110) cover = 2100;
-      const cell = cover / (q.water - 1);
-      const ox = Math.floor(camX / cell) * cell - cover * 0.5;
-      const oz = Math.floor(camZ / cell) * cell - cover * 0.5;
+      // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
+      const eyeH = Math.max(camY, 0.4);
+      const cover = Math.min(18000, 2800 + eyeH * 55) * 2;
+      const snap = 4;
+      const ox = Math.floor(camX / snap) * snap - cover * 0.5;
+      const oz = Math.floor(camZ / snap) * snap - cover * 0.5;
 
       fillCam(uf, camX, camY, camZ, yaw, pitch, 0, under);
       uf[80] = ox; uf[81] = oz; uf[82] = cover; uf[83] = fieldDamp(world, camX, camZ);

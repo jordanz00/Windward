@@ -620,10 +620,6 @@ struct SkyV {
   o.clip = vec4<f32>(p[id], 1.0, 1.0);
   return o;
 }
-@fragment fn fsSky(in: SkyV) -> @location(0) vec4<f32> {
-  let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
-  return vec4<f32>(skyColor(rd), 1.0);
-}
 
 struct GeoV {
   @builtin(position) clip: vec4<f32>,
@@ -756,6 +752,11 @@ fn waveGain(len: f32, dist: f32) -> f32 {
   return smoothstep(minLen * 0.45, minLen * 1.5, len);
 }
 
+fn seaFade(dist: f32) -> f32 {
+  let reach = mix(2200.0, 380.0, sat(F.camPos.y / 32.0));
+  return smoothstep(reach, reach * 0.28, dist);
+}
+
 struct Sea {
   disp: vec3<f32>,
   nrm: vec3<f32>,
@@ -803,6 +804,10 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     jxz += Q * dir.x * dir.y * wa * s;
     if (i == 0) { brk += collapse * sat(s * 1.6 - 0.35); }
   }
+  let flatten = seaFade(dist);
+  n.x *= flatten;
+  n.z *= flatten;
+  n.y = mix(1.0, n.y, flatten);
   let detail = sat(1.0 - dist / 260.0) * scale;
   let wind = vec2<f32>(0.998, 0.05);
   let along = dot(xz, wind);
@@ -819,16 +824,59 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
   return o;
 }
 
+fn farOcean(xz: vec2<f32>) -> vec3<f32> {
+  // Past the mesh the bottom is deep, so this pass does not read the heightfield.
+  let S = seaAt(xz, 1.0, 30.0);
+  let N = S.nrm;
+  let world = vec3<f32>(xz.x, 0.0, xz.y);
+  let V = normalize(F.camPos - world);
+  let ndv = max(dot(N, V), 0.02);
+  let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+  var reflCol = skyColor(reflect(-V, N));
+  let Rd = reflect(-V, N);
+  if (Rd.y < 0.04) {
+    reflCol = mix(vec3<f32>(0.015, 0.06, 0.09), reflCol, sat(Rd.y * 10.0 + 0.25));
+  }
+  let ndl = max(dot(N, F.sunDir), 0.0);
+  let distS = length(world - F.camPos);
+  let nearW = seaFade(distS);
+  let crest = smoothstep(0.78, 0.42, S.jac);
+  let foam = sat(max(crest, S.brk * 0.85)) * nearW;
+  var base = vec3<f32>(0.012, 0.055, 0.12) * (0.86 + 0.2 * ndl * nearW);
+  base = mix(base, vec3<f32>(0.92, 0.94, 0.92), foam * 0.8);
+  var col = mix(base, reflCol, fres * (1.0 - foam * 0.65));
+  let H = normalize(V + F.sunDir);
+  let power = mix(520.0, 110.0, sat(distS / 180.0));
+  col += F.sunCol * min(pow(max(dot(N, H), 0.0), power) * fres, 1.6) * 0.7 * nearW;
+  let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));
+  return mix(F.horiz, col, sat(exp(-distS * dens)));
+}
+
+@fragment fn fsSky(in: SkyV) -> @location(0) vec4<f32> {
+  let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
+  // Any ray that meets the sea plane is open ocean, so the water does not end at the mesh.
+  if (rd.y < -0.0003 && F.camPos.y > 0.2 && F.under < 0.5) {
+    let t = -F.camPos.y / rd.y;
+    if (t > 1.0 && t < 250000.0) {
+      let xz = F.camPos.xz + rd.xz * t;
+      let inside = xz.x > F.gridO.x && xz.y > F.gridO.y && xz.x < F.gridO.x + F.cover && xz.y < F.gridO.y + F.cover;
+      if (!inside) { return vec4<f32>(farOcean(xz), 1.0); }
+    }
+  }
+  return vec4<f32>(skyColor(rd), 1.0);
+}
+
 struct WaterV {
   @builtin(position) clip: vec4<f32>,
   @location(0) world: vec3<f32>,
   @location(1) xz0: vec2<f32>,
 }
 fn warp(t: f32) -> f32 {
-  // Pack vertices near the camera. The ends stay put, so the patch still reaches the horizon.
+  // Exponential pack: a few meters between vertices at the camera, the outer ring at the horizon.
   let x = t * 2.0 - 1.0;
-  let a = pow(abs(x), 1.55);
-  return sign(x) * a * 0.5 + 0.5;
+  let k = 5.5;
+  let u = (exp(k * abs(x)) - 1.0) / (exp(k) - 1.0);
+  return sign(x) * u * 0.5 + 0.5;
 }
 @vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
   let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
@@ -836,7 +884,8 @@ fn warp(t: f32) -> f32 {
   let s = seaAt(xz, field.y, max(-field.x, 0.2));
   // Distant swell is smaller than a pixel, so the horizon stays a line. The normals still carry it.
   let dist = length(xz - F.camPos.xz);
-  let geom = smoothstep(900.0, 140.0, dist);
+  let reach = mix(900.0, 260.0, sat(F.camPos.y / 32.0));
+  let geom = smoothstep(reach, reach * 0.2, dist);
   var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.04, 1.0, geom), xz.y + s.disp.z * geom);
   var o: WaterV;
   o.world = w;
@@ -915,15 +964,16 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
       base = sceneCol * trans + vec3<f32>(0.015, 0.11, 0.14) * (1.0 - trans);
     }
   }
-  base *= 0.8 + 0.25 * ndl;
-  base = mix(base, vec3<f32>(0.92, 0.94, 0.92), foam * 0.8);
+  let nearW = seaFade(distS);
+  base *= 0.86 + 0.2 * ndl * nearW;
+  base = mix(base, vec3<f32>(0.92, 0.94, 0.92), foam * nearW * 0.8);
 
-  var col = mix(base, reflCol, fres * (1.0 - foam * 0.65));
+  var col = mix(base, reflCol, fres * (1.0 - foam * nearW * 0.65));
   let H = normalize(V + F.sunDir);
   let ndh = max(dot(N, H), 0.0);
   let power = mix(520.0, 110.0, sat(distS / 180.0));
   let glint = min(pow(ndh, power) * fres, 1.6);
-  col += F.sunCol * glint * 0.7;
+  col += F.sunCol * glint * 0.7 * nearW;
   let sss = pow(sat(dot(-V, F.sunDir)), 4.0) * sat(S.disp.y) * sat(1.0 - N.y);
   col += vec3<f32>(0.05, 0.16, 0.13) * sss * 0.35;
 
@@ -2088,7 +2138,7 @@ async function main() {
     }
 
     const fov = 60 * Math.PI / 180;
-    const near = 0.08, far = 5000;
+    const near = 0.08, far = 36000;
     let time = parseFloat(qstr.get('t') || '2.5') || 0;
     let last = performance.now();
     const ft = new Float32Array(40);
@@ -2217,13 +2267,12 @@ async function main() {
       lookX = 0; lookY = 0;
 
       const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
-      // Water grid. Cover grows in steps so the vertices don't crawl.
-      let cover = 1100;
-      if (camY > 40) cover = 1500;
-      if (camY > 110) cover = 2100;
-      const cell = cover / (q.water - 1);
-      const ox = Math.floor(camX / cell) * cell - cover * 0.5;
-      const oz = Math.floor(camZ / cell) * cell - cover * 0.5;
+      // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
+      const eyeH = Math.max(camY, 0.4);
+      const cover = Math.min(18000, 2800 + eyeH * 55) * 2;
+      const snap = 4;
+      const ox = Math.floor(camX / snap) * snap - cover * 0.5;
+      const oz = Math.floor(camZ / snap) * snap - cover * 0.5;
 
       fillCam(uf, camX, camY, camZ, yaw, pitch, 0, under);
       uf[80] = ox; uf[81] = oz; uf[82] = cover; uf[83] = fieldDamp(world, camX, camZ);
