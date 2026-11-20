@@ -1,5 +1,5 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
   med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
   high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
@@ -552,6 +552,61 @@ function downhillYaw(world, x, z) {
   return Math.atan2(-dx, dz);
 }
 
+// Look toward the water across a stretch of sand, not down the long axis of a spit.
+// A real strip of sand with the sea a few meters downhill. The random hunt
+// misses it: the shelf is only a handful of meters wide.
+function findBeach(world) {
+  const step = world.step;
+  const stride = Math.max(1, (world.res / 180) | 0);
+  let best = null, bs = -1e9;
+  for (let j = stride; j < world.res - stride; j += stride) {
+    for (let i = stride; i < world.res - stride; i += stride) {
+      const x = world.org + i * step;
+      const z = world.org + j * step;
+      const h = fieldSample(world, x, z);
+      if (h < 0.3 || h > 0.95) continue;
+      const s = fieldSlope(world, x, z);
+      if (s < 0.03 || s > 0.26) continue;
+      const e = step * 2;
+      const dx = fieldSample(world, x + e, z) - fieldSample(world, x - e, z);
+      const dz = fieldSample(world, x, z + e) - fieldSample(world, x, z - e);
+      const gl = Math.hypot(dx, dz) || 1;
+      const fx = -dx / gl, fz = -dz / gl;
+      let hit = -1;
+      for (let d = 2; d <= 18; d += 2) {
+        if (fieldSample(world, x + fx * d, z + fz * d) < -0.02) { hit = d; break; }
+      }
+      if (hit < 3 || hit > 12) continue;
+      const inland = fieldSample(world, x - fx * 8, z - fz * 8);
+      if (inland < h + 0.35) continue;
+      const sc = (x < -80 ? 3 : 0) + (6 - Math.abs(h - 0.5) * 3) - s * 2 - Math.abs(hit - 5) * 0.08;
+      if (sc > bs) { bs = sc; best = { x: x, z: z, h: h, fx: fx, fz: fz, hit: hit }; }
+    }
+  }
+  return best;
+}
+
+function seawardYaw(world, x, z) {
+  let best = null, bestScore = -1;
+  for (let i = 0; i < 36; i++) {
+    const yaw = i / 36 * Math.PI * 2;
+    const fx = Math.sin(yaw), fz = -Math.cos(yaw);
+    let hit = -1;
+    for (let d = 4; d <= 42; d += 2) {
+      if (fieldSample(world, x + fx * d, z + fz * d) < -0.04) { hit = d; break; }
+    }
+    if (hit < 8 || hit > 32) continue;
+    const rx = Math.cos(yaw), rz = Math.sin(yaw);
+    const hL = fieldSample(world, x + rx * 12, z + rz * 12);
+    const hR = fieldSample(world, x - rx * 12, z - rz * 12);
+    const wide = (hL > 0.05 && hL < 2.4 && hR > 0.05 && hR < 2.4) ? 1 : 0;
+    const inland = fieldSample(world, x - fx * 8, z - fz * 8);
+    const score = wide * 12 + (inland > fieldSample(world, x, z) ? 3 : 0) - Math.abs(hit - 16) * 0.15;
+    if (score > bestScore) { bestScore = score; best = yaw; }
+  }
+  return best;
+}
+
 function hunt(world, rnd, n, score) {
   let best = null, bs = -1e9;
   for (let i = 0; i < n; i++) {
@@ -1071,10 +1126,26 @@ async function main() {
       return 4 - Math.abs(h - 0.6) - s;
     }) || { x: 130, z: 8, h: 0.6 };
 
-    const byaw = downhillYaw(world, beach.x, beach.z);
+    const shore = findBeach(world);
     const face = sunYaw;
+    let standX, standZ, byaw, pitchBeach, eye;
+    if (shore) {
+      // Off the sun, so the wash reads along the beach instead of through the glare.
+      byaw = Math.atan2(shore.fx, -shore.fz) + 0.72;
+      const back = 2.4;
+      standX = shore.x - shore.fx * back;
+      standZ = shore.z - shore.fz * back;
+      const standH = fieldSample(world, standX, standZ);
+      eye = Math.max(standH, 0.05) + 1.62;
+      pitchBeach = -0.26;
+    } else {
+      byaw = downhillYaw(world, beach.x, beach.z);
+      standX = beach.x; standZ = beach.z;
+      eye = beach.h + 1.55;
+      pitchBeach = -0.2;
+    }
     spots = [
-      { x: beach.x, y: beach.h + 1.55, z: beach.z, yaw: face, pitch: -0.05, fly: false, dive: 0 },
+      { x: standX, y: eye, z: standZ, yaw: byaw, pitch: pitchBeach, fly: false, dive: 0 },
       { x: cliff.x, y: cliff.h + 1.7, z: cliff.z, yaw: downhillYaw(world, cliff.x, cliff.z), pitch: -0.28, fly: false, dive: 0 },
       { x: 30, y: 168, z: 150, yaw: 0, pitch: -0.7, fly: true, dive: 0 },
       { x: lagoon.x, y: lagoon.h + 1.6, z: lagoon.z, yaw: downhillYaw(world, lagoon.x, lagoon.z), pitch: -0.16, fly: false, dive: 0 },
@@ -1092,12 +1163,20 @@ async function main() {
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0;
     const clearR = 9;
     const sideX = -sdz, sideZ = sdx;
+    const rowOx = shore ? shore.x : beach.x;
+    const rowOz = shore ? shore.z : beach.z;
+    const rowInX = shore ? -shore.fx : -sdx;
+    const rowInZ = shore ? -shore.fz : -sdz;
+    const rowSideX = shore ? -shore.fz : sideX;
+    const rowSideZ = shore ? shore.fx : sideZ;
     const shrubBudget = Math.max(8, (q.broad * 0.45) | 0);
     for (let i = 0; i < 9 && palms < q.palms; i++) {
-      const along = (i - 4) * (7.5 + (i % 3));
-      const back = 7 + (i % 3) * 3.5;
-      const x = beach.x - sdx * back + sideX * along;
-      const z = beach.z - sdz * back + sideZ * along;
+      const along = shore
+        ? (Math.sign(i - 4.5) * (3.8 + Math.abs(i - 4) * 4.0))
+        : (i - 4) * (7.5 + (i % 3));
+      const back = shore ? (1.2 + (i % 3) * 1.1) : (7 + (i % 3) * 3.5);
+      const x = rowOx + rowInX * back + rowSideX * along;
+      const z = rowOz + rowInZ * back + rowSideZ * along;
       const h = fieldSample(world, x, z);
       if (h < 0.4 || h > 4.5) continue;
       const tint = [0.9 + rnd() * 0.16, 0.92 + rnd() * 0.14, 0.84 + rnd() * 0.16];

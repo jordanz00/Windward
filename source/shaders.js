@@ -251,12 +251,13 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   let m = n2(xz * 0.11);
   let fine = n2(xz * 0.85);
   let grain = n2(xz * 3.6);
-  var sandC = mix(vec3<f32>(0.74, 0.67, 0.50), vec3<f32>(0.58, 0.50, 0.36), fine);
+  var sandC = mix(vec3<f32>(0.62, 0.54, 0.39), vec3<f32>(0.46, 0.39, 0.27), fine);
   let wash = sin(dot(xz, vec2<f32>(0.42, 0.07)) + n2(xz * 0.15) * 3.0);
   sandC *= 0.9 + 0.1 * wash;
   sandC *= 0.92 + 0.12 * grain;
-  let wet = smoothstep(1.15, 0.02, y);
-  sandC = mix(sandC, sandC * vec3<f32>(0.42, 0.46, 0.44), wet * 0.72);
+  // Only the sand the tide never leaves is always dark. The wash above it moves.
+  let wet = smoothstep(0.28, 0.0, y);
+  sandC = mix(sandC, sandC * vec3<f32>(0.42, 0.46, 0.44), wet * 0.78);
   if (y < 0.05) { sandC = mix(vec3<f32>(0.70, 0.64, 0.50), sandC, sat(-y * 0.4 + 0.3)); }
   var grassC = mix(vec3<f32>(0.13, 0.24, 0.06), vec3<f32>(0.30, 0.38, 0.10), m);
   grassC *= 0.78 + 0.36 * n2(xz * 0.22);
@@ -266,6 +267,55 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   rockC *= 0.86 + 0.18 * sin(y * 1.4 + m * 5.0);
   rockC = mix(rockC, vec3<f32>(0.34, 0.36, 0.22), smoothstep(0.62, 0.86, n2(xz * 0.35)) * (1.0 - slope));
   return sandC * sandW + grassC * grassW + rockC * rock;
+}
+
+struct Wash { runup: f32, foam: f32, wet: f32, beach: f32 }
+fn washAt(xz: vec2<f32>) -> Wash {
+  var o: Wash;
+  o.runup = 0.0;
+  o.foam = 0.0;
+  o.wet = 0.0;
+  o.beach = 0.0;
+  let h = sampleField(xz).x;
+  if (h < -0.55 || h > 2.3) { return o; }
+  let e = 2.2;
+  let hx = sampleField(xz + vec2<f32>(e, 0.0)).x - sampleField(xz - vec2<f32>(e, 0.0)).x;
+  let hz = sampleField(xz + vec2<f32>(0.0, e)).x - sampleField(xz - vec2<f32>(0.0, e)).x;
+  let g = vec2<f32>(hx, hz);
+  let slope = length(g) / (e * 2.0);
+  // Gentle beach only. A cliff face does not take a wash.
+  let gentle = smoothstep(0.01, 0.045, slope) * smoothstep(0.72, 0.28, slope);
+  let band = smoothstep(2.1, 0.15, h) * smoothstep(-0.45, 0.0, h);
+  let beach = gentle * band;
+  if (beach < 0.02) { return o; }
+  let up = g / max(length(g), 1e-3);
+  let along = dot(xz, vec2<f32>(-up.y, up.x));
+  // Energy a few meters downhill, because the beach itself stores no wave scale.
+  let energy = sat(sampleField(xz - up * 7.0).y);
+  let ph = F.time * 0.62 - along * 0.045;
+  let p1 = pow(sat(sin(ph)), 1.55);
+  let p2 = pow(sat(sin(F.time * 0.27 - along * 0.07 + 1.9)), 1.8);
+  let reach = mix(0.55, 1.25, energy);
+  // Signed meters, so the waterline wanders along the beach instead of tracing one contour.
+  let wander = (n2(vec2<f32>(along * 0.045, floor(F.time * 0.33))) - 0.42) * 0.95
+             + (n2(vec2<f32>(along * 0.16, 2.4)) - 0.4) * 0.42
+             + (n2(vec2<f32>(along * 0.5, F.time * 0.2)) - 0.5) * 0.16;
+  let runup = max((0.08 + 0.46 * p1 + 0.18 * p2) * reach + wander, 0.05);
+  let high = max((0.28 + 0.2 * (0.5 + 0.5 * sin(F.time * 0.1 - along * 0.018))) * reach + wander * 0.65, runup);
+  let below = runup - h;
+  let rising = sat(cos(ph));
+  let flow = select(-0.7, 1.0, rising > 0.4);
+  let streak = n2(vec2<f32>(along * 0.72, h * 4.8 - F.time * 0.95 * flow));
+  let fine = n2(vec2<f32>(along * 2.4 + F.time * 0.2, h * 9.0));
+  let lip = exp(-abs(h - runup) * 10.0) * smoothstep(-0.02, 0.035, below);
+  let body = smoothstep(0.02, 0.12, below) * smoothstep(0.9, 0.2, below / max(runup, 0.08));
+  o.runup = runup;
+  // Holes in the lip, and thin streaks behind it. A solid band reads as paint.
+  let holes = smoothstep(0.45, 0.78, streak * 0.55 + fine * 0.45);
+  o.foam = sat(lip * holes + body * pow(max(streak, 0.0), 2.1) * 0.65) * beach;
+  o.wet = beach * smoothstep(high + 0.2, high - 0.35, h);
+  o.beach = beach;
+  return o;
 }
 
 struct SkyV {
@@ -306,8 +356,23 @@ struct GeoV {
   let gx = n2(in.world.xz * 5.5 + vec2<f32>(0.18, 0.0)) - g0;
   let gz = n2(in.world.xz * 5.5 + vec2<f32>(0.0, 0.18)) - g0;
   n = normalize(n + vec3<f32>(gx, 0.0, gz) * (1.0 - slope) * 0.55);
-  let alb = terrainAlbedo(in.world.xz, in.world.y, n);
-  return vec4<f32>(shade(in.world, n, alb), 1.0);
+  var alb = terrainAlbedo(in.world.xz, in.world.y, n);
+  var washFoam = 0.0;
+  var washWet = 0.0;
+  if (in.world.y > -0.02 && in.world.y < 2.2 && slope < 0.62) {
+    let W = washAt(in.world.xz);
+    washWet = W.wet;
+    washFoam = W.foam;
+    alb = mix(alb, alb * vec3<f32>(0.34, 0.36, 0.34), W.wet * smoothstep(0.02, 0.18, in.world.y));
+  }
+  var col = shade(in.world, n, alb);
+  if (washWet > 0.05 || washFoam > 0.02) {
+    // Darken after the tonemap-bound lighting, or the wet sand stays as bright as the dry.
+    col *= mix(1.0, 0.38, washWet * (1.0 - washFoam * 0.85));
+    let sun = 0.62 + 0.5 * max(dot(n, F.sunDir), 0.0);
+    col = mix(col, vec3<f32>(0.7, 0.74, 0.7) * sun, washFoam);
+  }
+  return vec4<f32>(col, 1.0);
 }
 
 struct MeshV {
@@ -508,8 +573,8 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     let Q = min(steepQ(i) + feel * 0.45, 1.05);
     let steep = k * As * Q;
     if (steep > 0.72) { As *= 0.72 / steep; }
-    let collapse = 1.0 - smoothstep(0.35, 1.6, D);
-    As *= 1.0 - collapse * 0.65;
+    let collapse = 1.0 - smoothstep(0.4, 2.4, D);
+    As *= 1.0 - collapse * 0.38;
     var omega = sqrt(G * k) * spdK;
     if (i == 1) { omega = wP * (k / kP) * spdK; }
     let phase = k * dot(dir, xz) - omega * F.time;
@@ -522,10 +587,20 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     n.x -= dir.x * wa * c;
     n.z -= dir.y * wa * c;
     n.y -= Q * wa * s;
+    // The crest leans down-wave as the bottom shoals, instead of just shrinking.
+    if (i == 0 && collapse > 0.08) {
+      let pitch = collapse * sat(s * 1.35 - 0.1) * fade;
+      d.x += dir.x * As * pitch * 1.5;
+      d.z += dir.y * As * pitch * 1.5;
+      d.y -= As * pitch * 0.28;
+      n.x -= dir.x * pitch * 1.6;
+      n.z -= dir.y * pitch * 1.6;
+      n.y -= pitch * 0.45;
+      brk += collapse * sat(s * 1.5 - 0.25) * (0.45 + 0.55 * n2(xz * 0.07 + vec2<f32>(F.time * 0.05, 0.0)));
+    }
     jxx += Q * dir.x * dir.x * wa * s;
     jzz += Q * dir.y * dir.y * wa * s;
     jxz += Q * dir.x * dir.y * wa * s;
-    if (i == 0) { brk += collapse * sat(s * 1.6 - 0.35); }
   }
   let flatten = seaFade(dist);
   n.x *= flatten;
@@ -645,12 +720,17 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   let reflK = sat(F.mat.y);
   let rough = clamp(0.008 + sat(F.mat.x) * 0.055, 0.006, 0.065);
-  let grain = n2(in.xz0 * 0.13 + vec2<f32>(F.time * 0.04, 0.0));
-  let grain2 = n2(in.xz0 * 0.37 - vec2<f32>(0.0, F.time * 0.07));
+  let Wsh = washAt(in.xz0);
+  let dir0 = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+  let alongW = dot(in.xz0, dir0);
+  let acrossW = dot(in.xz0, vec2<f32>(-dir0.y, dir0.x));
+  let lace = n2(vec2<f32>(alongW * 0.42 - F.time * 0.55, acrossW * 0.16));
+  let lace2 = n2(vec2<f32>(acrossW * 0.85 + 4.0, alongW * 0.2 + F.time * 0.12));
   let crest = smoothstep(0.58, 0.2, S.jac) * smoothstep(0.2, 0.65, scale);
-  let crestFoam = sat(max(crest, S.brk) - 0.62) * smoothstep(0.4, 0.78, grain * 0.65 + grain2 * 0.35);
-  let shore = smoothstep(1.05, 0.18, max(-bed, 0.0)) * smoothstep(0.02, 0.16, max(-bed, 0.0));
-  let foam = sat(max(crestFoam, shore * smoothstep(0.45, 0.8, grain2))) * max(F.mood.w, 0.0);
+  let crestFoam = sat(max(crest, S.brk * 0.65) - 0.5) * smoothstep(0.3, 0.72, lace * 0.62 + lace2 * 0.38);
+  let breaker = S.brk * smoothstep(2.6, 0.3, max(-bed, 0.0)) * smoothstep(0.34, 0.72, lace);
+  let foam = sat(max(crestFoam * 0.45, max(breaker * (0.55 + 0.45 * lace2), Wsh.foam))) * max(F.mood.w, 0.0);
+  let onSheet = smoothstep(-0.04, 0.05, bed) * Wsh.beach;
 
   if (F.under > 0.5) {
     let I = normalize(in.world - F.camPos);
@@ -717,7 +797,8 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     }
   }
   base = mix(F.deepC.rgb, base, sat(F.mat.w));
-  base = mix(base, vec3<f32>(0.9, 0.91, 0.9), foam * 0.5);
+  let foamCol = mix(vec3<f32>(0.58, 0.66, 0.64), vec3<f32>(0.84, 0.87, 0.85), sat(foam));
+  base = mix(base, foamCol, foam * mix(0.5, 0.72, onSheet));
 
   // Fresnel is the only thing that chooses reflection versus the water beneath it.
   var col = mix(base, reflCol, fres * reflK * (1.0 - foam * 0.55));
