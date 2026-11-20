@@ -1,0 +1,2282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Windward</title>
+<style>
+:root {
+  color-scheme: dark;
+  --ink: #f3efe4;
+  --dim: rgba(243, 239, 228, 0.72);
+  --line: rgba(243, 239, 228, 0.28);
+  --sea: #12303a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #8eb0c4; }
+body { font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif; color: var(--ink); overflow: hidden; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#scrim {
+  position: fixed; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(8, 16, 20, 0.72) 0%, rgba(8, 16, 20, 0.28) 42%, rgba(8, 16, 20, 0) 68%);
+  transition: opacity 0.6s ease;
+}
+body.playing #scrim { opacity: 0; }
+#panel {
+  position: fixed; left: 0; bottom: 0; top: 0;
+  width: min(440px, 100%);
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 28px 32px 36px;
+  pointer-events: none;
+  transition: opacity 0.45s ease;
+}
+body.playing #panel { opacity: 0; pointer-events: none; }
+.kicker {
+  letter-spacing: 0.22em; font-size: 12px; font-family: "Segoe UI", Helvetica, sans-serif;
+  color: var(--dim); margin: 0 0 8px;
+}
+h1 { font-weight: 500; font-size: clamp(56px, 8vw, 84px); line-height: 0.85; margin: 0 0 16px; letter-spacing: -0.03em; }
+.lead { margin: 0 0 22px; max-width: 34em; font-size: 17px; line-height: 1.45; color: var(--dim); }
+button, .q button {
+  font-family: "Segoe UI", Helvetica, sans-serif; pointer-events: auto; cursor: pointer;
+}
+#go {
+  pointer-events: auto; border: 0; background: var(--ink); color: #142026;
+  font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 14px 22px; border-radius: 999px; width: fit-content;
+}
+#go:hover { background: #fff; }
+#go[hidden] { display: none; }
+#load { margin: 8px 0 18px; width: min(280px, 70vw); pointer-events: none; }
+#load[hidden] { display: none; }
+#track { height: 2px; background: rgba(243, 239, 228, 0.2); }
+#bar { height: 2px; background: var(--ink); transform-origin: 0 50%; transform: scaleX(0.02); }
+#status { font-family: "Segoe UI", Helvetica, sans-serif; font-size: 13px; letter-spacing: 0.04em; color: var(--dim); min-height: 1.2em; margin: 8px 0 0; }
+.q { display: flex; gap: 8px; margin: 18px 0; pointer-events: auto; }
+.q button {
+  background: transparent; color: var(--ink); border: 1px solid var(--line);
+  padding: 7px 12px; border-radius: 999px; font-size: 13px;
+}
+.q button.on { background: var(--ink); color: #142026; border-color: var(--ink); }
+.keys {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 16px;
+  font-family: "Segoe UI", Helvetica, sans-serif; font-size: 13px; color: var(--dim);
+  margin-top: 8px;
+}
+.keys b { color: var(--ink); font-weight: 600; }
+#fail {
+  white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px;
+  color: #ffd0c2; max-height: 30vh; overflow: auto; pointer-events: auto;
+}
+#hint, #stats, #menubtn {
+  position: fixed; font-family: "Segoe UI", Helvetica, sans-serif;
+  color: var(--ink); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+#hint {
+  left: 50%; bottom: 22px; transform: translateX(-50%);
+  font-size: 13px; letter-spacing: 0.04em; opacity: 0; transition: opacity 0.6s ease;
+  pointer-events: none;
+}
+#hint.show { opacity: 0.9; }
+#stats {
+  top: 12px; left: 14px; font-size: 12px; letter-spacing: 0.04em;
+  background: rgba(8, 16, 20, 0.35); padding: 6px 8px; border-radius: 6px;
+}
+#stats[hidden] { display: none; }
+#menubtn {
+  top: 12px; right: 12px; border: 1px solid rgba(243, 239, 228, 0.4);
+  background: rgba(8, 16, 20, 0.35); color: var(--ink); border-radius: 999px;
+  padding: 8px 12px; font-size: 13px; opacity: 0; pointer-events: none;
+}
+body.playing #menubtn { opacity: 1; pointer-events: auto; }
+.fine { margin-top: 16px; font-family: "Segoe UI", Helvetica, sans-serif; font-size: 12px; color: var(--dim); }
+@media (max-width: 720px) {
+  #scrim { background: linear-gradient(180deg, rgba(8, 16, 20, 0) 20%, rgba(8, 16, 20, 0.78) 70%); }
+  #panel { top: auto; padding: 20px 18px 24px; }
+  h1 { font-size: 64px; }
+  .keys { grid-template-columns: auto 1fr; }
+}
+
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="scrim"></div>
+<div id="panel">
+  <p class="kicker">A leeward coast</p>
+  <h1>Windward</h1>
+  <p class="lead">An island computed when the page opens. Swell runs in from the west, a reef holds the bay, and the sand keeps going under the water. No textures, no models, no sound files.</p>
+  <button id="go" hidden>Go ashore</button>
+  <div id="load"><div id="track"><div id="bar"></div></div><p id="status">Reading the chart</p></div>
+  <p id="fail" hidden></p>
+  <div class="q" role="group" aria-label="Detail">
+    <button type="button" data-q="low">Low</button>
+    <button type="button" data-q="med">Medium</button>
+    <button type="button" data-q="high">High</button>
+  </div>
+  <div class="keys">
+    <b>WASD</b><span>Walk the sand, or swim</span>
+    <b>Mouse</b><span>Look. Drag if the pointer is free.</span>
+    <b>Q / E</b><span>Dive and rise. Space rises too.</span>
+    <b>Shift</b><span>Faster</span>
+    <b>F</b><span>Fly</span>
+    <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
+    <b>M / H</b><span>Mute, frame time</span>
+    <b>Esc</b><span>This card</span>
+  </div>
+  <p class="fine">Best in Chrome. On a phone, drag to look and walk; a second finger hurries. One HTML file, MIT licensed.</p>
+</div>
+<button id="menubtn" type="button">Menu</button>
+<div id="hint">WASD move · mouse look · F fly · Esc menu</div>
+<div id="stats" hidden></div>
+<script>
+// Fixed-seed coast. +x is east, +z is north, y is up, meters.
+// The shape is an SDF so the beach, the windward cliffs and the lagoon
+// stay in the same places; noise only roughens them.
+
+function ihash(ix, iz) {
+  let n = Math.imul(ix | 0, 374761393) + Math.imul(iz | 0, 668265263);
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function vnoise(x, z) {
+  const x0 = Math.floor(x), z0 = Math.floor(z);
+  const fx = x - x0, fz = z - z0;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const a = ihash(x0, z0), b = ihash(x0 + 1, z0);
+  const c = ihash(x0, z0 + 1), d = ihash(x0 + 1, z0 + 1);
+  return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+}
+
+function fbm(x, z, oct) {
+  let v = 0, a = 0.5, f = 1, s = 0;
+  const n = oct || 4;
+  for (let i = 0; i < n; i++) {
+    v += a * vnoise(x * f, z * f);
+    s += a;
+    f *= 2.03;
+    a *= 0.5;
+  }
+  return v / s;
+}
+
+function ridged(x, z) {
+  let v = 0, a = 0.55, f = 1, s = 0;
+  for (let i = 0; i < 3; i++) {
+    let n = vnoise(x * f, z * f);
+    n = 1 - Math.abs(n * 2 - 1);
+    v += a * n * n;
+    s += a;
+    f *= 2.09;
+    a *= 0.5;
+  }
+  return v / s;
+}
+
+function sat(t) { return t < 0 ? 0 : t > 1 ? 1 : t; }
+function ler(a, b, t) { return a + (b - a) * t; }
+function ss(e0, e1, x) {
+  const t = sat((x - e0) / (e1 - e0));
+  return t * t * (3 - 2 * t);
+}
+function smin(a, b, k) {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+}
+function smax(a, b, k) { return -smin(-a, -b, k); }
+
+// Normalized island SDF. Negative is land. Units are "ellipse radii", not meters.
+function islandSdf(x, z) {
+  const w = (fbm(x * 0.0036 + 2.2, z * 0.0036, 3) - 0.5) * 36;
+  const wx = x + w;
+  const wz = z + (fbm(x * 0.0031, z * 0.0034 + 8.0, 3) - 0.5) * 26;
+
+  // Main mass, a west-facing beach shoulder, a northern headland.
+  // Two horns on the east leave a bay between them instead of a closed lake.
+  let d = Math.hypot(wx / 176, wz / 124) - 1;
+  d = smin(d, Math.hypot((wx + 55) / 140, (wz + 6) / 86) - 1, 0.6);
+  d = smin(d, Math.hypot((wx + 6) / 58, (wz - 102) / 78) - 1, 0.4);
+  d = smin(d, Math.hypot((wx - 118) / 70, (wz - 58) / 32) - 1, 0.34);
+  d = smin(d, Math.hypot((wx - 124) / 64, (wz + 62) / 30) - 1, 0.34);
+
+  // Open bay. Where the bay SDF is negative, land is removed, and because the
+  // bay crosses the eastern shoreline it stays connected to the sea.
+  const lag = Math.hypot((wx - 128) / 78, (wz + 2) / 48) - 1;
+  d = smax(d, -lag, 0.85);
+
+  return { d: d, lag: lag, wx: wx, wz: wz };
+}
+
+function isletSdf(x, z) {
+  return Math.hypot((x + 214) / 34, (z - 36) / 24) - 1;
+}
+
+// Meters. Called once per texel while the field is built.
+function coastHeight(x, z) {
+  const s = islandSdf(x, z);
+  const d = s.d;
+  const islet = isletSdf(x, z);
+  const mask = ss(0.045, -0.22, d);
+  const isletM = ss(0.04, -0.18, islet);
+
+  const peak = Math.exp(-((s.wx + 22) * (s.wx + 22) + (s.wz - 4) * (s.wz - 4)) / (2 * 58 * 58));
+  const n = fbm(x * 0.0055, z * 0.0055, 4);
+  const ridge = ridged(x * 0.0075, z * 0.007);
+
+  // Broad hills. High frequency roughness is left to the shader, so slopes
+  // here stay gentle enough to walk and to read as grass rather than rubble.
+  let h = (5 + n * 9 + ridge * 5 + peak * 38) * mask;
+  const windward = ss(20, -110, s.wx) * ss(-30, 90, s.wz);
+  const coast = ss(-0.38, 0.02, d);
+  const flatten = coast * (1 - windward * 0.95);
+  h = h * (1 - flatten * 0.92);
+
+  // A walkable beach wherever the coast was flattened: a few meters of sand
+  // that crosses sea level.
+  const beach = ss(0.02, -0.2, d) * ss(-0.46, -0.16, d) * (1 - windward);
+  const beachH = (1 - ss(-0.2, 0.02, d)) * 2.4;
+  h = h * (1 - beach) + Math.min(Math.max(h, 0.15), beachH) * beach;
+
+  // Drainage off the summit, south-east, so the slope isn't a uniform dome.
+  const along = (s.wz + 10) / 160;
+  const vx = -10 + along * 55;
+  const valley = Math.exp(-((s.wx - vx) * (s.wx - vx)) / (2 * 22 * 22)) * ss(50, -90, s.wz);
+  h *= 1 - valley * mask * 0.42;
+
+  // The bay is a cove, not a hole cut into the hillside.
+  const nearBay = ss(0.85, -0.1, s.lag);
+  h *= 1.0 - nearBay * 0.8;
+
+  // Headland cliffs: extra height on the northern nose, falling straight into the sea.
+  const nose = ss(78, 140, s.wz) * ss(0.02, -0.22, d);
+  h += nose * (6 + ridge * 6);
+
+  // Islet.
+  const ih = isletM * (2.5 + fbm(x * 0.02, z * 0.02, 3) * 5 + ridged(x * 0.015, z * 0.015) * 4);
+  h = Math.max(h, ih);
+
+  // Seabed. Open water falls off; the lagoon stays knee-to-chest deep;
+  // a reef crest sits in the lagoon mouth, just under the surface.
+  const dist = Math.hypot(x, z);
+  let bed = -4.2 - Math.max(0, dist - 150) * 0.055;
+  bed += (fbm(x * 0.012 + 3, z * 0.012, 3) - 0.5) * 2.2;
+
+  const inLag = ss(0.35, -0.6, s.lag);
+  const lagFloor = -2.15 + (fbm(x * 0.03, z * 0.03, 2) - 0.5) * 0.35;
+  bed = ler(bed, Math.max(bed, lagFloor), inLag);
+
+  // Reef across the bay mouth, a couple of meters down so swell breaks on it.
+  const reef = Math.exp(-((x - 196) * (x - 196)) / 520 - ((z + 2) * (z + 2)) / 3200);
+  bed = Math.max(bed, -2.6 + reef * 2.15);
+
+  // A shoal toward the islet. It stays under the swell so it reads as pale water, not a wall.
+  const bar = Math.exp(-((x + 150) * (x + 150)) / 4200 - ((z - 16) * (z - 16)) / 900);
+  bed = Math.max(bed, -1.7 + bar * 0.85);
+
+  const land = sat(mask + isletM);
+  let H = ler(bed, h, land);
+
+  // Dune ripple on the dry beach only (does not move the waterline much).
+  if (H > 0.25 && H < 2.2 && windward < 0.4) {
+    H += Math.sin(x * 0.22 + fbm(z * 0.05, x * 0.02) * 4) * 0.06;
+  }
+  return H;
+}
+
+// rg field: r = meters, g = wave amplitude 0..1.
+// Rows are filled in slices so the page can paint a progress bar.
+function fillHeights(data, res, span, j0, j1) {
+  const org = -span;
+  const step = (span * 2) / (res - 1);
+  for (let j = j0; j < j1; j++) {
+    const z = org + j * step;
+    for (let i = 0; i < res; i++) data[(j * res + i) * 2] = coastHeight(org + i * step, z);
+  }
+}
+
+function fillDamp(data, res, span, j0, j1) {
+  const org = -span;
+  const step = (span * 2) / (res - 1);
+  const look = [6, 14, 26, 42, 64, 92, 128];
+  for (let j = j0; j < j1; j++) {
+    const z = org + j * step;
+    for (let i = 0; i < res; i++) {
+      const o = (j * res + i) * 2;
+      const h = data[o];
+      let damp = 1;
+      if (h > 0.35) damp = 0;
+      else {
+        let shelter = 0;
+        for (let k = 0; k < look.length; k++) {
+          const ii = i - ((look[k] / step) | 0);
+          if (ii < 0) break;
+          if (data[(j * res + ii) * 2] > 0.8) { shelter = 1 - k / look.length; break; }
+        }
+        const x = org + i * step;
+        if (h > -2.2 && x > 40 && x < 210 && z > -80 && z < 70) shelter = Math.max(shelter, 0.72);
+        damp = 1 - Math.min(shelter, 0.92);
+        damp *= 0.22 + 0.78 * ss(0.25, 3.2, Math.max(-h, 0));
+      }
+      data[o + 1] = damp;
+    }
+  }
+}
+
+function makeWorld(res, span, data) {
+  return { res: res, span: span, step: (span * 2) / (res - 1), org: -span, data: data };
+}
+
+function buildWorld(res, span) {
+  const data = new Float32Array(res * res * 2);
+  fillHeights(data, res, span, 0, res);
+  fillDamp(data, res, span, 0, res);
+  return makeWorld(res, span, data);
+}
+
+function buildWorldAsync(res, span, progress) {
+  const data = new Float32Array(res * res * 2);
+  const slice = 24;
+  let p = Promise.resolve();
+  for (let j = 0; j < res; j += slice) {
+    const j0 = j, j1 = Math.min(res, j + slice);
+    p = p.then(function () {
+      fillHeights(data, res, span, j0, j1);
+      if (progress) progress(j1 / res * 0.75);
+      return new Promise(function (r) { setTimeout(r, 0); });
+    });
+  }
+  for (let j = 0; j < res; j += slice) {
+    const j0 = j, j1 = Math.min(res, j + slice);
+    p = p.then(function () {
+      fillDamp(data, res, span, j0, j1);
+      if (progress) progress(0.75 + j1 / res * 0.25);
+      return new Promise(function (r) { setTimeout(r, 0); });
+    });
+  }
+  return p.then(function () { return makeWorld(res, span, data); });
+}
+
+function fieldSample(world, x, z) {
+  const u = (x - world.org) / (world.span * 2) * (world.res - 1);
+  const v = (z - world.org) / (world.span * 2) * (world.res - 1);
+  const i = Math.floor(u), j = Math.floor(v);
+  if (i < 0 || j < 0 || i >= world.res - 1 || j >= world.res - 1) return -26;
+  const fx = u - i, fz = v - j;
+  const r = world.res;
+  const d = world.data;
+  const a = d[(j * r + i) * 2], b = d[(j * r + i + 1) * 2];
+  const c = d[((j + 1) * r + i) * 2], e = d[((j + 1) * r + i + 1) * 2];
+  return a + (b - a) * fx + (c - a) * fz + (a - b - c + e) * fx * fz;
+}
+
+function fieldDamp(world, x, z) {
+  const u = (x - world.org) / (world.span * 2) * (world.res - 1);
+  const v = (z - world.org) / (world.span * 2) * (world.res - 1);
+  const i = Math.floor(u), j = Math.floor(v);
+  if (i < 0 || j < 0 || i >= world.res - 1 || j >= world.res - 1) return 1;
+  const fx = u - i, fz = v - j;
+  const r = world.res;
+  const d = world.data;
+  const a = d[(j * r + i) * 2 + 1], b = d[(j * r + i + 1) * 2 + 1];
+  const c = d[((j + 1) * r + i) * 2 + 1], e = d[((j + 1) * r + i + 1) * 2 + 1];
+  return a + (b - a) * fx + (c - a) * fz + (a - b - c + e) * fx * fz;
+}
+
+function fieldSlope(world, x, z) {
+  const e = world.step;
+  const hx = fieldSample(world, x + e, z) - fieldSample(world, x - e, z);
+  const hz = fieldSample(world, x, z + e) - fieldSample(world, x, z - e);
+  return Math.hypot(hx, hz) / (2 * e);
+}
+
+function shaderCode(res, span) {
+  const texel = (span * 2) / (res - 1);
+  return `struct Frame {
+  viewProj: mat4x4<f32>,
+  invViewProj: mat4x4<f32>,
+  reflVP: mat4x4<f32>,
+  camPos: vec3<f32>,
+  time: f32,
+  sunDir: vec3<f32>,
+  under: f32,
+  sunCol: vec3<f32>,
+  exposure: f32,
+  horiz: vec3<f32>,
+  tanHalf: f32,
+  right: vec3<f32>,
+  aspect: f32,
+  upv: vec3<f32>,
+  clipBelow: f32,
+  fwd: vec3<f32>,
+  steps: f32,
+  reflPos: vec3<f32>,
+  cloudOct: f32,
+  gridO: vec2<f32>,
+  cover: f32,
+  camDamp: f32,
+  res: vec2<f32>,
+  reflOn: f32,
+  pad0: f32,
+  waves: array<vec4<f32>, 8>,
+  steep: array<vec4<f32>, 2>,
+}
+@group(0) @binding(0) var<uniform> F: Frame;
+@group(0) @binding(1) var htex: texture_2d<f32>;
+
+@group(1) @binding(0) var sceneTex: texture_2d<f32>;
+@group(1) @binding(1) var sceneDepth: texture_depth_2d;
+@group(1) @binding(2) var reflTex: texture_2d<f32>;
+@group(1) @binding(3) var reflSamp: sampler;
+
+const SPAN: f32 = ${span.toFixed(1)};
+const ORIGIN: f32 = ${(-span).toFixed(1)};
+const HRES: i32 = ${res | 0};
+const TEXEL: f32 = ${texel.toFixed(5)};
+const PI: f32 = 3.14159265;
+const G: f32 = 9.81;
+
+fn sat(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
+
+fn hash21(p: vec2<f32>) -> f32 {
+  var p3 = fract(vec3<f32>(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn n2(p: vec2<f32>) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u.x),
+             mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
+}
+
+fn texel(i: vec2<i32>) -> vec2<f32> { return textureLoad(htex, i, 0).rg; }
+
+fn sampleField(xz: vec2<f32>) -> vec2<f32> {
+  let u = (xz.x - ORIGIN) / (SPAN * 2.0) * f32(HRES - 1);
+  let v = (xz.y - ORIGIN) / (SPAN * 2.0) * f32(HRES - 1);
+  if (u < 0.0 || v < 0.0 || u >= f32(HRES - 1) || v >= f32(HRES - 1)) { return vec2<f32>(-26.0, 1.0); }
+  let ip = vec2<i32>(floor(vec2<f32>(u, v)));
+  let f = fract(vec2<f32>(u, v));
+  let ab = mix(texel(ip), texel(ip + vec2<i32>(1, 0)), f.x);
+  let cd = mix(texel(ip + vec2<i32>(0, 1)), texel(ip + vec2<i32>(1, 1)), f.x);
+  return mix(ab, cd, f.y);
+}
+
+fn tonemap(c: vec3<f32>) -> vec3<f32> {
+  let x = max(c, vec3<f32>(0.0)) * F.exposure;
+  let y = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
+  return pow(y, vec3<f32>(0.4545));
+}
+
+fn cloudDens(p: vec2<f32>) -> f32 {
+  var v = 0.0;
+  var a = 0.56;
+  var q = p;
+  let oct = i32(F.cloudOct);
+  for (var i = 0; i < 4; i++) {
+    if (i >= oct) { break; }
+    v += a * n2(q);
+    q = q * 2.07 + vec2<f32>(1.7, 8.3);
+    a *= 0.5;
+  }
+  return v;
+}
+
+fn skyColor(rd: vec3<f32>) -> vec3<f32> {
+  let up = sat(rd.y);
+  var col = mix(vec3<f32>(0.70, 0.78, 0.84), vec3<f32>(0.16, 0.40, 0.78), pow(up, 0.32));
+  col = mix(col, vec3<f32>(0.05, 0.18, 0.48), pow(up, 1.5) * 0.65);
+  let mu = dot(rd, F.sunDir);
+  // Warmth stays next to the sun. The rest of the sky stays blue.
+  col = mix(col, vec3<f32>(0.96, 0.72, 0.48), pow(sat(mu), 14.0) * sat(1.05 - up * 1.2) * 0.55);
+  col += vec3<f32>(1.0, 0.97, 0.9) * pow(sat(mu), 900.0) * 5.0;
+  col += vec3<f32>(1.0, 0.86, 0.62) * pow(sat(mu), 48.0) * 0.28;
+  if (rd.y > 0.012) {
+    let t = (480.0 - F.camPos.y) / rd.y;
+    if (t > 0.0 && t < 12000.0) {
+      let hit = F.camPos.xz + rd.xz * t;
+      let uv = hit * 0.00022 + vec2<f32>(F.time * 0.0022, F.time * 0.0009);
+      let d = cloudDens(uv);
+      let dens = smoothstep(0.42, 0.68, d);
+      let dl = cloudDens(uv + F.sunDir.xz * 0.01);
+      let lit = sat(0.32 + (dl - d) * 3.2);
+      var cc = mix(vec3<f32>(0.40, 0.44, 0.50), vec3<f32>(0.98, 0.97, 0.95), lit);
+      cc += vec3<f32>(1.0, 0.82, 0.55) * pow(sat(mu), 2.0) * dens * 0.18;
+      let fade = smoothstep(0.012, 0.14, rd.y) * sat(1.0 - t / 11000.0);
+      col = mix(col, cc, dens * fade * 0.94);
+    }
+  }
+  return col;
+}
+
+fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
+  let shift = F.sunDir.xz * (480.0 - y) / max(F.sunDir.y, 0.25);
+  let uv = (xz - shift) * 0.00022 + vec2<f32>(F.time * 0.0022, F.time * 0.0009);
+  let dens = smoothstep(0.5, 0.75, cloudDens(uv));
+  return mix(1.0, 0.55, dens);
+}
+
+fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+  let dist = length(world - F.camPos);
+  var dens = mix(0.0015, 0.00022, sat(F.camPos.y / 160.0));
+  var fc = F.horiz;
+  if (F.under > 0.5) {
+    dens = mix(0.028, 0.07, sat(F.camDamp));
+    fc = vec3<f32>(0.025, 0.16, 0.20);
+  }
+  return mix(fc, col, sat(exp(-dist * dens)));
+}
+
+fn caustic(xz: vec2<f32>) -> f32 {
+  let p = xz * 0.42 + vec2<f32>(F.time * 0.16, F.time * 0.05);
+  let q = xz * 0.55 + vec2<f32>(-F.time * 0.07, F.time * 0.12);
+  let a = n2(p) + n2(p * 2.1) * 0.5;
+  let b = n2(q) + n2(q * 2.1) * 0.5;
+  return pow(1.0 - min(abs(a - b) * 4.5, 1.0), 2.2);
+}
+
+fn shadowAt(p: vec3<f32>) -> f32 {
+  let steps = i32(F.steps);
+  if (steps < 1) { return 1.0; }
+  var pos = p + F.sunDir * 1.2;
+  for (var i = 0; i < 12; i++) {
+    if (i >= steps) { break; }
+    pos += F.sunDir * 3.2;
+    if (pos.y < sampleField(pos.xz).x) { return 0.38; }
+  }
+  return 1.0;
+}
+
+fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
+  let n = normalize(nrm);
+  let ndl = max(dot(n, F.sunDir), 0.0);
+  let sh = shadowAt(world) * cloudShade(world.xz, world.y);
+  let amb = mix(vec3<f32>(0.20, 0.19, 0.16), vec3<f32>(0.48, 0.56, 0.68), n.y * 0.5 + 0.5);
+  var light = F.sunCol * ndl * sh + amb * 0.62;
+  if (world.y < 0.2) {
+    let depth = max(-world.y, 0.0);
+    light *= exp(-depth * vec3<f32>(0.40, 0.09, 0.06));
+    light *= 0.5 + caustic(world.xz) * 1.35;
+  }
+  if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
+  var col = albedo * light;
+  if (world.y > -0.05 && world.y < 0.85) {
+    let V = normalize(F.camPos - world);
+    let H = normalize(V + F.sunDir);
+    let wet = 1.0 - sat(world.y / 0.85);
+    col += F.sunCol * pow(max(dot(n, H), 0.0), 48.0) * sh * wet * 0.1;
+  }
+  // crevice darkening
+  col *= mix(0.72, 1.0, sat(n.y * 0.65 + 0.35));
+  return applyFog(col, world);
+}
+
+fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
+  let slope = sat(1.0 - n.y);
+  let rock = smoothstep(0.5, 0.82, slope) * smoothstep(1.2, 5.0, y);
+  var sandW = smoothstep(2.5, 0.25, y) * (1.0 - rock);
+  // below the waterline the bottom is sand unless it is steep
+  if (y < 0.3) { sandW = max(sandW, 1.0 - rock); }
+  let grassW = sat(1.0 - rock - sandW);
+  let m = n2(xz * 0.11);
+  let fine = n2(xz * 0.85);
+  var sandC = mix(vec3<f32>(0.48, 0.40, 0.27), vec3<f32>(0.34, 0.29, 0.19), fine);
+  sandC *= 0.78 + 0.32 * n2(xz * 2.2);
+  let wet = smoothstep(1.3, 0.05, y);
+  sandC = mix(sandC, sandC * vec3<f32>(0.55, 0.58, 0.52), wet * 0.65);
+  if (y < 0.15) { sandC = mix(vec3<f32>(0.62, 0.55, 0.38), sandC, sat(-y * 0.4)); }
+  sandC *= 0.9 + 0.18 * smoothstep(0.78, 0.95, n2(xz * 4.0));
+  var grassC = mix(vec3<f32>(0.12, 0.26, 0.09), vec3<f32>(0.28, 0.36, 0.12), m);
+  grassC *= 0.68 + 0.5 * n2(xz * 0.16);
+  grassC = mix(grassC, vec3<f32>(0.40, 0.38, 0.18), smoothstep(4.0, 1.3, y) * 0.4);
+  var rockC = mix(vec3<f32>(0.42, 0.39, 0.35), vec3<f32>(0.24, 0.23, 0.21), m);
+  rockC *= 0.84 + 0.2 * sin(y * 1.15 + m * 5.0);
+  rockC = mix(rockC, vec3<f32>(0.36, 0.39, 0.24), smoothstep(0.62, 0.86, n2(xz * 0.35)) * (1.0 - slope));
+  return sandC * sandW + grassC * grassW + rockC * rock;
+}
+
+struct SkyV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) ndc: vec2<f32>,
+}
+@vertex fn vsSky(@builtin(vertex_index) id: u32) -> SkyV {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  var o: SkyV;
+  o.ndc = p[id];
+  o.clip = vec4<f32>(p[id], 1.0, 1.0);
+  return o;
+}
+@fragment fn fsSky(in: SkyV) -> @location(0) vec4<f32> {
+  let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
+  return vec4<f32>(skyColor(rd), 1.0);
+}
+
+struct GeoV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) world: vec3<f32>,
+  @location(1) nrm: vec3<f32>,
+}
+@vertex fn vsTerrain(@location(0) p: vec3<f32>) -> GeoV {
+  var o: GeoV;
+  o.world = p;
+  o.nrm = vec3<f32>(0.0, 1.0, 0.0);
+  o.clip = F.viewProj * vec4<f32>(p, 1.0);
+  return o;
+}
+@fragment fn fsTerrain(in: GeoV) -> @location(0) vec4<f32> {
+  if (F.clipBelow > 0.5 && in.world.y < -0.25) { discard; }
+  var n = normalize(vec3<f32>(
+    sampleField(in.world.xz - vec2<f32>(TEXEL, 0.0)).x - sampleField(in.world.xz + vec2<f32>(TEXEL, 0.0)).x,
+    TEXEL * 2.0,
+    sampleField(in.world.xz - vec2<f32>(0.0, TEXEL)).x - sampleField(in.world.xz + vec2<f32>(0.0, TEXEL)).x
+  ));
+  let slope = sat(1.0 - n.y);
+  let b = n2(in.world.xz * 1.7) - n2(in.world.xz * 1.7 + vec2<f32>(0.4, 0.1));
+  n = normalize(n + vec3<f32>(b, 0.0, n2(in.world.xz * 1.7 + vec2<f32>(2.0, 0.0)) - 0.5) * (0.18 + slope * 0.55));
+  let alb = terrainAlbedo(in.world.xz, in.world.y, n);
+  return vec4<f32>(shade(in.world, n, alb), 1.0);
+}
+
+struct MeshV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) world: vec3<f32>,
+  @location(1) nrm: vec3<f32>,
+  @location(2) col: vec3<f32>,
+}
+@vertex fn vsMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec3<f32>, @location(3) sway: f32) -> MeshV {
+  var w = p;
+  let bend = sin(F.time * 1.25 + p.x * 0.15 + p.z * 0.11) * sway;
+  w.x += bend * 0.32;
+  w.z += bend * 0.1;
+  var o: MeshV;
+  o.world = w;
+  o.nrm = n;
+  o.col = c;
+  o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  return o;
+}
+@fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
+  if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
+  return vec4<f32>(shade(in.world, in.nrm, in.col), 1.0);
+}
+
+struct GrassV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) world: vec3<f32>,
+  @location(1) nrm: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) kind: f32,
+}
+@vertex fn vsGrass(@location(0) p: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) inst: vec4<f32>) -> GrassV {
+  let sc = abs(inst.w);
+  let weed = select(0.0, 1.0, inst.w < 0.0);
+  let s = sin(inst.z); let c = cos(inst.z);
+  var lp = vec3<f32>(p.x * sc, p.y * sc, p.z * sc);
+  let x = lp.x * c - lp.z * s;
+  let z = lp.x * s + lp.z * c;
+  let ground = sampleField(vec2<f32>(inst.x, inst.y)).x;
+  var w = vec3<f32>(inst.x + x, ground + lp.y, inst.y + z);
+  let sway = uv.y * (0.25 + weed * 0.45);
+  let ph = sin(F.time * (1.5 + weed) + inst.x * 0.2 + inst.y * 0.17);
+  w.x += ph * sway;
+  w.z += ph * sway * 0.35;
+  var o: GrassV;
+  o.world = w;
+  o.nrm = normalize(vec3<f32>(ph * 0.3, 1.0, 0.1));
+  o.uv = uv;
+  o.kind = weed;
+  o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  return o;
+}
+@fragment fn fsGrass(in: GrassV) -> @location(0) vec4<f32> {
+  let halfW = mix(0.5, 0.04, in.uv.y);
+  if (abs(in.uv.x - 0.5) > halfW) { discard; }
+  var col = mix(vec3<f32>(0.16, 0.28, 0.10), vec3<f32>(0.42, 0.46, 0.18), in.uv.y);
+  if (in.kind > 0.5) { col = mix(vec3<f32>(0.05, 0.16, 0.10), vec3<f32>(0.20, 0.32, 0.14), in.uv.y); }
+  col *= 0.85 + 0.3 * n2(in.world.xz * 2.0);
+  return vec4<f32>(shade(in.world, in.nrm, col), 1.0);
+}
+
+struct BirdV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) world: vec3<f32>,
+  @location(1) nrm: vec3<f32>,
+  @location(2) col: vec3<f32>,
+}
+@vertex fn vsBird(@location(0) p: vec3<f32>, @location(1) wing: f32, @location(2) inst: vec4<f32>) -> BirdV {
+  var lp = p;
+  let flap = sin(F.time * 6.2 + inst.x * 0.7) * wing;
+  lp.y += abs(lp.x) * flap;
+  let s = sin(inst.w); let c = cos(inst.w);
+  let x = lp.x * c - lp.z * s;
+  let z = lp.x * s + lp.z * c;
+  var w = vec3<f32>(inst.x + x, inst.y + lp.y, inst.z + z);
+  var o: BirdV;
+  o.world = w;
+  o.nrm = vec3<f32>(0.0, 1.0, 0.0);
+  o.col = mix(vec3<f32>(0.92, 0.93, 0.9), vec3<f32>(0.75, 0.78, 0.82), abs(wing));
+  o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  return o;
+}
+@fragment fn fsBird(in: BirdV) -> @location(0) vec4<f32> {
+  return vec4<f32>(shade(in.world, in.nrm, in.col), 1.0);
+}
+
+fn steepQ(i: i32) -> f32 {
+  let v = F.steep[i >> 2];
+  let k = i & 3;
+  if (k == 0) { return v.x; }
+  if (k == 1) { return v.y; }
+  if (k == 2) { return v.z; }
+  return v.w;
+}
+
+fn waveGain(len: f32, dist: f32) -> f32 {
+  // Drop wavelengths the pixel can no longer show, so glitter doesn't turn into a grid.
+  let minLen = dist * 0.032;
+  return smoothstep(minLen * 0.4, minLen * 1.7, len);
+}
+
+fn gerstner(xz: vec2<f32>, scale: f32) -> vec4<f32> {
+  // xyz displacement, w = a rough jacobian accumulator
+  var d = vec3<f32>(0.0);
+  var jxx = 0.0; var jzz = 0.0; var jxz = 0.0;
+  let dist = length(F.camPos.xz - xz);
+  for (var i = 0; i < 8; i++) {
+    let w = F.waves[i];
+    let len = max(length(w.xy), 0.001);
+    let dir = w.xy / len;
+    let A = w.z * scale * waveGain(w.w, dist);
+    let k = 6.2831853 / w.w;
+    let omega = sqrt(G * k);
+    let phase = k * dot(dir, xz) - omega * F.time;
+    let s = sin(phase);
+    let c = cos(phase);
+    let Q = steepQ(i);
+    d.x += Q * A * dir.x * c;
+    d.z += Q * A * dir.y * c;
+    d.y += A * s;
+    let wa = k * A;
+    jxx += Q * dir.x * dir.x * wa * s;
+    jzz += Q * dir.y * dir.y * wa * s;
+    jxz += Q * dir.x * dir.y * wa * s;
+  }
+  let J = (1.0 - jxx) * (1.0 - jzz) - jxz * jxz;
+  return vec4<f32>(d, J);
+}
+
+fn gerstnerN(xz: vec2<f32>, scale: f32) -> vec3<f32> {
+  var n = vec3<f32>(0.0, 1.0, 0.0);
+  let dist = length(F.camPos.xz - xz);
+  for (var i = 0; i < 8; i++) {
+    let w = F.waves[i];
+    let len = max(length(w.xy), 0.001);
+    let dir = w.xy / len;
+    let A = w.z * scale * waveGain(w.w, dist);
+    let k = 6.2831853 / w.w;
+    let omega = sqrt(G * k);
+    let phase = k * dot(dir, xz) - omega * F.time;
+    let c = cos(phase);
+    let wa = k * A;
+    n.x -= dir.x * wa * c;
+    n.z -= dir.y * wa * c;
+    n.y -= steepQ(i) * wa * sin(phase);
+  }
+  // A little shimmer up close. It fades before it can alias into a checkerboard.
+  let detail = sat(1.0 - dist / 40.0) * 0.35;
+  let rip = xz * 1.4 + vec2<f32>(F.time * 0.6, -F.time * 0.25);
+  let e = 0.28;
+  let h0 = n2(rip);
+  let hx = n2(rip + vec2<f32>(e, 0.0));
+  let hz = n2(rip + vec2<f32>(0.0, e));
+  n.x += (h0 - hx) * 0.18 * scale * detail;
+  n.z += (h0 - hz) * 0.18 * scale * detail;
+  return normalize(n);
+}
+
+struct WaterV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) world: vec3<f32>,
+  @location(1) xz0: vec2<f32>,
+}
+@vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
+  let xz = F.gridO + uv * F.cover;
+  let field = sampleField(xz);
+  let disp = gerstner(xz, field.y);
+  var w = vec3<f32>(xz.x + disp.x, disp.y, xz.y + disp.z);
+  var o: WaterV;
+  o.world = w;
+  o.xz0 = xz;
+  o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  return o;
+}
+
+fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
+  let uv = frag / F.res;
+  let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+  let w = F.invViewProj * ndc;
+  return w.xyz / max(w.w, 1e-4);
+}
+
+@fragment fn fsWater(in: WaterV) -> @location(0) vec4<f32> {
+  let field = sampleField(in.xz0);
+  let scale = field.y;
+  let bed = field.x;
+  let N = gerstnerN(in.xz0, max(scale, 0.15));
+  let V = normalize(F.camPos - in.world);
+  let ndv = max(dot(N, V), 0.0);
+  let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+  let distS = length(in.world - F.camPos);
+  // Nearby water keeps its color. The horizon is what mirrors the sky.
+  let fresUse = fres * mix(0.38, 0.88, sat(distS / 48.0));
+  let g = gerstner(in.xz0, scale);
+  let crest = smoothstep(0.9, 0.7, g.w) * smoothstep(0.4, 0.75, scale);
+  let depthB = max(-bed, 0.0);
+  let band = smoothstep(0.65, 0.18, depthB) * smoothstep(0.03, 0.14, depthB);
+  let lace = n2(in.xz0 * 0.18 + vec2<f32>(0.0, -F.time * 0.35));
+  let lace2 = n2(in.xz0 * 0.07 + vec2<f32>(F.time * 0.05, 0.2));
+  let shore = band * smoothstep(0.64, 0.9, lace * 0.55 + lace2 * 0.45);
+  let foam = sat(max(crest, shore));
+
+  if (F.under > 0.5) {
+    let I = normalize(in.world - F.camPos);
+    let R = refract(I, -N, 1.333);
+    var col: vec3<f32>;
+    if (dot(R, R) < 1e-4) {
+      col = vec3<f32>(0.012, 0.055, 0.075);
+      col += vec3<f32>(0.03, 0.08, 0.09) * pow(1.0 - max(dot(-I, N), 0.0), 3.0);
+    } else {
+      col = skyColor(normalize(R));
+    }
+    col = mix(col, vec3<f32>(0.75, 0.78, 0.76), foam * 0.45);
+    return vec4<f32>(tonemap(col), 1.0);
+  }
+
+  let frag = in.clip;
+  let px = vec2<i32>(frag.xy);
+  let dep = textureLoad(sceneDepth, px, 0);
+  // Land, trees and boats in front of this fragment stay as the blit left them.
+  if (dep < 0.999 && dep < frag.z - 0.00015) { discard; }
+
+  var reflCol = skyColor(reflect(-V, N));
+  if (reflect(-V, N).y < 0.04) {
+    reflCol = mix(vec3<f32>(0.015, 0.06, 0.09), reflCol, sat(reflect(-V, N).y * 10.0 + 0.25));
+  }
+  if (F.reflOn > 0.5) {
+    let q = vec3<f32>(in.world.x + N.x * 1.6, in.world.y, in.world.z + N.z * 1.6);
+    let c = F.reflVP * vec4<f32>(q, 1.0);
+    if (c.w > 0.05) {
+      let ndc = c.xy / c.w;
+      let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+      if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
+        let edge = smoothstep(0.0, 0.05, uv.x) * smoothstep(1.0, 0.95, uv.x)
+                 * smoothstep(0.0, 0.05, uv.y) * smoothstep(1.0, 0.95, uv.y);
+        let rs = textureSampleLevel(reflTex, reflSamp, uv, 0.0);
+        reflCol = mix(reflCol, rs.rgb, rs.a * edge * (1.0 - foam));
+      }
+    }
+  }
+
+  let inscatter = vec3<f32>(0.012, 0.09, 0.16);
+  var base = inscatter;
+  if (dep < 0.9995) {
+    let sp = worldAt(in.clip.xy, dep);
+    let d = in.world.y - sp.y;
+    if (d > -0.08) {
+      let trans = exp(-max(d, 0.0) * vec3<f32>(0.25, 0.055, 0.035));
+      let sceneCol = textureLoad(sceneTex, px, 0).rgb;
+      base = sceneCol * trans + vec3<f32>(0.03, 0.18, 0.22) * (1.0 - trans);
+    }
+  } else {
+    // No seabed in the depth buffer: deep water, red dies first.
+    let deep = exp(-vec3<f32>(9.0, 1.7, 0.55));
+    base = vec3<f32>(0.004, 0.025, 0.06) + inscatter * (1.0 - deep);
+  }
+  base *= 0.78 + 0.32 * sat(g.y * 0.7 + 0.4);
+  base = mix(base, vec3<f32>(0.75, 0.80, 0.78), foam * 0.5);
+
+  var col = mix(base, reflCol, fresUse * (1.0 - foam * 0.75));
+  // Sun path. Tight up close, and gone before it can alias.
+  let H = normalize(V + F.sunDir);
+  let ndh = max(dot(N, H), 0.0);
+  let power = mix(140.0, 6.0, sat(distS / 60.0));
+  let ndl = max(dot(N, F.sunDir), 0.0);
+  let glint = min(pow(ndh, power) * ndl * fres, 0.7);
+  col += F.sunCol * glint * mix(0.55, 0.12, sat(distS / 90.0));
+  // A little light through the crest, the way a real wave lip goes green.
+  let sss = pow(sat(dot(V, -F.sunDir)), 4.0) * sat(g.y) * scale;
+  col += vec3<f32>(0.04, 0.12, 0.11) * sss * 0.25;
+
+  let dist = length(in.world - F.camPos);
+  let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));
+  col = mix(F.horiz, col, sat(exp(-dist * dens)));
+  return vec4<f32>(tonemap(col), 1.0);
+}
+
+`;
+}
+
+function blitShaderCode() {
+  // Separate module so its bindings don't have to match the water pass.
+  // The Frame prefix is identical, so the same uniform buffer can be bound.
+  return `struct Frame {
+  viewProj: mat4x4<f32>,
+  invViewProj: mat4x4<f32>,
+  reflVP: mat4x4<f32>,
+  camPos: vec3<f32>,
+  time: f32,
+  sunDir: vec3<f32>,
+  under: f32,
+  sunCol: vec3<f32>,
+  exposure: f32,
+  horiz: vec3<f32>,
+  tanHalf: f32,
+  right: vec3<f32>,
+  aspect: f32,
+  upv: vec3<f32>,
+  clipBelow: f32,
+  fwd: vec3<f32>,
+  steps: f32,
+  reflPos: vec3<f32>,
+  cloudOct: f32,
+  gridO: vec2<f32>,
+  cover: f32,
+  camDamp: f32,
+  res: vec2<f32>,
+  reflOn: f32,
+  pad0: f32,
+  waves: array<vec4<f32>, 8>,
+  steep: array<vec4<f32>, 2>,
+}
+@group(0) @binding(0) var<uniform> F: Frame;
+@group(0) @binding(1) var sceneTex: texture_2d<f32>;
+@group(0) @binding(2) var sceneDepth: texture_depth_2d;
+
+fn tonemap(c: vec3<f32>) -> vec3<f32> {
+  let x = max(c, vec3<f32>(0.0)) * F.exposure;
+  let y = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
+  return pow(y, vec3<f32>(0.4545));
+}
+fn sat(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
+
+struct SkyV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) ndc: vec2<f32>,
+}
+@vertex fn vsBlit(@builtin(vertex_index) id: u32) -> SkyV {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  var o: SkyV;
+  o.ndc = p[id];
+  o.clip = vec4<f32>(p[id], 0.0, 1.0);
+  return o;
+}
+struct BlitOut {
+  @builtin(frag_depth) d: f32,
+  @location(0) c: vec4<f32>,
+}
+@fragment fn fsBlit(in: SkyV) -> BlitOut {
+  let px = vec2<i32>(in.clip.xy);
+  var col = tonemap(textureLoad(sceneTex, px, 0).rgb);
+  if (F.under > 0.5) {
+    let uv = in.clip.xy / max(F.res, vec2<f32>(1.0));
+    col *= mix(1.0, 0.5, sat(length(uv - 0.5) * 1.35));
+  }
+  var o: BlitOut;
+  o.d = textureLoad(sceneDepth, px, 0);
+  o.c = vec4<f32>(col, 1.0);
+  return o;
+}
+`;
+}
+
+const PRESETS = {
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 110, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 0, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 124, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 172, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+};
+
+const WAVES = [
+  [1.00, 0.06, 1.65, 72, 0.76],
+  [0.99, 0.10, 0.5, 36, 0.7],
+  [0.98, -0.10, 0.18, 20, 0.38],
+  [0.97, 0.18, 0.07, 12, 0.26],
+  [0.95, 0.26, 0.03, 7.5, 0.18],
+  [0.40, -0.92, 0.025, 16, 0.12],
+  [-0.08, 1.00, 0.03, 42, 0.1],
+  [0.72, 0.70, 0.015, 5, 0.1]
+];
+
+const SUN = (function () {
+  const v = [-0.74, 0.50, -0.42];
+  const L = Math.hypot(v[0], v[1], v[2]);
+  return [v[0] / L, v[1] / L, v[2] / L];
+})();
+
+const qstr = new URLSearchParams(location.search);
+function detectQuality() {
+  const q = (qstr.get('q') || '').toLowerCase();
+  if (PRESETS[q]) return q;
+  let saved = null;
+  try { saved = localStorage.getItem('ww-q'); } catch (e) {}
+  if (PRESETS[saved]) return saved;
+  const mem = navigator.deviceMemory || 8;
+  const cores = navigator.hardwareConcurrency || 8;
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  if (coarse && mem <= 4) return 'low';
+  if (coarse || mem <= 4 || cores <= 4) return 'med';
+  return 'high';
+}
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $('status');
+const barEl = $('bar');
+const goEl = $('go');
+const panelEl = $('panel');
+const scrimEl = $('scrim');
+const hintEl = $('hint');
+const statsEl = $('stats');
+const failEl = $('fail');
+const menuBtn = $('menubtn');
+
+function setStatus(text, t) {
+  if (statusEl) statusEl.textContent = text;
+  if (barEl) barEl.style.transform = 'scaleX(' + Math.max(0.02, t) + ')';
+}
+function fail(msg) {
+  if (failEl) { failEl.hidden = false; failEl.textContent = msg; }
+  if (goEl) goEl.hidden = true;
+  if (statusEl) statusEl.textContent = 'This coast needs WebGPU.';
+}
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const P = new Float32Array(16);
+const V = new Float32Array(16);
+const VP = new Float32Array(16);
+const INV = new Float32Array(16);
+const RVP = new Float32Array(16);
+function perspective(out, fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy * 0.5);
+  const ri = 1 / (near - far);
+  out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
+  out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
+  out[8] = 0; out[9] = 0; out[10] = far * ri; out[11] = -1;
+  out[12] = 0; out[13] = 0; out[14] = near * far * ri; out[15] = 0;
+}
+function viewFrom(eye, right, up, fwd, out) {
+  const zx = -fwd[0], zy = -fwd[1], zz = -fwd[2];
+  out[0] = right[0]; out[1] = up[0]; out[2] = zx; out[3] = 0;
+  out[4] = right[1]; out[5] = up[1]; out[6] = zy; out[7] = 0;
+  out[8] = right[2]; out[9] = up[2]; out[10] = zz; out[11] = 0;
+  out[12] = -(right[0] * eye[0] + right[1] * eye[1] + right[2] * eye[2]);
+  out[13] = -(up[0] * eye[0] + up[1] * eye[1] + up[2] * eye[2]);
+  out[14] = -(zx * eye[0] + zy * eye[1] + zz * eye[2]);
+  out[15] = 1;
+}
+function matmul(a, b, o) {
+  for (let c = 0; c < 4; c++) {
+    const b0 = b[c * 4], b1 = b[c * 4 + 1], b2 = b[c * 4 + 2], b3 = b[c * 4 + 3];
+    o[c * 4] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    o[c * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    o[c * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    o[c * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
+}
+function invert(a, o) {
+  const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
+  const a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+  const a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+  const a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15];
+  const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10;
+  const b03 = a01 * a12 - a02 * a11, b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12;
+  const b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30, b08 = a20 * a33 - a23 * a30;
+  const b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  if (!det) return;
+  det = 1 / det;
+  o[0] = (a11 * b11 - a12 * b10 + a13 * b09) * det;
+  o[1] = (a02 * b10 - a01 * b11 - a03 * b09) * det;
+  o[2] = (a31 * b05 - a32 * b04 + a33 * b03) * det;
+  o[3] = (a22 * b04 - a21 * b05 - a23 * b03) * det;
+  o[4] = (a12 * b08 - a10 * b11 - a13 * b07) * det;
+  o[5] = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+  o[6] = (a32 * b02 - a30 * b05 - a33 * b01) * det;
+  o[7] = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+  o[8] = (a10 * b10 - a11 * b08 + a13 * b06) * det;
+  o[9] = (a01 * b08 - a00 * b10 - a03 * b06) * det;
+  o[10] = (a30 * b04 - a31 * b02 + a33 * b00) * det;
+  o[11] = (a21 * b02 - a20 * b04 - a23 * b00) * det;
+  o[12] = (a11 * b07 - a10 * b09 - a12 * b06) * det;
+  o[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+  o[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
+  o[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+}
+
+function cameraVectors(yaw, pitch, fwd, right, up) {
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  fwd[0] = sy * cp; fwd[1] = sp; fwd[2] = -cy * cp;
+  right[0] = cy; right[1] = 0; right[2] = sy;
+  up[0] = right[1] * fwd[2] - right[2] * fwd[1];
+  up[1] = right[2] * fwd[0] - right[0] * fwd[2];
+  up[2] = right[0] * fwd[1] - right[1] * fwd[0];
+}
+function lookYP(dx, dy, dz) {
+  const horiz = Math.hypot(dx, dz) || 1e-4;
+  return [Math.atan2(dx, -dz), Math.atan2(dy, horiz)];
+}
+
+function Mesh() { this.pos = []; this.nrm = []; this.col = []; this.sway = []; this.idx = []; }
+Mesh.prototype.v = function (x, y, z, nx, ny, nz, r, g, b, s) {
+  const i = this.pos.length / 3;
+  this.pos.push(x, y, z); this.nrm.push(nx, ny, nz); this.col.push(r, g, b); this.sway.push(s || 0);
+  return i;
+};
+Mesh.prototype.tri = function (a, b, c) { this.idx.push(a, b, c); };
+function appendMesh(dst, src, x, y, z, rot, sc, tint, sy) {
+  const c = Math.cos(rot), s = Math.sin(rot);
+  const base = dst.pos.length / 3;
+  const squash = sy || 1;
+  const tr = tint ? tint[0] : 1, tg = tint ? tint[1] : 1, tb = tint ? tint[2] : 1;
+  const vc = src.pos.length / 3;
+  for (let i = 0; i < vc; i++) {
+    let px = src.pos[i * 3] * sc, py = src.pos[i * 3 + 1] * sc * squash, pz = src.pos[i * 3 + 2] * sc;
+    const rx = px * c - pz * s, rz = px * s + pz * c;
+    dst.pos.push(rx + x, py + y, rz + z);
+    let nx = src.nrm[i * 3], ny = src.nrm[i * 3 + 1] / squash, nz = src.nrm[i * 3 + 2];
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    dst.nrm.push(nx * c - nz * s, ny, nx * s + nz * c);
+    dst.col.push(src.col[i * 3] * tr, src.col[i * 3 + 1] * tg, src.col[i * 3 + 2] * tb);
+    dst.sway.push(src.sway[i]);
+  }
+  for (let k = 0; k < src.idx.length; k++) dst.idx.push(src.idx[k] + base);
+}
+
+function icosphere(sub, rad, col) {
+  const t = (1 + Math.sqrt(5)) / 2;
+  let v = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]];
+  const norm = (p) => { const L = Math.hypot(p[0], p[1], p[2]); return [p[0] / L, p[1] / L, p[2] / L]; };
+  v = v.map(norm);
+  let f = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+  for (let s = 0; s < sub; s++) {
+    const cache = Object.create(null);
+    const mid = (a, b) => {
+      const k = a < b ? a + '_' + b : b + '_' + a;
+      if (cache[k] != null) return cache[k];
+      const p = norm([(v[a][0] + v[b][0]) * 0.5, (v[a][1] + v[b][1]) * 0.5, (v[a][2] + v[b][2]) * 0.5]);
+      v.push(p); cache[k] = v.length - 1; return v.length - 1;
+    };
+    const nf = [];
+    for (let i = 0; i < f.length; i++) {
+      const A = f[i][0], B = f[i][1], C = f[i][2];
+      const ab = mid(A, B), bc = mid(B, C), ca = mid(C, A);
+      nf.push([A, ab, ca], [B, bc, ab], [C, ca, bc], [ab, bc, ca]);
+    }
+    f = nf;
+  }
+  const m = new Mesh();
+  for (let i = 0; i < v.length; i++) {
+    const p = v[i];
+    const j = (i * 17) % 10 / 10;
+    m.v(p[0] * rad, p[1] * rad, p[2] * rad, p[0], p[1], p[2], col[0] * (0.85 + j * 0.2), col[1] * (0.85 + j * 0.2), col[2] * (0.85 + j * 0.2), 0);
+  }
+  for (let i = 0; i < f.length; i++) m.tri(f[i][0], f[i][1], f[i][2]);
+  return m;
+}
+
+function cylinder(sides, rings, r0, r1, h, col, swayTop) {
+  const m = new Mesh();
+  const rows = [];
+  for (let i = 0; i <= rings; i++) {
+    const t = i / rings;
+    const y = h * t;
+    const r = r0 + (r1 - r0) * t;
+    const row = [];
+    for (let k = 0; k < sides; k++) {
+      const a = k / sides * Math.PI * 2;
+      const nx = Math.cos(a), nz = Math.sin(a);
+      row.push(m.v(nx * r, y, nz * r, nx, 0, nz, col[0], col[1], col[2], swayTop * t));
+    }
+    rows.push(row);
+  }
+  for (let i = 0; i < rings; i++) {
+    for (let k = 0; k < sides; k++) {
+      const a = rows[i][k], b = rows[i][(k + 1) % sides];
+      const c = rows[i + 1][k], d = rows[i + 1][(k + 1) % sides];
+      m.tri(a, c, b); m.tri(b, c, d);
+    }
+  }
+  return m;
+}
+
+function makePalm() {
+  const m = new Mesh();
+  const sides = 6, seg = 6;
+  const rings = [];
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg;
+    const y = t * 1.05;
+    const lean = t * t * 0.42;
+    const r = 0.055 * (1 - t * 0.55);
+    const row = [];
+    for (let k = 0; k < sides; k++) {
+      const a = k / sides * Math.PI * 2;
+      const lx = lean + Math.cos(a) * r, lz = Math.sin(a) * r;
+      row.push(m.v(lx, y, lz, Math.cos(a), 0.15, Math.sin(a), 0.42, 0.30, 0.16, t * 0.35));
+    }
+    rings.push(row);
+  }
+  for (let i = 0; i < seg; i++) {
+    for (let k = 0; k < sides; k++) {
+      const a = rings[i][k], b = rings[i][(k + 1) % sides], c = rings[i + 1][k], d = rings[i + 1][(k + 1) % sides];
+      m.tri(a, c, b); m.tri(b, c, d);
+    }
+  }
+  function frondRing(count, len, drop, width, phase) {
+    const steps = 5;
+    for (let f = 0; f < count; f++) {
+      const ang = f / count * Math.PI * 2 + phase;
+      const dx = Math.cos(ang), dz = Math.sin(ang);
+      const px = -dz, pz = dx;
+      let prev = null;
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const rad = 0.06 + t * len;
+        const y = 1.04 - t * t * drop;
+        const w = width * Math.sin(t * Math.PI) * (1.05 - t * 0.35);
+        const cx = 0.42 + dx * rad, cz = dz * rad;
+        const col = [0.10 + t * 0.12, 0.32 + (1 - t) * 0.12, 0.07];
+        const sway = 0.4 + t * 0.85;
+        const ny = 0.85;
+        const a = m.v(cx + px * w, y, cz + pz * w, dx, ny, dz, col[0], col[1], col[2], sway);
+        const b = m.v(cx - px * w, y, cz - pz * w, dx, ny, dz, col[0] * 0.75, col[1] * 0.85, col[2], sway);
+        if (prev) { m.tri(prev[0], prev[1], a); m.tri(prev[1], b, a); }
+        prev = [a, b];
+      }
+    }
+  }
+  frondRing(7, 1.25, 1.15, 0.22, 0.3);
+  frondRing(6, 0.72, 0.55, 0.16, 0.8);
+  return m;
+}
+
+function makeBroad() {
+  const m = new Mesh();
+  const trunk = cylinder(5, 4, 0.055, 0.03, 0.55, [0.30, 0.20, 0.11], 0.12);
+  appendMesh(m, trunk, 0, 0, 0, 0, 1, null, 1);
+  const layers = [[0.42, 0.46, 0.28, 0.22, 0.34, 0.14], [0.62, 0.32, 0.22, 0.16, 0.30, 0.11], [0.78, 0.16, 0.16, 0.20, 0.36, 0.12]];
+  for (let L = 0; L < layers.length; L++) {
+    const y = layers[L][0], rad = layers[L][1], h = layers[L][2];
+    const col = [layers[L][3], layers[L][4], layers[L][5]];
+    const sides = 7;
+    const top = m.v(0, y + h, 0, 0, 1, 0, col[0] * 1.25, col[1] * 1.2, col[2], 0.28);
+    const ring = [];
+    for (let k = 0; k < sides; k++) {
+      const a = k / sides * Math.PI * 2 + L * 0.4;
+      ring.push(m.v(Math.cos(a) * rad, y, Math.sin(a) * rad, Math.cos(a), 0.45, Math.sin(a), col[0], col[1], col[2], 0.32));
+    }
+    for (let k = 0; k < sides; k++) m.tri(top, ring[k], ring[(k + 1) % sides]);
+  }
+  return m;
+}
+
+function makeSkiff() {
+  const m = new Mesh();
+  const sec = 7;
+  const rings = [];
+  for (let i = 0; i <= sec; i++) {
+    const t = i / sec;
+    const z = -1.35 + t * 3.05;
+    const bow = t > 0.72 ? (t - 0.72) / 0.28 : 0;
+    const mid = Math.sin(Math.min(t, 0.72) / 0.72 * Math.PI);
+    const beam = (0.18 + 0.42 * mid) * (1 - bow * 0.92);
+    const lift = bow * 0.62;
+    const keel = 0.02 + lift;
+    const gun = 0.36 + lift * 0.25;
+    const wood = [0.45, 0.31, 0.16];
+    const dark = [0.32, 0.22, 0.11];
+    const row = [];
+    row.push(m.v(0, keel, z, 0, -0.4, t - 0.5, dark[0], dark[1], dark[2], 0));
+    row.push(m.v(-beam, keel + 0.06, z, -1, 0.1, 0, wood[0], wood[1], wood[2], 0));
+    row.push(m.v(-beam * 0.9, gun, z, -0.6, 0.5, 0, wood[0] * 1.05, wood[1] * 1.05, wood[2], 0));
+    row.push(m.v(beam * 0.9, gun, z, 0.6, 0.5, 0, wood[0] * 1.05, wood[1] * 1.05, wood[2], 0));
+    row.push(m.v(beam, keel + 0.06, z, 1, 0.1, 0, wood[0], wood[1], wood[2], 0));
+    rings.push(row);
+  }
+  for (let i = 0; i < sec; i++) {
+    for (let k = 0; k < 4; k++) {
+      const a = rings[i][k], b = rings[i][k + 1], c = rings[i + 1][k], d = rings[i + 1][k + 1];
+      m.tri(a, b, c); m.tri(b, d, c);
+    }
+  }
+  // transom
+  const r0 = rings[0];
+  m.tri(r0[0], r0[2], r0[1]); m.tri(r0[0], r0[3], r0[4]); m.tri(r0[0], r0[4], r0[2] > 0 ? r0[3] : r0[3]);
+  // seats
+  function box(x, y, z, sx, sy, sz, col) {
+    const p = [
+      [-1, 0, -1], [1, 0, -1], [1, 0, 1], [-1, 0, 1],
+      [-1, 1, -1], [1, 1, -1], [1, 1, 1], [-1, 1, 1]
+    ];
+    const id = [];
+    for (let i = 0; i < 8; i++) id.push(m.v(x + p[i][0] * sx, y + p[i][1] * sy, z + p[i][2] * sz, 0, 1, 0, col[0], col[1], col[2], 0));
+    const faces = [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]];
+    for (let f = 0; f < faces.length; f++) {
+      const q = faces[f];
+      m.tri(id[q[0]], id[q[1]], id[q[2]]); m.tri(id[q[0]], id[q[2]], id[q[3]]);
+    }
+  }
+  box(0, 0.2, -0.35, 0.28, 0.035, 0.12, [0.38, 0.26, 0.13]);
+  box(0, 0.2, 0.55, 0.24, 0.035, 0.1, [0.38, 0.26, 0.13]);
+  // oars, lying across the gunwale
+  box(0, 0.4, 0.1, 0.85, 0.015, 0.03, [0.55, 0.48, 0.32]);
+  return m;
+}
+
+function grassGeom() {
+  const pos = [], uv = [], idx = [];
+  let base = 0;
+  for (let a = 0; a < 3; a++) {
+    const ang = a * Math.PI / 3;
+    const c = Math.cos(ang), s = Math.sin(ang);
+    const corn = [[-0.5, 0, 0, 0], [0.5, 0, 1, 0], [0.5, 1, 1, 1], [-0.5, 1, 0, 1]];
+    for (let i = 0; i < 4; i++) {
+      pos.push(corn[i][0] * c, corn[i][1], corn[i][0] * s);
+      uv.push(corn[i][2], corn[i][3]);
+    }
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    base += 4;
+  }
+  return { pos: new Float32Array(pos), uv: new Float32Array(uv), idx: new Uint16Array(idx) };
+}
+
+function birdGeom() {
+  const pos = [], wing = [], idx = [];
+  const add = (x, y, z, w) => { pos.push(x, y, z); wing.push(w); return pos.length / 3 - 1; };
+  // body
+  const a = add(0, 0, 0.28, 0), b = add(0, 0.04, -0.22, 0), c = add(0, 0.07, 0.0, 0), d = add(0, -0.03, 0.0, 0);
+  idx.push(a, c, b, a, b, d);
+  // wings
+  const l0 = add(-0.05, 0.02, 0.05, -1), l1 = add(-0.62, 0.0, 0.12, -1), l2 = add(-0.58, 0.0, -0.08, -1), l3 = add(-0.05, 0.02, -0.08, -1);
+  idx.push(l0, l1, l2, l0, l2, l3);
+  const r0 = add(0.05, 0.02, 0.05, 1), r1 = add(0.62, 0.0, 0.12, 1), r2 = add(0.58, 0.0, -0.08, 1), r3 = add(0.05, 0.02, -0.08, 1);
+  idx.push(r0, r2, r1, r0, r3, r2);
+  return { pos: new Float32Array(pos), wing: new Float32Array(wing), idx: new Uint16Array(idx) };
+}
+
+function packInterleaved(pos, uv) {
+  const n = pos.length / 3;
+  const o = new Float32Array(n * 6);
+  for (let i = 0; i < n; i++) {
+    o[i * 6] = pos[i * 3]; o[i * 6 + 1] = pos[i * 3 + 1]; o[i * 6 + 2] = pos[i * 3 + 2];
+    o[i * 6 + 4] = uv[i * 2]; o[i * 6 + 5] = uv[i * 2 + 1];
+  }
+  return o;
+}
+function packBird(pos, wing) {
+  const n = pos.length / 3;
+  const o = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    o[i * 4] = pos[i * 3]; o[i * 4 + 1] = pos[i * 3 + 1]; o[i * 4 + 2] = pos[i * 3 + 2]; o[i * 4 + 3] = wing[i];
+  }
+  return o;
+}
+function packMesh(mesh) {
+  const n = mesh.pos.length / 3;
+  const o = new Float32Array(n * 10);
+  for (let i = 0; i < n; i++) {
+    const o10 = i * 10;
+    o[o10] = mesh.pos[i * 3]; o[o10 + 1] = mesh.pos[i * 3 + 1]; o[o10 + 2] = mesh.pos[i * 3 + 2];
+    o[o10 + 3] = mesh.nrm[i * 3]; o[o10 + 4] = mesh.nrm[i * 3 + 1]; o[o10 + 5] = mesh.nrm[i * 3 + 2];
+    o[o10 + 6] = mesh.col[i * 3]; o[o10 + 7] = mesh.col[i * 3 + 1]; o[o10 + 8] = mesh.col[i * 3 + 2];
+    o[o10 + 9] = mesh.sway[i];
+  }
+  return { vert: o, idx: new Uint32Array(mesh.idx) };
+}
+
+function gridMesh(n, heightAt) {
+  const pos = new Float32Array(n * n * (heightAt ? 3 : 2));
+  const idx = new Uint32Array((n - 1) * (n - 1) * 6);
+  let t = 0;
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const u = i / (n - 1), v = j / (n - 1);
+      if (heightAt) {
+        const x = heightAt.x0 + u * heightAt.size;
+        const z = heightAt.z0 + v * heightAt.size;
+        const o = (j * n + i) * 3;
+        pos[o] = x; pos[o + 1] = heightAt.fn(x, z); pos[o + 2] = z;
+      } else {
+        pos[(j * n + i) * 2] = u; pos[(j * n + i) * 2 + 1] = v;
+      }
+    }
+  }
+  for (let j = 0; j < n - 1; j++) {
+    for (let i = 0; i < n - 1; i++) {
+      const a = j * n + i;
+      idx[t++] = a; idx[t++] = a + n; idx[t++] = a + 1;
+      idx[t++] = a + 1; idx[t++] = a + n; idx[t++] = a + n + 1;
+    }
+  }
+  return { pos: pos, idx: idx };
+}
+
+function downhillYaw(world, x, z) {
+  const e = 2.5;
+  const dx = fieldSample(world, x + e, z) - fieldSample(world, x - e, z);
+  const dz = fieldSample(world, x, z + e) - fieldSample(world, x, z - e);
+  return Math.atan2(-dx, dz);
+}
+
+function hunt(world, rnd, n, score) {
+  let best = null, bs = -1e9;
+  for (let i = 0; i < n; i++) {
+    const x = (rnd() - 0.5) * 640;
+    const z = (rnd() - 0.5) * 520;
+    const h = fieldSample(world, x, z);
+    const s = fieldSlope(world, x, z);
+    const sc = score(x, z, h, s);
+    if (sc > bs) { bs = sc; best = { x: x, z: z, h: h, s: s, score: sc }; }
+  }
+  return best && best.score > -10 ? best : null;
+}
+
+function waveY(world, x, z, time) {
+  const damp = fieldDamp(world, x, z);
+  let y = 0;
+  for (let i = 0; i < WAVES.length; i++) {
+    const w = WAVES[i];
+    const len = Math.hypot(w[0], w[1]) || 1;
+    const dx = w[0] / len, dz = w[1] / len;
+    const A = w[2] * damp;
+    const k = Math.PI * 2 / w[3];
+    const omega = Math.sqrt(9.81 * k);
+    y += A * Math.sin(k * (dx * x + dz * z) - omega * time);
+  }
+  return y;
+}
+
+let audio = null;
+let muted = false;
+function makeAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  const ac = new AC();
+  const dur = ac.sampleRate * 2;
+  const buf = ac.createBuffer(1, dur, ac.sampleRate);
+  const data = buf.getChannelData(0);
+  let s = 123456789;
+  for (let i = 0; i < dur; i++) {
+    s = (Math.imul(s, 1664525) + 1013904223) | 0;
+    data[i] = ((s >>> 0) / 4294967296) * 2 - 1;
+  }
+  const master = ac.createGain(); master.gain.value = 0.9; master.connect(ac.destination);
+  function loop(filterType, freq, q) {
+    const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+    const f = ac.createBiquadFilter(); f.type = filterType; f.frequency.value = freq; f.Q.value = q;
+    const g = ac.createGain(); g.gain.value = 0;
+    src.connect(f); f.connect(g); g.connect(master); src.start();
+    return { gain: g, filter: f };
+  }
+  const surf = loop('lowpass', 640, 0.6);
+  const wind = loop('bandpass', 420, 0.35);
+  const under = ac.createBiquadFilter();
+  under.type = 'lowpass'; under.frequency.value = 18000; under.Q.value = 0.2;
+  // rewire master through the muffler
+  master.disconnect();
+  master.connect(under); under.connect(ac.destination);
+  return { ac: ac, master: master, under: under, surf: surf.gain, wind: wind.gain };
+}
+
+const K = Object.create(null);
+['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight'].forEach((c) => { K[c] = 0; });
+let lookX = 0, lookY = 0, dragging = false, touchN = 0;
+
+function bootKeys() {
+  addEventListener('keydown', (e) => {
+    if (K[e.code] != null) { K[e.code] = 1; e.preventDefault(); }
+    if (e.repeat) return;
+    if (e.code === 'KeyM') { muted = !muted; if (audio) audio.master.gain.value = muted ? 0 : 0.9; }
+    if (e.code === 'KeyH') statsEl.hidden = !statsEl.hidden;
+    if (e.code === 'KeyF' && mode === 2) fly = !fly;
+    if (e.code === 'Escape') openMenu();
+    if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goSpot(e.code.charCodeAt(5) - 49);
+  });
+  addEventListener('keyup', (e) => { if (K[e.code] != null) K[e.code] = 0; });
+  const canvas = $('c');
+  canvas.addEventListener('mousedown', (e) => { if (mode === 2) { dragging = true; if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); } });
+  addEventListener('mouseup', () => { dragging = false; });
+  addEventListener('mousemove', (e) => {
+    if (mode !== 2) return;
+    if (document.pointerLockElement === canvas || dragging) { lookX += e.movementX; lookY += e.movementY; }
+  });
+  canvas.addEventListener('touchstart', (e) => {
+    touchN = e.touches.length;
+    if (mode === 2) e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchmove', (e) => {
+    if (mode !== 2 || !e.touches.length) return;
+    const t = e.touches[0];
+    if (touchLX != null) { lookX += (t.clientX - touchLX) * 1.4; lookY += (t.clientY - touchLY) * 1.4; }
+    touchLX = t.clientX; touchLY = t.clientY; touchN = e.touches.length;
+    e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchend', (e) => { touchN = e.touches.length; if (!e.touches.length) { touchLX = null; touchLY = null; } });
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement !== $('c') && mode === 2 && !qstr.has('shot')) openMenu();
+  });
+}
+let touchLX = null, touchLY = null;
+
+let mode = 0, fly = false, dive = 0;
+let camX = 90, camY = 52, camZ = 200, yaw = 0.4, pitch = -0.35;
+let world = null, spots = [], q = null;
+const fwd = new Float32Array(3), right = new Float32Array(3), up = new Float32Array(3);
+const rfwd = new Float32Array(3), rright = new Float32Array(3), rup = new Float32Array(3);
+let introT = 0, introFrom = null, introTo = null;
+
+function openMenu() {
+  if (mode === 0) return;
+  mode = 0;
+  document.body.classList.remove('playing');
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function goSpot(i) {
+  const s = spots[i];
+  if (!s) return;
+  camX = s.x; camY = s.y; camZ = s.z; yaw = s.yaw; pitch = s.pitch;
+  fly = s.fly; dive = s.dive || 0;
+  mode = 2;
+}
+
+async function main() {
+  try {
+    let dropped = false;
+    try {
+      if (sessionStorage.getItem('ww-boot') === '1') {
+        const order = ['high', 'med', 'low'];
+        const cur = localStorage.getItem('ww-q') || detectQuality();
+        const i = order.indexOf(cur);
+        if (i >= 0 && i < order.length - 1) {
+          localStorage.setItem('ww-q', order[i + 1]);
+          sessionStorage.removeItem('ww-boot');
+          dropped = true;
+        }
+      }
+    } catch (e) {}
+    if (dropped) { location.reload(); return; }
+    try { sessionStorage.setItem('ww-boot', '1'); } catch (e) {}
+
+    const qName = detectQuality();
+    q = PRESETS[qName];
+    document.querySelectorAll('[data-q]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.q === qName);
+      b.addEventListener('click', () => {
+        try { localStorage.setItem('ww-q', b.dataset.q); sessionStorage.removeItem('ww-boot'); } catch (e) {}
+        const u = new URL(location.href); u.searchParams.set('q', b.dataset.q); location.href = u.pathname + '?' + u.searchParams.toString();
+      });
+    });
+    if (!navigator.gpu) { fail('This browser has no WebGPU. Chrome or Edge on a current machine will open it.'); return; }
+    setStatus('Asking the graphics driver', 0.06);
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) { fail('WebGPU is switched off in this browser. In Chrome, it is on by default.'); return; }
+    const device = await adapter.requestDevice();
+    device.addEventListener('uncapturederror', (ev) => {
+      const msg = (ev.error && (ev.error.message || ev.error)) || 'gpu error';
+      console.error('GPU ' + msg);
+      window.__gpuerr = String(msg);
+    });
+    const canvas = $('c');
+    const context = canvas.getContext('webgpu');
+    const format = navigator.gpu.getPreferredCanvasFormat();
+
+    setStatus('Sculpting the coast', 0.1);
+    world = await buildWorldAsync(q.hres, q.span, (t) => setStatus('Sculpting the coast', 0.1 + t * 0.45));
+
+    setStatus('Planting the ridge', 0.58);
+    await new Promise((r) => setTimeout(r, 0));
+    const rnd = mulberry32(0x51A7C0DE);
+    const sunYaw = Math.atan2(SUN[0], -SUN[2]);
+    const sdx = Math.sin(sunYaw), sdz = -Math.cos(sunYaw);
+    const beach = hunt(world, rnd, 5000, (x, z, h, s) => {
+      if (h < 0.25 || h > 0.85 || s > 0.16 || x > -40) return -1;
+      if (fieldSample(world, x + sdx * 6, z + sdz * 6) > -0.8) return -1;
+      if (fieldSample(world, x - sdx * 5, z - sdz * 5) < 0.4) return -1;
+      return 8 - Math.abs(h - 0.45) * 5 - s * 6 - Math.abs(z) * 0.003;
+    }) || { x: -150, z: 6, h: 0.5 };
+    const cliff = hunt(world, rnd, 2000, (x, z, h, s) => {
+      if (h < 12 || h > 34 || s < 0.28) return -1;
+      return s * 2 + (z > 20 ? 1.5 : 0) + (x < 40 ? 0.4 : 0);
+    }) || { x: -10, z: 90, h: 20 };
+    const lagoon = hunt(world, rnd, 2000, (x, z, h, s) => {
+      if (h < 0.35 || h > 1.3 || s > 0.3 || x < 50) return -1;
+      const w = fieldSample(world, x + 18, z);
+      if (w > -0.3 || w < -3) return -1;
+      return 4 - Math.abs(h - 0.6) - s;
+    }) || { x: 130, z: 8, h: 0.6 };
+
+    const byaw = downhillYaw(world, beach.x, beach.z);
+    const face = sunYaw;
+    spots = [
+      { x: beach.x, y: beach.h + 1.55, z: beach.z, yaw: face, pitch: -0.05, fly: false, dive: 0 },
+      { x: cliff.x, y: cliff.h + 1.7, z: cliff.z, yaw: downhillYaw(world, cliff.x, cliff.z), pitch: -0.28, fly: false, dive: 0 },
+      { x: 30, y: 168, z: 150, yaw: 0, pitch: -0.7, fly: true, dive: 0 },
+      { x: lagoon.x, y: lagoon.h + 1.6, z: lagoon.z, yaw: downhillYaw(world, lagoon.x, lagoon.z), pitch: -0.16, fly: false, dive: 0 },
+      { x: beach.x + sdx * 38, y: 2.6, z: beach.z + sdz * 38, yaw: face + Math.PI, pitch: -0.05, fly: true, dive: 0 },
+      { x: (lagoon.x + 150) * 0.5, y: -1.1, z: lagoon.z, yaw: face, pitch: 0.45, fly: false, dive: 2.2 }
+    ];
+    // Aerial look-at
+    const aerial = spots[2];
+    const yp = lookYP(10 - aerial.x, 6 - aerial.y, 0 - aerial.z);
+    aerial.yaw = yp[0]; aerial.pitch = yp[1];
+
+    const staticMesh = new Mesh();
+    const palm = makePalm();
+    const broad = makeBroad();
+    const rock = icosphere(1, 1, [0.38, 0.36, 0.32]);
+    let palms = 0, broads = 0, rocks = 0, stacks = 0;
+    const clearR = 9;
+    for (let i = 0; i < (q.palms + q.broad) * 14 && (palms < q.palms || broads < q.broad); i++) {
+      const x = (rnd() - 0.5) * 460;
+      const z = (rnd() - 0.5) * 400;
+      const h = fieldSample(world, x, z);
+      const s = fieldSlope(world, x, z);
+      if (Math.hypot(x - beach.x, z - beach.z) < clearR) continue;
+      const n = vnoise(x * 0.017, z * 0.017);
+      const tint = [0.86 + rnd() * 0.28, 0.88 + rnd() * 0.24, 0.86 + rnd() * 0.2];
+      if (palms < q.palms && h > 0.7 && h < 7.5 && s < 0.38 && n > 0.36) {
+        appendMesh(staticMesh, palm, x, h, z, rnd() * 6.28, 6.5 + rnd() * 3.5, tint, 1);
+        palms++;
+      } else if (broads < q.broad && h > 4.2 && h < 26 && s < 0.42 && n > 0.42) {
+        appendMesh(staticMesh, broad, x, h, z, rnd() * 6.28, 9 + rnd() * 6, tint, 1);
+        broads++;
+      }
+    }
+    for (let i = 0; i < q.rocks * 20 && rocks < q.rocks; i++) {
+      const x = (rnd() - 0.5) * 500;
+      const z = (rnd() - 0.5) * 420;
+      const h = fieldSample(world, x, z);
+      const s = fieldSlope(world, x, z);
+      if (h < 0.15 || h > 2.4 || s > 0.55) continue;
+      if (Math.hypot(x - beach.x, z - beach.z) < 4) continue;
+      if (vnoise(x * 0.05, z * 0.05) < 0.62) continue;
+      const sc = 0.25 + rnd() * 0.7;
+      appendMesh(staticMesh, rock, x, h - sc * 0.35, z, rnd() * 6, sc, [0.75 + rnd() * 0.3, 0.7 + rnd() * 0.25, 0.62 + rnd() * 0.2], 0.55 + rnd() * 0.5);
+      rocks++;
+    }
+    for (let i = 0; i < q.stacks * 30 && stacks < q.stacks; i++) {
+      const x = -40 - rnd() * 160;
+      const z = (rnd() - 0.5) * 220;
+      const h = fieldSample(world, x, z);
+      if (h < -6 || h > -0.5) continue;
+      const sc = 1.6 + rnd() * 3.4;
+      appendMesh(staticMesh, rock, x, h - sc * 0.25, z, rnd() * 6, sc, [0.55, 0.52, 0.48], 1.3 + rnd() * 0.8);
+      stacks++;
+    }
+    // Skiff and a buoy, so the beach and the bay have a scale.
+    const skiff = makeSkiff();
+    appendMesh(staticMesh, skiff, beach.x + 3.5, beach.h, beach.z + 1.2, byaw + Math.PI * 0.5, 1.15, null, 1);
+    const buoy = icosphere(1, 0.28, [0.75, 0.08, 0.06]);
+    appendMesh(staticMesh, buoy, lagoon.x + 16, 0.12, lagoon.z + 4, 0, 1, null, 1.15);
+
+    const grassList = [];
+    const weedList = [];
+    for (let i = 0; i < (q.grass + q.weed) * 8 && (grassList.length < q.grass || weedList.length < q.weed); i++) {
+      const x = (rnd() - 0.5) * 460;
+      const z = (rnd() - 0.5) * 400;
+      const h = fieldSample(world, x, z);
+      const s = fieldSlope(world, x, z);
+      if (grassList.length < q.grass && h > 1.5 && h < 28 && s < 0.48 && vnoise(x * 0.03, z * 0.03) > 0.38) {
+        grassList.push(x, z, rnd() * 6.28, 0.45 + rnd() * 0.55);
+      } else if (weedList.length < q.weed && h < -0.35 && h > -3.2 && s < 0.5 && x > 20) {
+        weedList.push(x, z, rnd() * 6.28, -(0.7 + rnd() * 0.8));
+      }
+    }
+    const grassInst = new Float32Array(grassList.length + weedList.length);
+    grassInst.set(grassList, 0);
+    grassInst.set(weedList, grassList.length);
+    const grassCount = grassInst.length / 4;
+
+    const birdMeta = new Float32Array(Math.max(q.birds, 1) * 4);
+    const birdData = new Float32Array(Math.max(q.birds, 1) * 4);
+    for (let i = 0; i < q.birds; i++) {
+      birdMeta[i * 4] = 40 + rnd() * 150;
+      birdMeta[i * 4 + 1] = 0.08 + rnd() * 0.12;
+      birdMeta[i * 4 + 2] = rnd() * 6.28;
+      birdMeta[i * 4 + 3] = 32 + rnd() * 26;
+    }
+
+    setStatus('Tuning the swell', 0.78);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const code = shaderCode(q.hres, q.span);
+    const mod = device.createShaderModule({ code: code });
+    const blitMod = device.createShaderModule({ code: blitShaderCode() });
+    const info = await mod.getCompilationInfo();
+    const binfo = await blitMod.getCompilationInfo();
+    const errs = info.messages.concat(binfo.messages).filter((m) => m.type === 'error');
+    if (errs.length) {
+      fail(errs.map((e) => e.lineNum + ':' + e.linePos + '  ' + e.message).join('\n'));
+      return;
+    }
+
+    const uf = new Float32Array(128);
+    const ur = new Float32Array(128);
+    for (let i = 0; i < 8; i++) {
+      const w = WAVES[i];
+      const L = Math.hypot(w[0], w[1]) || 1;
+      uf[88 + i * 4] = w[0] / L; uf[89 + i * 4] = w[1] / L; uf[90 + i * 4] = w[2]; uf[91 + i * 4] = w[3];
+      uf[120 + i] = w[4];
+    }
+    ur.set(uf);
+
+    const ubuf = device.createBuffer({ size: 512, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 512, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+    const htex = device.createTexture({
+      size: [q.hres, q.hres],
+      format: 'rg32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+    });
+    device.queue.writeTexture(
+      { texture: htex },
+      world.data,
+      { bytesPerRow: q.hres * 8, rowsPerImage: q.hres },
+      { width: q.hres, height: q.hres }
+    );
+
+    const VS = GPUShaderStage.VERTEX, FS = GPUShaderStage.FRAGMENT;
+    const ubLayout = device.createBindGroupLayout({
+      entries: [{ binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } }]
+    });
+    const geoLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
+      ]
+    });
+    const waterLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 1, visibility: FS, texture: { sampleType: 'depth' } },
+        { binding: 2, visibility: FS, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: FS, sampler: { type: 'filtering' } }
+      ]
+    });
+    const blitLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 2, visibility: FS, texture: { sampleType: 'depth' } }
+      ]
+    });
+    const geoPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout] });
+    const skyPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout] });
+    const waterPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, waterLayout] });
+    const blitPL = device.createPipelineLayout({ bindGroupLayouts: [blitLayout] });
+
+    function upload(array, usage) {
+      const size = Math.max(4, (array.byteLength + 3) & ~3);
+      const b = device.createBuffer({ size: size, usage: usage, mappedAtCreation: true });
+      new Uint8Array(b.getMappedRange()).set(new Uint8Array(array.buffer, array.byteOffset, array.byteLength));
+      b.unmap();
+      return b;
+    }
+    const terrain = gridMesh(q.terrain, {
+      x0: -q.textent, z0: -q.textent, size: q.textent * 2,
+      fn: (x, z) => fieldSample(world, x, z)
+    });
+    const water = gridMesh(q.water, null);
+    const packed = packMesh(staticMesh);
+    const g = grassGeom();
+    const grassVert = packInterleaved(g.pos, g.uv);
+    const bgeom = birdGeom();
+    const birdVert = packBird(bgeom.pos, bgeom.wing);
+
+    const terrainVB = upload(terrain.pos, GPUBufferUsage.VERTEX);
+    const terrainIB = upload(terrain.idx, GPUBufferUsage.INDEX);
+    const waterVB = upload(water.pos, GPUBufferUsage.VERTEX);
+    const waterIB = upload(water.idx, GPUBufferUsage.INDEX);
+    const meshVB = upload(packed.vert, GPUBufferUsage.VERTEX);
+    const meshIB = upload(packed.idx, GPUBufferUsage.INDEX);
+    const grassVB = upload(grassVert, GPUBufferUsage.VERTEX);
+    const grassIB = upload(g.idx, GPUBufferUsage.INDEX);
+    const grassInstB = upload(grassInst, GPUBufferUsage.VERTEX);
+    const birdVB = upload(birdVert, GPUBufferUsage.VERTEX);
+    const birdIB = upload(bgeom.idx, GPUBufferUsage.INDEX);
+    const birdInstB = device.createBuffer({ size: Math.max(16, birdData.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+
+    const depthOn = (fmt, write, cmp) => ({ format: fmt, depthWriteEnabled: write, depthCompare: cmp });
+    async function pipe(desc) { return device.createRenderPipelineAsync(desc); }
+    setStatus('Warming the light', 0.9);
+    const sceneFmt = 'rgba16float';
+    const pipes = {};
+    const skyDesc = {
+      layout: skyPL,
+      vertex: { module: mod, entryPoint: 'vsSky' },
+      fragment: { module: mod, entryPoint: 'fsSky', targets: [{ format: sceneFmt }] },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: depthOn('depth32float', true, 'always')
+    };
+    pipes.sky = await pipe(skyDesc);
+    pipes.terrain = await pipe({
+      layout: geoPL,
+      vertex: { module: mod, entryPoint: 'vsTerrain', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
+      fragment: { module: mod, entryPoint: 'fsTerrain', targets: [{ format: sceneFmt }] },
+      primitive: { topology: 'triangle-list', cullMode: 'back' },
+      depthStencil: depthOn('depth32float', true, 'less')
+    });
+    pipes.mesh = await pipe({
+      layout: geoPL,
+      vertex: { module: mod, entryPoint: 'vsMesh', buffers: [{ arrayStride: 40, attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x3' },
+        { shaderLocation: 1, offset: 12, format: 'float32x3' },
+        { shaderLocation: 2, offset: 24, format: 'float32x3' },
+        { shaderLocation: 3, offset: 36, format: 'float32' }
+      ] }] },
+      fragment: { module: mod, entryPoint: 'fsMesh', targets: [{ format: sceneFmt }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: depthOn('depth32float', true, 'less')
+    });
+    pipes.grass = await pipe({
+      layout: geoPL,
+      vertex: { module: mod, entryPoint: 'vsGrass', buffers: [
+        { arrayStride: 24, attributes: [
+          { shaderLocation: 0, offset: 0, format: 'float32x3' },
+          { shaderLocation: 1, offset: 16, format: 'float32x2' }
+        ] },
+        { arrayStride: 16, stepMode: 'instance', attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x4' }] }
+      ] },
+      fragment: { module: mod, entryPoint: 'fsGrass', targets: [{ format: sceneFmt }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: depthOn('depth32float', true, 'less')
+    });
+    pipes.bird = await pipe({
+      layout: geoPL,
+      vertex: { module: mod, entryPoint: 'vsBird', buffers: [
+        { arrayStride: 16, attributes: [
+          { shaderLocation: 0, offset: 0, format: 'float32x3' },
+          { shaderLocation: 1, offset: 12, format: 'float32' }
+        ] },
+        { arrayStride: 16, stepMode: 'instance', attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x4' }] }
+      ] },
+      fragment: { module: mod, entryPoint: 'fsBird', targets: [{ format: sceneFmt }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: depthOn('depth32float', true, 'less')
+    });
+    pipes.water = await pipe({
+      layout: waterPL,
+      vertex: { module: mod, entryPoint: 'vsWater', buffers: [{ arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
+      fragment: { module: mod, entryPoint: 'fsWater', targets: [{ format: format }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: depthOn('depth24plus', false, 'less')
+    });
+    pipes.blit = await pipe({
+      layout: blitPL,
+      vertex: { module: blitMod, entryPoint: 'vsBlit' },
+      fragment: { module: blitMod, entryPoint: 'fsBlit', targets: [{ format: format }] },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: depthOn('depth24plus', true, 'always')
+    });
+
+    const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+    let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null;
+    const READ = qstr.has('read');
+    let readTex = null, readDepth = null, readBuf = null, readBpr = 0;
+    let bgGeo, bgGeoR, bgUB, bgUBR, bgBlit, bgWater;
+    let viewW = 2, viewH = 2;
+    const hview = htex.createView();
+
+    function destroyTex(t) { if (t) t.destroy(); }
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, q.dpr);
+      let w = Math.max(2, Math.floor(innerWidth * dpr * q.scale));
+      let h = Math.max(2, Math.floor(innerHeight * dpr * q.scale));
+      if (w * h > q.maxPx) {
+        const k = Math.sqrt(q.maxPx / (w * h));
+        w = Math.max(2, (w * k) | 0); h = Math.max(2, (h * k) | 0);
+      }
+      canvas.width = w; canvas.height = h;
+      context.configure({ device: device, format: format, alphaMode: 'opaque' });
+      destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth);
+      sceneTex = device.createTexture({ size: [w, h], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      sceneDepth = device.createTexture({ size: [w, h], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      swapDepth = device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      const rw = Math.max(2, w >> 1), rh = Math.max(2, h >> 1);
+      reflTex = device.createTexture({ size: [rw, rh], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      reflDepth = device.createTexture({ size: [rw, rh], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      viewW = w; viewH = h;
+      if (READ) {
+        if (readTex) readTex.destroy();
+        if (readDepth) readDepth.destroy();
+        if (readBuf) readBuf.destroy();
+        readBpr = (Math.ceil((w * 4) / 256) * 256);
+        readTex = device.createTexture({ size: [w, h], format: format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+        readDepth = device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+        readBuf = device.createBuffer({ size: readBpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      }
+      const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView();
+      bgGeo = device.createBindGroup({ layout: geoLayout, entries: [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: hview }] });
+      bgGeoR = device.createBindGroup({ layout: geoLayout, entries: [{ binding: 0, resource: { buffer: rbuf } }, { binding: 1, resource: hview }] });
+      bgUB = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: ubuf } }] });
+      bgUBR = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: rbuf } }] });
+      bgBlit = device.createBindGroup({ layout: blitLayout, entries: [
+        { binding: 0, resource: { buffer: ubuf } },
+        { binding: 1, resource: sv },
+        { binding: 2, resource: sd }
+      ] });
+      bgWater = device.createBindGroup({ layout: waterLayout, entries: [
+        { binding: 0, resource: sv },
+        { binding: 1, resource: sd },
+        { binding: 2, resource: rv },
+        { binding: 3, resource: samp }
+      ] });
+    }
+    resize();
+    addEventListener('resize', resize);
+
+    const scenePass = {
+      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0.45, g: 0.55, b: 0.62, a: 1 } }],
+      depthStencilAttachment: { view: null, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
+    };
+    const reflPass = {
+      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+      depthStencilAttachment: { view: null, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
+    };
+    const swapPass = {
+      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0.55, g: 0.65, b: 0.72, a: 1 } }],
+      depthStencilAttachment: { view: null, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
+    };
+
+    function drawWorld(pass, ub, geo, birds) {
+      pass.setPipeline(pipes.sky); pass.setBindGroup(0, ub); pass.draw(3);
+      pass.setPipeline(pipes.terrain); pass.setBindGroup(0, geo);
+      pass.setVertexBuffer(0, terrainVB); pass.setIndexBuffer(terrainIB, 'uint32');
+      pass.drawIndexed(terrain.idx.length);
+      if (packed.idx.length) {
+        pass.setPipeline(pipes.mesh); pass.setBindGroup(0, geo);
+        pass.setVertexBuffer(0, meshVB); pass.setIndexBuffer(meshIB, 'uint32');
+        pass.drawIndexed(packed.idx.length);
+      }
+      if (birds && q.birds) {
+        pass.setPipeline(pipes.bird); pass.setBindGroup(0, geo);
+        pass.setVertexBuffer(0, birdVB); pass.setVertexBuffer(1, birdInstB);
+        pass.setIndexBuffer(birdIB, 'uint16');
+        pass.drawIndexed(bgeom.idx.length, q.birds);
+      }
+      if (birds && grassCount) {
+        pass.setPipeline(pipes.grass); pass.setBindGroup(0, geo);
+        pass.setVertexBuffer(0, grassVB); pass.setVertexBuffer(1, grassInstB);
+        pass.setIndexBuffer(grassIB, 'uint16');
+        pass.drawIndexed(g.idx.length, grassCount);
+      }
+    }
+
+    const fov = 60 * Math.PI / 180;
+    const near = 0.08, far = 5000;
+    let time = parseFloat(qstr.get('t') || '2.5') || 0;
+    let last = performance.now();
+    const ft = new Float32Array(40);
+    let ftI = 0, ftN = 0, frames = 0, adaptLeft = 3, ready = false;
+    let showHint = 0;
+
+    function fillCam(arr, eyeX, eyeY, eyeZ, cyaw, cpitch, clipBelow, underFlag) {
+      cameraVectors(cyaw, cpitch, fwd, right, up);
+      const eye = [eyeX, eyeY, eyeZ];
+      viewFrom(eye, right, up, fwd, V);
+      perspective(P, fov, viewW / viewH, near, far);
+      matmul(P, V, VP);
+      invert(VP, INV);
+      arr.set(VP, 0); arr.set(INV, 16);
+      arr[48] = eyeX; arr[49] = eyeY; arr[50] = eyeZ; arr[51] = time;
+      arr[52] = SUN[0]; arr[53] = SUN[1]; arr[54] = SUN[2]; arr[55] = underFlag;
+      arr[56] = 1; arr[57] = 0.95; arr[58] = 0.86; arr[59] = 0.84;
+      arr[60] = 0.70; arr[61] = 0.78; arr[62] = 0.84; arr[63] = Math.tan(fov * 0.5);
+      arr[64] = right[0]; arr[65] = right[1]; arr[66] = right[2]; arr[67] = viewW / viewH;
+      arr[68] = up[0]; arr[69] = up[1]; arr[70] = up[2]; arr[71] = clipBelow;
+      arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;
+      arr[79] = q.clouds;
+      arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0;
+    }
+
+    device.lost.then((info) => { window.__gpuerr = 'lost ' + (info && info.message); console.error('LOST', info && info.message); });
+    function frame(now) {
+      try { frameBody(now); } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
+    }
+    function frameBody(now) {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      time += dt;
+      frames++;
+      if (!ready && frames > 8) {
+        ready = true;
+        window.__ready = 1;
+        try { sessionStorage.removeItem('ww-boot'); } catch (e) {}
+        goEl.hidden = false;
+        statusEl.textContent = '';
+        barEl.parentElement.hidden = true;
+      }
+      ft[ftI] = dt; ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
+      if (frames === 50 && adaptLeft > 0 && !qstr.has('shot')) {
+        let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
+        if (sum / ftN > 0.028 && q.scale > 0.45) { q.scale = Math.max(0.45, q.scale * 0.8); adaptLeft--; resize(); }
+      }
+
+      const wantUnder = camY < waveY(world, camX, camZ, time) - 0.05 ? 1 : 0;
+
+      if (mode === 0 && !qstr.has('shot')) {
+        const a = time * 0.045;
+        camX = Math.sin(a) * 230 + 24;
+        camZ = Math.cos(a) * 190 - 10;
+        camY = 42 + Math.sin(a * 0.8) * 7;
+        const lp = lookYP(8 - camX, 4 - camY, -6 - camZ);
+        yaw = lp[0]; pitch = lp[1];
+      } else if (mode === 1 && introFrom) {
+        introT += dt / 2.3;
+        const t = introT < 1 ? introT * introT * (3 - 2 * introT) : 1;
+        camX = introFrom.x + (introTo.x - introFrom.x) * t;
+        camY = introFrom.y + (introTo.y - introFrom.y) * t;
+        camZ = introFrom.z + (introTo.z - introFrom.z) * t;
+        let dyaw = introTo.yaw - introFrom.yaw;
+        while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+        while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+        yaw = introFrom.yaw + dyaw * t;
+        pitch = introFrom.pitch + (introTo.pitch - introFrom.pitch) * t;
+        if (Math.abs(lookX) + Math.abs(lookY) > 12) introT = 1;
+        if (introT >= 1) { mode = 2; showHint = 7; fly = false; dive = 0; }
+      } else if (mode === 2) {
+        yaw += lookX * 0.00215; pitch -= lookY * 0.00215;
+        pitch = Math.max(-1.4, Math.min(1.4, pitch));
+        const sprint = K.ShiftLeft || K.ShiftRight || touchN >= 2;
+        const cp = Math.cos(pitch), sp = Math.sin(pitch);
+        const fx = Math.sin(yaw), fz = -Math.cos(yaw);
+        let mx = 0, my = 0, mz = 0;
+        const forward = (K.KeyW || touchN >= 1) ? 1 : 0;
+        const back = K.KeyS ? 1 : 0;
+        if (fly) {
+          const fxx = fx * cp, fzz = fz * cp, fyy = sp;
+          if (forward) { mx += fxx; my += fyy; mz += fzz; }
+          if (back) { mx -= fxx; my -= fyy; mz -= fzz; }
+          const rx = Math.cos(yaw), rz = Math.sin(yaw);
+          if (K.KeyD) { mx += rx; mz += rz; }
+          if (K.KeyA) { mx -= rx; mz -= rz; }
+          if (K.KeyE || K.Space) my += 1;
+          if (K.KeyQ) my -= 1;
+          const spm = sprint ? 46 : 13;
+          const ml = Math.hypot(mx, my, mz) || 1;
+          camX += mx / ml * spm * dt; camY += my / ml * spm * dt; camZ += mz / ml * spm * dt;
+        } else {
+          const rx = Math.cos(yaw), rz = Math.sin(yaw);
+          if (forward) { mx += fx; mz += fz; }
+          if (back) { mx -= fx; mz -= fz; }
+          if (K.KeyD) { mx += rx; mz += rz; }
+          if (K.KeyA) { mx -= rx; mz -= rz; }
+          const ml = Math.hypot(mx, mz);
+          const ground = fieldSample(world, camX, camZ);
+          const wy = waveY(world, camX, camZ, time);
+          const swimming = ground < wy - 0.25;
+          const spm = swimming ? (sprint ? 7.5 : 3.2) : (sprint ? 8.2 : 4.1);
+          if (ml > 0) {
+            const nx = camX + mx / ml * spm * dt;
+            const nz = camZ + mz / ml * spm * dt;
+            const nh = fieldSample(world, nx, nz);
+            if (nh < ground + 0.75) { camX = nx; camZ = nz; }
+          }
+          const gh = fieldSample(world, camX, camZ);
+          const wh = waveY(world, camX, camZ, time);
+          if (gh < wh - 0.25) {
+            if (K.KeyQ) dive = Math.min(6, dive + dt * 1.6);
+            else if (K.KeyE || K.Space) dive = Math.max(0, dive - dt * 2.2);
+            else dive = Math.max(0, dive - dt * 0.35);
+            camY = Math.max(gh + 0.45, wh + 0.42 - dive);
+          } else {
+            dive = 0;
+            camY = gh + 1.65;
+          }
+        }
+        const rr = Math.hypot(camX, camZ);
+        if (rr > 980) { camX *= 980 / rr; camZ *= 980 / rr; }
+        if (camY > 320) camY = 320;
+        if (camY < -8) camY = -8;
+      }
+      lookX = 0; lookY = 0;
+
+      const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
+      // Water grid. Cover grows in steps so the vertices don't crawl.
+      let cover = 780;
+      if (camY > 40) cover = 1100;
+      if (camY > 110) cover = 1500;
+      const cell = cover / (q.water - 1);
+      const ox = Math.floor(camX / cell) * cell - cover * 0.5;
+      const oz = Math.floor(camZ / cell) * cell - cover * 0.5;
+
+      fillCam(uf, camX, camY, camZ, yaw, pitch, 0, under);
+      uf[80] = ox; uf[81] = oz; uf[82] = cover; uf[83] = fieldDamp(world, camX, camZ);
+
+      // Reflected camera, for the water mirror.
+      cameraVectors(yaw, -pitch, rfwd, rright, rup);
+      const rex = camX, rey = -camY, rez = camZ;
+      viewFrom([rex, rey, rez], rright, rup, rfwd, V);
+      perspective(P, fov, viewW / viewH, near, far);
+      matmul(P, V, RVP);
+      uf.set(RVP, 32);
+      // Reflection uniform: same lighting, reflected view in the main slots.
+      ur.set(uf);
+      invert(RVP, INV);
+      ur.set(RVP, 0); ur.set(INV, 16);
+      ur[48] = rex; ur[49] = rey; ur[50] = rez;
+      ur[55] = 0; ur[71] = 1;
+      cameraVectors(yaw, -pitch, rfwd, rright, rup);
+      ur[64] = rright[0]; ur[65] = rright[1]; ur[66] = rright[2];
+      ur[68] = rup[0]; ur[69] = rup[1]; ur[70] = rup[2];
+      ur[72] = rfwd[0]; ur[73] = rfwd[1]; ur[74] = rfwd[2];
+
+      device.queue.writeBuffer(ubuf, 0, uf);
+      device.queue.writeBuffer(rbuf, 0, ur);
+
+      if (q.birds) {
+        for (let i = 0; i < q.birds; i++) {
+          const rad = birdMeta[i * 4], sp = birdMeta[i * 4 + 1], ph = birdMeta[i * 4 + 2], yb = birdMeta[i * 4 + 3];
+          const a = time * sp + ph;
+          birdData[i * 4] = Math.cos(a) * rad + 10;
+          birdData[i * 4 + 1] = yb + Math.sin(a * 2) * 3.5;
+          birdData[i * 4 + 2] = Math.sin(a) * rad * 0.82;
+          birdData[i * 4 + 3] = a + 1.5708;
+        }
+        device.queue.writeBuffer(birdInstB, 0, birdData);
+      }
+
+      const enc = device.createCommandEncoder();
+      if (uf[86] > 0.5) {
+        reflPass.colorAttachments[0].view = reflTex.createView();
+        reflPass.depthStencilAttachment.view = reflDepth.createView();
+        const rp = enc.beginRenderPass(reflPass);
+        drawWorld(rp, bgUBR, bgGeoR, false);
+        rp.end();
+      }
+      scenePass.colorAttachments[0].view = sceneTex.createView();
+      scenePass.depthStencilAttachment.view = sceneDepth.createView();
+      const sp = enc.beginRenderPass(scenePass);
+      drawWorld(sp, bgUB, bgGeo, true);
+      sp.end();
+
+      const drawSwap = (colorView, depthView) => {
+        swapPass.colorAttachments[0].view = colorView;
+        swapPass.depthStencilAttachment.view = depthView;
+        const wp = enc.beginRenderPass(swapPass);
+        wp.setPipeline(pipes.blit); wp.setBindGroup(0, bgBlit); wp.draw(3);
+        wp.setPipeline(pipes.water); wp.setBindGroup(0, bgGeo); wp.setBindGroup(1, bgWater);
+        wp.setVertexBuffer(0, waterVB); wp.setIndexBuffer(waterIB, 'uint32');
+        wp.drawIndexed(water.idx.length);
+        wp.end();
+      };
+      if (READ && readTex) drawSwap(readTex.createView(), readDepth.createView());
+      drawSwap(context.getCurrentTexture().createView(), swapDepth.createView());
+      let doRead = false;
+      if (READ && readTex && frames === 16) {
+        enc.copyTextureToBuffer(
+          { texture: readTex },
+          { buffer: readBuf, bytesPerRow: readBpr, rowsPerImage: viewH },
+          { width: viewW, height: viewH }
+        );
+        doRead = true;
+        window.__stage = 'copy';
+      }
+      device.queue.submit([enc.finish()]);
+      if (doRead) {
+        const wCap = viewW, hCap = viewH, bprCap = readBpr, fmtCap = format, buf = readBuf;
+        device.queue.onSubmittedWorkDone().then(() => buf.mapAsync(GPUMapMode.READ)).then(() => {
+          const data = new Uint8Array(buf.getMappedRange());
+          const img = new Uint8ClampedArray(wCap * hCap * 4);
+          const bgra = fmtCap === 'bgra8unorm';
+          for (let y = 0; y < hCap; y++) {
+            for (let x = 0; x < wCap; x++) {
+              const s = y * bprCap + x * 4, d = (y * wCap + x) * 4;
+              img[d] = data[bgra ? s + 2 : s];
+              img[d + 1] = data[s + 1];
+              img[d + 2] = data[bgra ? s : s + 2];
+              img[d + 3] = 255;
+            }
+          }
+          buf.unmap();
+          const c2 = document.createElement('canvas');
+          c2.width = wCap; c2.height = hCap;
+          c2.getContext('2d').putImageData(new ImageData(img, wCap, hCap), 0, 0);
+          window.__png = c2.toDataURL('image/png');
+          requestAnimationFrame(frame);
+        }).catch((err) => { window.__gpuerr = String(err); console.error('READ', err); });
+        return;
+      }
+
+      if (!statsEl.hidden && ftN) {
+        let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
+        const fps = (ftN / sum).toFixed(0);
+        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH;
+      }
+      if (audio && mode > 0) {
+        const alt = Math.max(camY, 0);
+        const shore = Math.exp(-Math.abs(camY) * 0.08) * (0.35 + 0.65 * fieldDamp(world, camX, camZ));
+        audio.surf.gain.value = (muted ? 0 : 0.22) * shore * (under ? 0.25 : 1);
+        audio.wind.gain.value = (muted ? 0 : 0.07) * (0.25 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1);
+        audio.under.frequency.value = under ? 380 : 16000;
+      }
+      if (showHint > 0) {
+        showHint -= dt;
+        hintEl.classList.add('show');
+        if (showHint <= 0) hintEl.classList.remove('show');
+      }
+      window.__frames = frames;
+      requestAnimationFrame(frame);
+    }
+
+    bootKeys();
+    goEl.addEventListener('click', () => {
+      if (!audio) { audio = makeAudio(); if (audio) audio.ac.resume(); }
+      const s = spots[0];
+      introFrom = { x: camX, y: camY, z: camZ, yaw: yaw, pitch: pitch };
+      introTo = { x: s.x, y: s.y, z: s.z, yaw: s.yaw, pitch: s.pitch };
+      introT = 0;
+      mode = 1;
+      document.body.classList.add('playing');
+      $('c').requestPointerLock();
+    });
+    menuBtn.addEventListener('click', () => {
+      if (mode === 0) {
+        goEl.click();
+      } else openMenu();
+    });
+
+    if (qstr.has('shot')) {
+      const idx = Math.max(0, Math.min(5, parseInt(qstr.get('shot'), 10) || 1));
+      // shot=0 keeps the orbit but hides the menu; 1..6 are places
+      document.body.classList.add('playing');
+      if (qstr.get('shot') !== '0') {
+        goSpot(idx - 1);
+        if (qstr.get('shot') === '3') fly = true;
+      }
+      barEl.parentElement.hidden = true;
+      statusEl.textContent = '';
+    }
+
+    requestAnimationFrame(frame);
+  } catch (err) {
+    console.error(err);
+    fail((err && err.stack) || String(err));
+  }
+}
+
+main();
+
+</script>
+</body>
+</html>
