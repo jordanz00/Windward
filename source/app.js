@@ -1,18 +1,18 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 110, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 0, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 124, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 172, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 168, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 0, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 190, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 230, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
-  [1.00, 0.06, 1.65, 72, 0.76],
-  [0.99, 0.10, 0.5, 36, 0.7],
-  [0.98, -0.10, 0.18, 20, 0.38],
-  [0.97, 0.18, 0.07, 12, 0.26],
-  [0.95, 0.26, 0.03, 7.5, 0.18],
-  [0.40, -0.92, 0.025, 16, 0.12],
-  [-0.08, 1.00, 0.03, 42, 0.1],
-  [0.72, 0.70, 0.015, 5, 0.1]
+  [1.00, 0.02, 1.45, 44, 0.58],
+  [1.00, 0.02, 0.28, 22, 0.75],
+  [0.996, 0.09, 0.07, 68, 0.18],
+  [0.996, -0.09, 0.045, 33, 0.14],
+  [0.98, 0.18, 0.018, 13, 0.08],
+  [0.98, -0.20, 0.012, 9, 0.06],
+  [0.12, 0.99, 0.02, 52, 0.08],
+  [-0.06, 1.00, 0.01, 27, 0.05]
 ];
 
 const SUN = (function () {
@@ -458,17 +458,29 @@ function hunt(world, rnd, n, score) {
   return best && best.score > -10 ? best : null;
 }
 
+function smooth01(e0, e1, x) {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
 function waveY(world, x, z, time) {
   const damp = fieldDamp(world, x, z);
+  const D = Math.max(-fieldSample(world, x, z), 0.25);
+  const kP = Math.PI * 2 / WAVES[0][3];
+  const wP = Math.sqrt(9.81 * kP);
   let y = 0;
   for (let i = 0; i < WAVES.length; i++) {
     const w = WAVES[i];
     const len = Math.hypot(w[0], w[1]) || 1;
     const dx = w[0] / len, dz = w[1] / len;
-    const A = w[2] * damp;
     const k = Math.PI * 2 / w[3];
-    const omega = Math.sqrt(9.81 * k);
-    y += A * Math.sin(k * (dx * x + dz * z) - omega * time);
+    const feel = 1 - smooth01(w[3] * 0.08, w[3] * 0.45, D);
+    let As = w[2] * damp * (1 + feel * 0.85);
+    const Q = Math.min(w[4] + feel * 0.45, 1.05);
+    const steep = k * As * Q;
+    if (steep > 0.72) As *= 0.72 / steep;
+    As *= 1 - (1 - smooth01(0.35, 1.6, D)) * 0.65;
+    const omega = i === 1 ? wP * (k / kP) : Math.sqrt(9.81 * k);
+    y += As * Math.sin(k * (dx * x + dz * z) - omega * time);
   }
   return y;
 }
@@ -1120,9 +1132,9 @@ async function main() {
 
       const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
       // Water grid. Cover grows in steps so the vertices don't crawl.
-      let cover = 780;
-      if (camY > 40) cover = 1100;
-      if (camY > 110) cover = 1500;
+      let cover = 1100;
+      if (camY > 40) cover = 1500;
+      if (camY > 110) cover = 2100;
       const cell = cover / (q.water - 1);
       const ox = Math.floor(camX / cell) * cell - cover * 0.5;
       const oz = Math.floor(camZ / cell) * cell - cover * 0.5;

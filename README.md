@@ -45,7 +45,7 @@ You stay on the sand. Step into the water and you swim; hold `Q` to go under and
 | `source/app.js` | WebGPU, the camera, the boats and trees, the sound |
 | `source/ui.css` | The card on top of the picture |
 
-The water is a set of Gerstner swells plus smaller ripples in the normal. Color comes from depth: sand shows through the shallows, red light dies first offshore, and the glancing angle reflects the sky. A mirror pass, on Medium and High, puts the island in the water. Foam sits on the crests and on the reef. Under the surface, the disk of sky is the refraction out of the water; outside that cone the surface reflects.
+The water is a Gerstner swell running with the wind, with a bound harmonic that peaks the crests. As the bottom rises the wave steepens and breaks into foam; the lagoon stays sheltered. The surface mesh is packed tightly around the camera, so a crest nearby stays a curve and the horizon still has the long swell. Color comes from depth: sand shows through the shallows, red light dies first offshore, and the glancing angle reflects the sky. A mirror pass, on Medium and High, puts the island in the water. Under the surface, the disk of sky is the refraction out of the water; outside that cone the surface reflects.
 
 The seabed is a height field filled on the CPU once, then read by the GPU. Trees, the skiff, and the stacks are meshes built from spheres, cylinders, and strips. Sound is filtered noise in the Web Audio API.
 

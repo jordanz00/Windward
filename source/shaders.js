@@ -166,7 +166,7 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
   if (world.y < 0.2) {
     let depth = max(-world.y, 0.0);
     light *= exp(-depth * vec3<f32>(0.40, 0.09, 0.06));
-    light *= 0.5 + caustic(world.xz) * 1.35;
+    light *= 0.78 + caustic(world.xz) * 0.16;
   }
   if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
   var col = albedo * light;
@@ -342,66 +342,68 @@ fn steepQ(i: i32) -> f32 {
 }
 
 fn waveGain(len: f32, dist: f32) -> f32 {
-  // Drop wavelengths the pixel can no longer show, so glitter doesn't turn into a grid.
-  let minLen = dist * 0.032;
-  return smoothstep(minLen * 0.4, minLen * 1.7, len);
+  let minLen = max(dist * 0.012, 2.5);
+  return smoothstep(minLen * 0.45, minLen * 1.5, len);
 }
 
-fn gerstner(xz: vec2<f32>, scale: f32) -> vec4<f32> {
-  // xyz displacement, w = a rough jacobian accumulator
+struct Sea {
+  disp: vec3<f32>,
+  nrm: vec3<f32>,
+  jac: f32,
+  brk: f32,
+}
+
+fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
   var d = vec3<f32>(0.0);
-  var jxx = 0.0; var jzz = 0.0; var jxz = 0.0;
+  var n = vec3<f32>(0.0, 1.0, 0.0);
+  var jxx = 0.0;
+  var jzz = 0.0;
+  var jxz = 0.0;
+  var brk = 0.0;
+  let D = max(depth, 0.25);
   let dist = length(F.camPos.xz - xz);
+  let kP = 6.2831853 / F.waves[0].w;
+  let wP = sqrt(G * kP);
   for (var i = 0; i < 8; i++) {
     let w = F.waves[i];
-    let len = max(length(w.xy), 0.001);
-    let dir = w.xy / len;
-    let A = w.z * scale * waveGain(w.w, dist);
+    let dir = w.xy;
     let k = 6.2831853 / w.w;
-    let omega = sqrt(G * k);
+    let fade = waveGain(w.w, dist);
+    let feel = 1.0 - smoothstep(w.w * 0.08, w.w * 0.45, D);
+    var As = w.z * scale * fade * (1.0 + feel * 0.85);
+    let Q = min(steepQ(i) + feel * 0.45, 1.05);
+    let steep = k * As * Q;
+    if (steep > 0.72) { As *= 0.72 / steep; }
+    let collapse = 1.0 - smoothstep(0.35, 1.6, D);
+    As *= 1.0 - collapse * 0.65;
+    var omega = sqrt(G * k);
+    if (i == 1) { omega = wP * (k / kP); }
     let phase = k * dot(dir, xz) - omega * F.time;
     let s = sin(phase);
     let c = cos(phase);
-    let Q = steepQ(i);
-    d.x += Q * A * dir.x * c;
-    d.z += Q * A * dir.y * c;
-    d.y += A * s;
-    let wa = k * A;
+    let wa = k * As;
+    d.x += Q * As * dir.x * c;
+    d.z += Q * As * dir.y * c;
+    d.y += As * s;
+    n.x -= dir.x * wa * c;
+    n.z -= dir.y * wa * c;
+    n.y -= Q * wa * s;
     jxx += Q * dir.x * dir.x * wa * s;
     jzz += Q * dir.y * dir.y * wa * s;
     jxz += Q * dir.x * dir.y * wa * s;
+    if (i == 0) { brk += collapse * sat(s * 1.6 - 0.35); }
   }
-  let J = (1.0 - jxx) * (1.0 - jzz) - jxz * jxz;
-  return vec4<f32>(d, J);
-}
-
-fn gerstnerN(xz: vec2<f32>, scale: f32) -> vec3<f32> {
-  var n = vec3<f32>(0.0, 1.0, 0.0);
-  let dist = length(F.camPos.xz - xz);
-  for (var i = 0; i < 8; i++) {
-    let w = F.waves[i];
-    let len = max(length(w.xy), 0.001);
-    let dir = w.xy / len;
-    let A = w.z * scale * waveGain(w.w, dist);
-    let k = 6.2831853 / w.w;
-    let omega = sqrt(G * k);
-    let phase = k * dot(dir, xz) - omega * F.time;
-    let c = cos(phase);
-    let wa = k * A;
-    n.x -= dir.x * wa * c;
-    n.z -= dir.y * wa * c;
-    n.y -= steepQ(i) * wa * sin(phase);
-  }
-  // A little shimmer up close. It fades before it can alias into a checkerboard.
-  let detail = sat(1.0 - dist / 40.0) * 0.35;
-  let rip = xz * 1.4 + vec2<f32>(F.time * 0.6, -F.time * 0.25);
-  let e = 0.28;
-  let h0 = n2(rip);
-  let hx = n2(rip + vec2<f32>(e, 0.0));
-  let hz = n2(rip + vec2<f32>(0.0, e));
-  n.x += (h0 - hx) * 0.18 * scale * detail;
-  n.z += (h0 - hz) * 0.18 * scale * detail;
-  return normalize(n);
+  let detail = sat(1.0 - dist / 45.0) * scale;
+  let wind = vec2<f32>(0.998, 0.05);
+  let rip = cos(dot(xz, wind) * 1.6 + F.time * 2.2);
+  n.x += wind.x * rip * 0.012 * detail;
+  n.z += wind.y * rip * 0.012 * detail;
+  var o: Sea;
+  o.disp = d;
+  o.nrm = normalize(n);
+  o.jac = (1.0 - jxx) * (1.0 - jzz) - jxz * jxz;
+  o.brk = sat(brk);
+  return o;
 }
 
 struct WaterV {
@@ -409,11 +411,17 @@ struct WaterV {
   @location(0) world: vec3<f32>,
   @location(1) xz0: vec2<f32>,
 }
+fn warp(t: f32) -> f32 {
+  // Pack vertices near the camera. The ends stay put, so the patch still reaches the horizon.
+  let x = t * 2.0 - 1.0;
+  let a = pow(abs(x), 1.55);
+  return sign(x) * a * 0.5 + 0.5;
+}
 @vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
-  let xz = F.gridO + uv * F.cover;
+  let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
   let field = sampleField(xz);
-  let disp = gerstner(xz, field.y);
-  var w = vec3<f32>(xz.x + disp.x, disp.y, xz.y + disp.z);
+  let s = seaAt(xz, field.y, max(-field.x, 0.2));
+  var w = vec3<f32>(xz.x + s.disp.x, s.disp.y, xz.y + s.disp.z);
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -432,21 +440,14 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let field = sampleField(in.xz0);
   let scale = field.y;
   let bed = field.x;
-  let N = gerstnerN(in.xz0, max(scale, 0.15));
+  let S = seaAt(in.xz0, scale, max(-bed, 0.2));
+  let N = S.nrm;
   let V = normalize(F.camPos - in.world);
-  let ndv = max(dot(N, V), 0.0);
+  let ndv = max(dot(N, V), 0.02);
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   let distS = length(in.world - F.camPos);
-  // Nearby water keeps its color. The horizon is what mirrors the sky.
-  let fresUse = fres * mix(0.38, 0.88, sat(distS / 48.0));
-  let g = gerstner(in.xz0, scale);
-  let crest = smoothstep(0.9, 0.7, g.w) * smoothstep(0.4, 0.75, scale);
-  let depthB = max(-bed, 0.0);
-  let band = smoothstep(0.65, 0.18, depthB) * smoothstep(0.03, 0.14, depthB);
-  let lace = n2(in.xz0 * 0.18 + vec2<f32>(0.0, -F.time * 0.35));
-  let lace2 = n2(in.xz0 * 0.07 + vec2<f32>(F.time * 0.05, 0.2));
-  let shore = band * smoothstep(0.64, 0.9, lace * 0.55 + lace2 * 0.45);
-  let foam = sat(max(crest, shore));
+  let crest = smoothstep(0.78, 0.42, S.jac) * smoothstep(0.25, 0.7, scale);
+  let foam = sat(max(crest, S.brk * 0.85));
 
   if (F.under > 0.5) {
     let I = normalize(in.world - F.camPos);
@@ -487,35 +488,30 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     }
   }
 
-  let inscatter = vec3<f32>(0.012, 0.09, 0.16);
-  var base = inscatter;
+  let ndl = max(dot(N, F.sunDir), 0.0);
+  let deepCol = vec3<f32>(0.006, 0.04, 0.09);
+  var base = deepCol;
   if (dep < 0.9995) {
     let sp = worldAt(in.clip.xy, dep);
     let d = in.world.y - sp.y;
     if (d > -0.08) {
-      let trans = exp(-max(d, 0.0) * vec3<f32>(0.25, 0.055, 0.035));
+      let trans = exp(-max(d, 0.2) * vec3<f32>(0.5, 0.13, 0.08));
       let sceneCol = textureLoad(sceneTex, px, 0).rgb;
-      base = sceneCol * trans + vec3<f32>(0.03, 0.18, 0.22) * (1.0 - trans);
+      base = sceneCol * trans + vec3<f32>(0.02, 0.16, 0.18) * (1.0 - trans);
     }
-  } else {
-    // No seabed in the depth buffer: deep water, red dies first.
-    let deep = exp(-vec3<f32>(9.0, 1.7, 0.55));
-    base = vec3<f32>(0.004, 0.025, 0.06) + inscatter * (1.0 - deep);
   }
-  base *= 0.78 + 0.32 * sat(g.y * 0.7 + 0.4);
-  base = mix(base, vec3<f32>(0.75, 0.80, 0.78), foam * 0.5);
+  // The face of the wave toward the sun is bright. The back of it is not.
+  base *= 0.48 + 0.7 * ndl;
+  base = mix(base, vec3<f32>(0.82, 0.86, 0.84), foam * 0.72);
 
-  var col = mix(base, reflCol, fresUse * (1.0 - foam * 0.75));
-  // Sun path. Tight up close, and gone before it can alias.
+  var col = mix(base, reflCol, fres * (1.0 - foam * 0.7));
   let H = normalize(V + F.sunDir);
   let ndh = max(dot(N, H), 0.0);
-  let power = mix(140.0, 6.0, sat(distS / 60.0));
-  let ndl = max(dot(N, F.sunDir), 0.0);
-  let glint = min(pow(ndh, power) * ndl * fres, 0.7);
-  col += F.sunCol * glint * mix(0.55, 0.12, sat(distS / 90.0));
-  // A little light through the crest, the way a real wave lip goes green.
-  let sss = pow(sat(dot(V, -F.sunDir)), 4.0) * sat(g.y) * scale;
-  col += vec3<f32>(0.04, 0.12, 0.11) * sss * 0.25;
+  let power = mix(80.0, 24.0, sat(distS / 140.0));
+  let glint = min(pow(ndh, power) * ndl * fres, 0.85);
+  col += F.sunCol * glint * 0.45;
+  let sss = pow(sat(dot(-V, F.sunDir)), 4.0) * sat(S.disp.y) * sat(1.0 - N.y);
+  col += vec3<f32>(0.05, 0.16, 0.13) * sss * 0.35;
 
   let dist = length(in.world - F.camPos);
   let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));

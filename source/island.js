@@ -166,7 +166,7 @@ function fillHeights(data, res, span, j0, j1) {
 function fillDamp(data, res, span, j0, j1) {
   const org = -span;
   const step = (span * 2) / (res - 1);
-  const look = [6, 14, 26, 42, 64, 92, 128];
+  const look = [8, 16, 28, 44];
   for (let j = j0; j < j1; j++) {
     const z = org + j * step;
     for (let i = 0; i < res; i++) {
@@ -179,12 +179,13 @@ function fillDamp(data, res, span, j0, j1) {
         for (let k = 0; k < look.length; k++) {
           const ii = i - ((look[k] / step) | 0);
           if (ii < 0) break;
-          if (data[(j * res + ii) * 2] > 0.8) { shelter = 1 - k / look.length; break; }
+          if (data[(j * res + ii) * 2] > 1.4) { shelter = 0.55 * (1 - k / look.length); break; }
         }
         const x = org + i * step;
         if (h > -2.2 && x > 40 && x < 210 && z > -80 && z < 70) shelter = Math.max(shelter, 0.72);
-        damp = 1 - Math.min(shelter, 0.92);
-        damp *= 0.22 + 0.78 * ss(0.25, 3.2, Math.max(-h, 0));
+        damp = 1 - Math.min(shelter, 0.9);
+        // Die out in the swash only. The shader steepens the wave as the bottom rises.
+        damp *= ss(0.08, -0.3, h);
       }
       data[o + 1] = damp;
     }
