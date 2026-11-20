@@ -1,5 +1,5 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 168, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 0, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 160, textent: 460, water: 168, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
   med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 190, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
   high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 230, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
