@@ -240,7 +240,7 @@ function makePalm() {
     const row = [];
     for (let k = 0; k < sides; k++) {
       const a = k / sides * Math.PI * 2;
-      row.push(m.v(lean + Math.cos(a) * r, y, Math.sin(a) * r, Math.cos(a), 0.08, Math.sin(a), 0.40 * shade, 0.29 * shade, 0.16 * shade, t * 0.08));
+      row.push(m.v(lean + Math.cos(a) * r, y, Math.sin(a) * r, Math.cos(a), 0.08, Math.sin(a), 0.36 * shade, 0.32 * shade, 0.26 * shade, t * 0.08));
     }
     rings.push(row);
   }
@@ -275,8 +275,8 @@ function makePalm() {
       pc = C; pl = L; pr = R;
     }
   }
-  for (let f = 0; f < 12; f++) frond(f / 12 * Math.PI * 2, 0.72, 0.48, 0.78, 0.11, [0.11, 0.32, 0.07], 0.42, 7);
-  for (let f = 0; f < 5; f++) frond(f / 5 * Math.PI * 2 + 0.3, 0.3, 1.15, 0.04, 0.055, [0.16, 0.44, 0.1], 0.22, 4);
+  for (let f = 0; f < 14; f++) frond(f / 14 * Math.PI * 2, 0.74, 0.46, 0.8, 0.125, [0.18, 0.38, 0.07], 0.42, 8);
+  for (let f = 0; f < 5; f++) frond(f / 5 * Math.PI * 2 + 0.3, 0.32, 1.15, 0.04, 0.06, [0.24, 0.50, 0.12], 0.22, 4);
   for (let f = 0; f < 8; f++) frond(f / 8 * Math.PI * 2 + 0.15, 0.34, 0.12, 0.62, 0.04, [0.34, 0.26, 0.09], 0.12, 3);
   return m;
 }
@@ -1094,8 +1094,8 @@ async function main() {
       arr.set(VP, 0); arr.set(INV, 16);
       arr[48] = eyeX; arr[49] = eyeY; arr[50] = eyeZ; arr[51] = time;
       arr[52] = SUN[0]; arr[53] = SUN[1]; arr[54] = SUN[2]; arr[55] = underFlag;
-      arr[56] = 1; arr[57] = 0.95; arr[58] = 0.86; arr[59] = 0.84;
-      arr[60] = 0.70; arr[61] = 0.78; arr[62] = 0.84; arr[63] = Math.tan(fov * 0.5);
+      arr[56] = 1.08; arr[57] = 0.98; arr[58] = 0.84; arr[59] = 0.92;
+      arr[60] = 0.73; arr[61] = 0.79; arr[62] = 0.84; arr[63] = Math.tan(fov * 0.5);
       arr[64] = right[0]; arr[65] = right[1]; arr[66] = right[2]; arr[67] = viewW / viewH;
       arr[68] = up[0]; arr[69] = up[1]; arr[70] = up[2]; arr[71] = clipBelow;
       arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;

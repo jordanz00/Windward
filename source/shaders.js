@@ -94,26 +94,30 @@ fn cloudDens(p: vec2<f32>) -> f32 {
 
 fn skyColor(rd: vec3<f32>) -> vec3<f32> {
   let up = sat(rd.y);
-  var col = mix(vec3<f32>(0.70, 0.78, 0.84), vec3<f32>(0.16, 0.40, 0.78), pow(up, 0.32));
-  col = mix(col, vec3<f32>(0.05, 0.18, 0.48), pow(up, 1.5) * 0.65);
   let mu = dot(rd, F.sunDir);
-  // Warmth stays next to the sun. The rest of the sky stays blue.
-  col = mix(col, vec3<f32>(0.96, 0.72, 0.48), pow(sat(mu), 14.0) * sat(1.05 - up * 1.2) * 0.55);
-  col += vec3<f32>(1.0, 0.97, 0.9) * pow(sat(mu), 900.0) * 5.0;
-  col += vec3<f32>(1.0, 0.86, 0.62) * pow(sat(mu), 48.0) * 0.28;
+  // Deep overhead, pale and slightly warm at the horizon, the way a humid afternoon looks.
+  let zenith = vec3<f32>(0.07, 0.22, 0.58);
+  let mid = vec3<f32>(0.30, 0.50, 0.82);
+  let haze = vec3<f32>(0.73, 0.79, 0.84);
+  var col = mix(zenith, mid, smoothstep(0.02, 0.55, up));
+  col = mix(haze, col, smoothstep(0.0, 0.16, up));
+  let air = pow(1.0 - up, 1.5);
+  let warm = vec3<f32>(1.05, 0.68, 0.34);
+  col += warm * (pow(sat(mu), 5.0) * 0.16 + pow(sat(mu), 32.0) * 0.38) * (0.25 + air);
+  col += vec3<f32>(1.2, 1.02, 0.88) * pow(sat(mu), 2200.0) * 18.0;
   if (rd.y > 0.012) {
     let t = (480.0 - F.camPos.y) / rd.y;
     if (t > 0.0 && t < 12000.0) {
       let hit = F.camPos.xz + rd.xz * t;
       let uv = hit * 0.00022 + vec2<f32>(F.time * 0.0022, F.time * 0.0009);
       let d = cloudDens(uv);
-      let dens = smoothstep(0.42, 0.68, d);
-      let dl = cloudDens(uv + F.sunDir.xz * 0.01);
-      let lit = sat(0.32 + (dl - d) * 3.2);
-      var cc = mix(vec3<f32>(0.40, 0.44, 0.50), vec3<f32>(0.98, 0.97, 0.95), lit);
-      cc += vec3<f32>(1.0, 0.82, 0.55) * pow(sat(mu), 2.0) * dens * 0.18;
-      let fade = smoothstep(0.012, 0.14, rd.y) * sat(1.0 - t / 11000.0);
-      col = mix(col, cc, dens * fade * 0.94);
+      let dens = smoothstep(0.40, 0.72, d);
+      let dl = cloudDens(uv + F.sunDir.xz * 0.012);
+      let lit = sat(0.22 + (dl - d) * 3.6);
+      var cc = mix(vec3<f32>(0.46, 0.50, 0.56), vec3<f32>(1.05, 1.02, 0.98), lit);
+      cc += vec3<f32>(1.0, 0.78, 0.48) * pow(sat(mu), 3.0) * dens * 0.22;
+      let fade = smoothstep(0.012, 0.18, rd.y) * sat(1.0 - t / 11000.0);
+      col = mix(col, cc, dens * fade * 0.92);
     }
   }
   return col;
@@ -159,25 +163,31 @@ fn shadowAt(p: vec3<f32>) -> f32 {
 
 fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
   let n = normalize(nrm);
+  // Green materials are leaves. They wrap the light and pass it when backlit.
+  let leaf = sat((albedo.g - max(albedo.r, albedo.b)) * 4.0);
   let ndl = max(dot(n, F.sunDir), 0.0);
+  let lit = mix(ndl, sat(ndl * 0.45 + 0.55), leaf);
   let sh = shadowAt(world) * cloudShade(world.xz, world.y);
-  let amb = mix(vec3<f32>(0.20, 0.19, 0.16), vec3<f32>(0.48, 0.56, 0.68), n.y * 0.5 + 0.5);
-  var light = F.sunCol * ndl * sh + amb * 0.62;
+  let hemi = n.y * 0.5 + 0.5;
+  let sky = vec3<f32>(0.34, 0.48, 0.70) * hemi;
+  let ground = vec3<f32>(0.26, 0.19, 0.11) * (1.0 - hemi);
+  var light = F.sunCol * lit * sh * 1.2 + sky * 0.7 + ground * 0.4;
   if (world.y < 0.2) {
     let depth = max(-world.y, 0.0);
     light *= exp(-depth * vec3<f32>(0.40, 0.09, 0.06));
-    light *= 0.78 + caustic(world.xz) * 0.16;
+    light *= 0.82 + caustic(world.xz) * 0.14;
   }
   if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
   var col = albedo * light;
-  if (world.y > -0.05 && world.y < 0.85) {
+  let back = sat(dot(-n, F.sunDir));
+  col += albedo * vec3<f32>(0.9, 1.2, 0.28) * back * sh * leaf * 0.8;
+  if (world.y > -0.15 && world.y < 1.1) {
     let V = normalize(F.camPos - world);
     let H = normalize(V + F.sunDir);
-    let wet = 1.0 - sat(world.y / 0.85);
-    col += F.sunCol * pow(max(dot(n, H), 0.0), 48.0) * sh * wet * 0.1;
+    let spec = pow(max(dot(n, H), 0.0), mix(56.0, 22.0, leaf));
+    let wet = (1.0 - sat(world.y / 0.7)) * (1.0 - leaf);
+    col += F.sunCol * spec * sh * (leaf * 0.04 + wet * 0.09);
   }
-  // crevice darkening
-  col *= mix(0.72, 1.0, sat(n.y * 0.65 + 0.35));
   return applyFog(col, world);
 }
 
@@ -190,18 +200,19 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   let grassW = sat(1.0 - rock - sandW);
   let m = n2(xz * 0.11);
   let fine = n2(xz * 0.85);
-  var sandC = mix(vec3<f32>(0.48, 0.40, 0.27), vec3<f32>(0.34, 0.29, 0.19), fine);
-  sandC *= 0.78 + 0.32 * n2(xz * 2.2);
-  let wet = smoothstep(1.3, 0.05, y);
-  sandC = mix(sandC, sandC * vec3<f32>(0.55, 0.58, 0.52), wet * 0.65);
-  if (y < 0.15) { sandC = mix(vec3<f32>(0.62, 0.55, 0.38), sandC, sat(-y * 0.4)); }
-  sandC *= 0.9 + 0.18 * smoothstep(0.78, 0.95, n2(xz * 4.0));
-  var grassC = mix(vec3<f32>(0.12, 0.26, 0.09), vec3<f32>(0.28, 0.36, 0.12), m);
-  grassC *= 0.68 + 0.5 * n2(xz * 0.16);
-  grassC = mix(grassC, vec3<f32>(0.40, 0.38, 0.18), smoothstep(4.0, 1.3, y) * 0.4);
-  var rockC = mix(vec3<f32>(0.42, 0.39, 0.35), vec3<f32>(0.24, 0.23, 0.21), m);
-  rockC *= 0.84 + 0.2 * sin(y * 1.15 + m * 5.0);
-  rockC = mix(rockC, vec3<f32>(0.36, 0.39, 0.24), smoothstep(0.62, 0.86, n2(xz * 0.35)) * (1.0 - slope));
+  let grain = n2(xz * 3.6);
+  var sandC = mix(vec3<f32>(0.66, 0.58, 0.42), vec3<f32>(0.52, 0.45, 0.32), fine);
+  sandC *= 0.9 + 0.16 * grain;
+  let wet = smoothstep(1.1, 0.02, y);
+  sandC = mix(sandC, sandC * vec3<f32>(0.58, 0.60, 0.56), wet * 0.5);
+  if (y < 0.05) { sandC = mix(vec3<f32>(0.72, 0.64, 0.46), sandC, sat(-y * 0.35 + 0.25)); }
+  var grassC = mix(vec3<f32>(0.13, 0.24, 0.06), vec3<f32>(0.30, 0.38, 0.10), m);
+  grassC *= 0.78 + 0.36 * n2(xz * 0.22);
+  grassC = mix(grassC, vec3<f32>(0.38, 0.36, 0.15), smoothstep(3.5, 0.9, y) * 0.32);
+  grassC = mix(grassC, grassC * 0.72, smoothstep(0.55, 0.85, n2(xz * 1.4)) * 0.45);
+  var rockC = mix(vec3<f32>(0.40, 0.38, 0.34), vec3<f32>(0.22, 0.21, 0.19), m);
+  rockC *= 0.86 + 0.18 * sin(y * 1.4 + m * 5.0);
+  rockC = mix(rockC, vec3<f32>(0.34, 0.36, 0.22), smoothstep(0.62, 0.86, n2(xz * 0.35)) * (1.0 - slope));
   return sandC * sandW + grassC * grassW + rockC * rock;
 }
 
@@ -243,6 +254,10 @@ struct GeoV {
   let slope = sat(1.0 - n.y);
   let b = n2(in.world.xz * 1.7) - n2(in.world.xz * 1.7 + vec2<f32>(0.4, 0.1));
   n = normalize(n + vec3<f32>(b, 0.0, n2(in.world.xz * 1.7 + vec2<f32>(2.0, 0.0)) - 0.5) * (0.18 + slope * 0.55));
+  let g0 = n2(in.world.xz * 5.5);
+  let gx = n2(in.world.xz * 5.5 + vec2<f32>(0.18, 0.0)) - g0;
+  let gz = n2(in.world.xz * 5.5 + vec2<f32>(0.0, 0.18)) - g0;
+  n = normalize(n + vec3<f32>(gx, 0.0, gz) * (1.0 - slope) * 0.55);
   let alb = terrainAlbedo(in.world.xz, in.world.y, n);
   return vec4<f32>(shade(in.world, n, alb), 1.0);
 }
@@ -303,7 +318,7 @@ struct GrassV {
 @fragment fn fsGrass(in: GrassV) -> @location(0) vec4<f32> {
   let halfW = mix(0.5, 0.04, in.uv.y);
   if (abs(in.uv.x - 0.5) > halfW) { discard; }
-  var col = mix(vec3<f32>(0.09, 0.22, 0.06), vec3<f32>(0.28, 0.36, 0.10), in.uv.y);
+  var col = mix(vec3<f32>(0.12, 0.24, 0.06), vec3<f32>(0.42, 0.48, 0.14), in.uv.y);
   if (in.kind > 0.5) { col = mix(vec3<f32>(0.05, 0.16, 0.10), vec3<f32>(0.20, 0.32, 0.14), in.uv.y); }
   col *= 0.85 + 0.3 * n2(in.world.xz * 2.0);
   return vec4<f32>(shade(in.world, in.nrm, col), 1.0);
@@ -395,11 +410,14 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     jxz += Q * dir.x * dir.y * wa * s;
     if (i == 0) { brk += collapse * sat(s * 1.6 - 0.35); }
   }
-  let detail = sat(1.0 - dist / 45.0) * scale;
+  let detail = sat(1.0 - dist / 260.0) * scale;
   let wind = vec2<f32>(0.998, 0.05);
-  let rip = cos(dot(xz, wind) * 1.6 + F.time * 2.2);
-  n.x += wind.x * rip * 0.012 * detail;
-  n.z += wind.y * rip * 0.012 * detail;
+  let along = dot(xz, wind);
+  let rip = cos(along * 1.7 + F.time * 2.2) * 0.5
+          + cos(along * 4.6 - F.time * 3.4) * 0.32
+          + cos(along * 11.5 + F.time * 4.8) * 0.18;
+  n.x += wind.x * rip * 0.02 * detail;
+  n.z += wind.y * rip * 0.02 * detail;
   var o: Sea;
   o.disp = d;
   o.nrm = normalize(n);
@@ -423,7 +441,10 @@ fn warp(t: f32) -> f32 {
   let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
   let field = sampleField(xz);
   let s = seaAt(xz, field.y, max(-field.x, 0.2));
-  var w = vec3<f32>(xz.x + s.disp.x, s.disp.y, xz.y + s.disp.z);
+  // Distant swell is smaller than a pixel, so the horizon stays a line. The normals still carry it.
+  let dist = length(xz - F.camPos.xz);
+  let geom = smoothstep(900.0, 140.0, dist);
+  var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.04, 1.0, geom), xz.y + s.disp.z * geom);
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -491,27 +512,25 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   }
 
   let ndl = max(dot(N, F.sunDir), 0.0);
-  let deepCol = vec3<f32>(0.006, 0.04, 0.09);
-  var base = deepCol;
+  var base = vec3<f32>(0.012, 0.055, 0.12);
   if (dep < 0.9995) {
     let sp = worldAt(in.clip.xy, dep);
     let d = in.world.y - sp.y;
     if (d > -0.08) {
-      let trans = exp(-max(d, 0.2) * vec3<f32>(0.5, 0.13, 0.08));
+      let trans = exp(-max(d, 0.05) * vec3<f32>(0.48, 0.14, 0.09));
       let sceneCol = textureLoad(sceneTex, px, 0).rgb;
-      base = sceneCol * trans + vec3<f32>(0.02, 0.16, 0.18) * (1.0 - trans);
+      base = sceneCol * trans + vec3<f32>(0.015, 0.11, 0.14) * (1.0 - trans);
     }
   }
-  // The face of the wave toward the sun is bright. The back of it is not.
-  base *= 0.48 + 0.7 * ndl;
-  base = mix(base, vec3<f32>(0.82, 0.86, 0.84), foam * 0.72);
+  base *= 0.8 + 0.25 * ndl;
+  base = mix(base, vec3<f32>(0.92, 0.94, 0.92), foam * 0.8);
 
-  var col = mix(base, reflCol, fres * (1.0 - foam * 0.7));
+  var col = mix(base, reflCol, fres * (1.0 - foam * 0.65));
   let H = normalize(V + F.sunDir);
   let ndh = max(dot(N, H), 0.0);
-  let power = mix(80.0, 24.0, sat(distS / 140.0));
-  let glint = min(pow(ndh, power) * ndl * fres, 0.85);
-  col += F.sunCol * glint * 0.45;
+  let power = mix(520.0, 110.0, sat(distS / 180.0));
+  let glint = min(pow(ndh, power) * fres, 1.6);
+  col += F.sunCol * glint * 0.7;
   let sss = pow(sat(dot(-V, F.sunDir)), 4.0) * sat(S.disp.y) * sat(1.0 - N.y);
   col += vec3<f32>(0.05, 0.16, 0.13) * sss * 0.35;
 
