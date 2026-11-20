@@ -526,28 +526,250 @@ function smooth01(e0, e1, x) {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
 }
+const WATER = {
+  calm: { amp: 0.48, spd: 0.7, frq: 0.78, dir: 0, layers: 6, cx: 0.65, rough: 0.12, refl: 1.05, refr: 0.72, alpha: 1, depthK: 0.72, sun: 1, sky: 1, sunAng: 0, sim: 0.85, rip: 0.5, ripSpd: 0.75, disturb: 0.65, ripSize: 1.4, deep: [0.012, 0.05, 0.12], shal: [0.04, 0.16, 0.18], dist: 42, pitch: 0.22, spot: 4 },
+  tropical: { amp: 0.72, spd: 0.9, frq: 0.95, dir: 0.08, layers: 8, cx: 1, rough: 0.08, refl: 0.95, refr: 1.15, alpha: 1, depthK: 0.62, sun: 1.08, sky: 1.04, sunAng: -0.15, sim: 1, rip: 0.85, ripSpd: 1, disturb: 1, ripSize: 1.3, deep: [0.01, 0.09, 0.12], shal: [0.05, 0.32, 0.28], dist: 22, pitch: 0.38, spot: 3 },
+  deep: { amp: 1.35, spd: 0.82, frq: 0.7, dir: 0, layers: 8, cx: 0.85, rough: 0.18, refl: 1.15, refr: 0.65, alpha: 0.82, depthK: 1.45, sun: 0.88, sky: 0.82, sunAng: 0.1, sim: 0.9, rip: 0.65, ripSpd: 0.85, disturb: 1.1, ripSize: 1.8, deep: [0.004, 0.018, 0.05], shal: [0.012, 0.06, 0.09], dist: 34, pitch: 0.26, spot: 4 },
+  pool: { amp: 0.05, spd: 0.45, frq: 1.7, dir: 0, layers: 2, cx: 0.35, rough: 0.02, refl: 1.25, refr: 1.45, alpha: 1, depthK: 0.28, sun: 1.15, sky: 1.08, sunAng: 0.35, sim: 1, rip: 1.35, ripSpd: 0.7, disturb: 0.85, ripSize: 0.9, deep: [0.02, 0.16, 0.2], shal: [0.2, 0.48, 0.44], dist: 12, pitch: 0.82, spot: 3 },
+  lake: { amp: 0.22, spd: 0.5, frq: 1.05, dir: 0.45, layers: 5, cx: 0.7, rough: 0.16, refl: 1, refr: 0.85, alpha: 0.95, depthK: 0.9, sun: 0.95, sky: 0.98, sunAng: 0.2, sim: 0.8, rip: 0.45, ripSpd: 0.6, disturb: 0.7, ripSize: 1.5, deep: [0.02, 0.06, 0.07], shal: [0.06, 0.16, 0.12], dist: 28, pitch: 0.3, spot: 3 },
+  storm: { amp: 1.85, spd: 1.35, frq: 1.12, dir: 0.55, layers: 8, cx: 1.45, rough: 0.48, refl: 0.72, refr: 0.55, alpha: 0.7, depthK: 1.25, sun: 0.5, sky: 0.55, sunAng: 0.6, sim: 1.2, rip: 1.4, ripSpd: 1.55, disturb: 1.6, ripSize: 2.2, deep: [0.008, 0.02, 0.035], shal: [0.03, 0.07, 0.08], dist: 28, pitch: 0.3, spot: 4 },
+  shallow: { amp: 0.32, spd: 1.05, frq: 1.25, dir: 0, layers: 7, cx: 1.1, rough: 0.06, refl: 0.62, refr: 1.4, alpha: 1, depthK: 0.32, sun: 1.12, sky: 1.05, sunAng: -0.05, sim: 1, rip: 1.15, ripSpd: 1.1, disturb: 1, ripSize: 1.2, deep: [0.04, 0.14, 0.12], shal: [0.22, 0.42, 0.28], dist: 14, pitch: 0.7, spot: 3 }
+};
+const wp = {
+  amp: 1, spd: 1, frq: 1, dir: 0, layers: 8, cx: 1, rough: 0, refl: 1, refr: 1, alpha: 1, depthK: 1,
+  sun: 1, sky: 1, sunAng: 0, sim: 1, rip: 1, ripSpd: 1, disturb: 1, ripSize: 1.3, paused: 0,
+  deep: [0.01, 0.05, 0.11], shal: [0.02, 0.13, 0.16]
+};
+let orbit = false;
+let orbitYaw = 0.5, orbitPitch = 0.38, orbitDist = 28;
+let targetX = 0, targetZ = 0;
+let simOx = -60, simOz = -60;
+const simDomain = 120;
+let pendingSplat = null;
+let ripClear = 0;
+const home = { yaw: 0.5, pitch: 0.38, dist: 28, tx: 0, tz: 0 };
+let downX = 0, downY = 0, moved = 0;
+
 function waveY(world, x, z, time) {
   const damp = fieldDamp(world, x, z);
   const D = Math.max(-fieldSample(world, x, z), 0.25);
-  const kP = Math.PI * 2 / WAVES[0][3];
+  const frq = Math.max(wp.frq, 0.2);
+  const cs = Math.cos(wp.dir), sn = Math.sin(wp.dir);
+  const kP = Math.PI * 2 / WAVES[0][3] * frq;
   const wP = Math.sqrt(9.81 * kP);
   let y = 0;
-  for (let i = 0; i < WAVES.length; i++) {
+  const n = Math.max(1, Math.min(WAVES.length, wp.layers | 0));
+  for (let i = 0; i < n; i++) {
     const w = WAVES[i];
-    const len = Math.hypot(w[0], w[1]) || 1;
-    const dx = w[0] / len, dz = w[1] / len;
-    const k = Math.PI * 2 / w[3];
-    const feel = 1 - smooth01(w[3] * 0.08, w[3] * 0.45, D);
-    let As = w[2] * damp * (1 + feel * 0.85);
+    const len0 = Math.hypot(w[0], w[1]) || 1;
+    const dx0 = w[0] / len0, dz0 = w[1] / len0;
+    const dx = dx0 * cs - dz0 * sn, dz = dx0 * sn + dz0 * cs;
+    const len = w[3] / frq;
+    const k = Math.PI * 2 / len;
+    const feel = 1 - smooth01(len * 0.08, len * 0.45, D);
+    let As = w[2] * wp.amp * damp * (1 + feel * 0.85);
+    if (i >= 4) As *= wp.cx;
     const Q = Math.min(w[4] + feel * 0.45, 1.05);
     const steep = k * As * Q;
     if (steep > 0.72) As *= 0.72 / steep;
     As *= 1 - (1 - smooth01(0.35, 1.6, D)) * 0.65;
-    const omega = i === 1 ? wP * (k / kP) : Math.sqrt(9.81 * k);
+    const omega = (i === 1 ? wP * (k / kP) : Math.sqrt(9.81 * k)) * wp.spd;
     y += As * Math.sin(k * (dx * x + dz * z) - omega * time);
   }
   return y;
 }
+
+function aimAtBeach(i) {
+  const s = spots[i == null ? 3 : i] || spots[0];
+  if (!s) return;
+  const fx = Math.sin(s.yaw), fz = -Math.cos(s.yaw);
+  targetX = s.x + fx * 14;
+  targetZ = s.z + fz * 14;
+  orbitYaw = s.yaw + Math.PI;
+}
+function applyOrbitPose() {
+  const op = -orbitPitch;
+  const cp = Math.cos(op), sp = Math.sin(op);
+  const fx = Math.sin(orbitYaw) * cp;
+  const fy = sp;
+  const fz = -Math.cos(orbitYaw) * cp;
+  camX = targetX - fx * orbitDist;
+  camY = 0.4 - fy * orbitDist;
+  camZ = targetZ - fz * orbitDist;
+  yaw = orbitYaw;
+  pitch = op;
+}
+function showVal(k, v) {
+  if (k === 'dir' || k === 'sunAng') return Math.round(v * 180 / Math.PI) + '°';
+  if (k === 'layers') return String(Math.round(v));
+  return Number(v).toFixed(2);
+}
+function syncSliders() {
+  document.querySelectorAll('#dock input[data-k]').forEach((el) => {
+    const k = el.dataset.k;
+    if (wp[k] == null) return;
+    el.value = wp[k];
+    const b = el.parentElement.querySelector('b');
+    if (b) b.textContent = showVal(k, wp[k]);
+  });
+  const deep = $('deepcol'), shal = $('shalcol');
+  if (deep) deep.value = toHex(wp.deep);
+  if (shal) shal.value = toHex(wp.shal);
+}
+function toHex(rgb) {
+  const g = (v) => Math.round(Math.pow(Math.min(1, Math.max(0, v)), 1 / 2.2) * 255).toString(16).padStart(2, '0');
+  return '#' + g(rgb[0]) + g(rgb[1]) + g(rgb[2]);
+}
+function fromHex(hex, out) {
+  const s = (i) => Math.pow(parseInt(hex.slice(i, i + 2), 16) / 255, 2.2);
+  out[0] = s(1); out[1] = s(3); out[2] = s(5);
+}
+function markCustom() {
+  const sel = $('preset');
+  if (sel && sel.value !== 'custom') sel.value = 'custom';
+}
+function applyPreset(name, moveCam) {
+  const p = WATER[name];
+  if (!p) return;
+  Object.keys(p).forEach((k) => {
+    if (k === 'deep' || k === 'shal' || k === 'dist' || k === 'pitch' || k === 'spot') return;
+    wp[k] = p[k];
+  });
+  wp.deep[0] = p.deep[0]; wp.deep[1] = p.deep[1]; wp.deep[2] = p.deep[2];
+  wp.shal[0] = p.shal[0]; wp.shal[1] = p.shal[1]; wp.shal[2] = p.shal[2];
+  wp.paused = 0;
+  const pause = $('pause');
+  if (pause) pause.textContent = 'Pause';
+  const sel = $('preset');
+  if (sel) sel.value = name;
+  syncSliders();
+  home.dist = p.dist;
+  home.pitch = p.pitch;
+  if (moveCam) {
+    aimAtBeach(p.spot);
+    orbitDist = p.dist;
+    orbitPitch = p.pitch;
+    home.yaw = orbitYaw;
+    home.tx = targetX;
+    home.tz = targetZ;
+    applyOrbitPose();
+  }
+}
+function dropRipple(cx, cy) {
+  const canvas = $('c');
+  const rect = canvas.getBoundingClientRect();
+  const nx = ((cx - rect.left) / rect.width) * 2 - 1;
+  const ny = 1 - ((cy - rect.top) / rect.height) * 2;
+  cameraVectors(yaw, pitch, fwd, right, up);
+  const th = Math.tan((60 * Math.PI / 180) * 0.5);
+  const aspect = rect.width / Math.max(rect.height, 1);
+  let dx = fwd[0] + right[0] * nx * th * aspect + up[0] * ny * th;
+  let dy = fwd[1] + right[1] * nx * th * aspect + up[1] * ny * th;
+  let dz = fwd[2] + right[2] * nx * th * aspect + up[2] * ny * th;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  dx /= len; dy /= len; dz /= len;
+  if (dy > -0.0008) return;
+  const t = -camY / dy;
+  if (t < 0.2 || t > 500) return;
+  const x = camX + dx * t;
+  const z = camZ + dz * t;
+  const half = simDomain * 0.5;
+  if (Math.abs(x - (simOx + half)) > half * 0.9 || Math.abs(z - (simOz + half)) > half * 0.9) {
+    simOx = x - half;
+    simOz = z - half;
+    ripClear = 1;
+  }
+  pendingSplat = { x: x, z: z, s: 0.34 * wp.disturb, r: Math.max(0.35, wp.ripSize) };
+}
+function bindStudio() {
+  document.querySelectorAll('#dock input[data-k]').forEach((el) => {
+    el.addEventListener('input', () => {
+      const k = el.dataset.k;
+      wp[k] = parseFloat(el.value);
+      if (k === 'layers') wp.layers = Math.round(wp.layers);
+      const b = el.parentElement.querySelector('b');
+      if (b) b.textContent = showVal(k, wp[k]);
+      markCustom();
+    });
+  });
+  const deep = $('deepcol'), shal = $('shalcol');
+  if (deep) deep.addEventListener('input', () => { fromHex(deep.value, wp.deep); markCustom(); });
+  if (shal) shal.addEventListener('input', () => { fromHex(shal.value, wp.shal); markCustom(); });
+  const sel = $('preset');
+  if (sel) sel.addEventListener('change', () => { if (sel.value !== 'custom') applyPreset(sel.value, true); });
+  const hide = $('dockhide');
+  if (hide) hide.addEventListener('click', () => document.body.classList.remove('dock-open'));
+  const show = $('dockbtn');
+  if (show) show.addEventListener('click', () => document.body.classList.add('dock-open'));
+  const pause = $('pause');
+  if (pause) pause.addEventListener('click', () => {
+    wp.paused = wp.paused ? 0 : 1;
+    pause.textContent = wp.paused ? 'Play' : 'Pause';
+  });
+  const resetR = $('resetr');
+  if (resetR) resetR.addEventListener('click', () => { pendingSplat = null; ripClear = 1; });
+  const resetC = $('resetc');
+  if (resetC) resetC.addEventListener('click', () => {
+    orbit = true;
+    orbitYaw = home.yaw; orbitPitch = home.pitch; orbitDist = home.dist;
+    targetX = home.tx; targetZ = home.tz;
+    applyOrbitPose();
+  });
+  const full = $('full');
+  if (full) full.addEventListener('click', () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+    else document.exitFullscreen();
+  });
+  const walk = $('walk');
+  if (walk) walk.addEventListener('click', () => {
+    orbit = false;
+    mode = 2;
+    $('hint').textContent = 'WASD move · mouse look · 1–6 places · Esc menu';
+    showHint = 6;
+    $('hint').classList.add('show');
+  });
+  syncSliders();
+}
+
+const SIM_WGSL = `struct Sim {
+  splat: vec4<f32>,
+  k: vec4<f32>,
+  origin: vec2<f32>,
+  pad: vec2<f32>,
+}
+@group(0) @binding(0) var srcTex: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> S: Sim;
+struct SV { @builtin(position) clip: vec4<f32> }
+@vertex fn vs(@builtin(vertex_index) i: u32) -> SV {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  var o: SV;
+  o.clip = vec4<f32>(p[i], 0.0, 1.0);
+  return o;
+}
+@fragment fn fs(in: SV) -> @location(0) vec4<f32> {
+  let dim = 256;
+  let p = vec2<i32>(in.clip.xy);
+  let c = textureLoad(srcTex, p, 0);
+  let h = c.r;
+  let v = c.g;
+  let L = textureLoad(srcTex, clamp(p + vec2<i32>(-1, 0), vec2<i32>(0), vec2<i32>(dim - 1)), 0).r;
+  let R = textureLoad(srcTex, clamp(p + vec2<i32>(1, 0), vec2<i32>(0), vec2<i32>(dim - 1)), 0).r;
+  let U = textureLoad(srcTex, clamp(p + vec2<i32>(0, -1), vec2<i32>(0), vec2<i32>(dim - 1)), 0).r;
+  let D = textureLoad(srcTex, clamp(p + vec2<i32>(0, 1), vec2<i32>(0), vec2<i32>(dim - 1)), 0).r;
+  let lap = L + R + U + D - 4.0 * h;
+  let edge = f32(p.x == 0 || p.y == 0 || p.x == dim - 1 || p.y == dim - 1);
+  var nv = v * mix(S.k.y, 0.8, edge) + lap * S.k.x;
+  var nh = h + nv;
+  let uv = (vec2<f32>(p) + vec2<f32>(0.5)) / f32(dim);
+  let xz = S.origin + uv * S.k.z;
+  let d = length(xz - S.splat.xy);
+  let rad = max(S.splat.w, 0.35);
+  if (S.splat.z != 0.0 && d < rad * 3.0) {
+    nh += S.splat.z * exp(-(d * d) / (rad * rad));
+  }
+  return vec4<f32>(clamp(nh, -1.6, 1.6), clamp(nv, -0.8, 0.8), 0.0, 1.0);
+}
+`;
 
 let audio = null;
 let muted = false;
@@ -591,32 +813,69 @@ function bootKeys() {
     if (e.repeat) return;
     if (e.code === 'KeyM') { muted = !muted; if (audio) audio.master.gain.value = muted ? 0 : 0.9; }
     if (e.code === 'KeyH') statsEl.hidden = !statsEl.hidden;
-    if (e.code === 'KeyF' && mode === 2) fly = !fly;
+    if (e.code === 'KeyF' && mode === 2 && !orbit) fly = !fly;
     if (e.code === 'Escape') openMenu();
     if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goSpot(e.code.charCodeAt(5) - 49);
   });
   addEventListener('keyup', (e) => { if (K[e.code] != null) K[e.code] = 0; });
   const canvas = $('c');
-  canvas.addEventListener('mousedown', (e) => { if (mode === 2) { dragging = true; if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); } });
-  addEventListener('mouseup', () => { dragging = false; });
+  canvas.addEventListener('mousedown', (e) => {
+    if (mode !== 2 || e.button !== 0) return;
+    dragging = true;
+    if (orbit) { downX = e.clientX; downY = e.clientY; moved = 0; return; }
+    if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
+  });
+  canvas.addEventListener('wheel', (e) => {
+    if (!orbit || mode !== 2) return;
+    orbitDist = Math.min(180, Math.max(4, orbitDist * (e.deltaY > 0 ? 1.08 : 0.92)));
+    applyOrbitPose();
+    e.preventDefault();
+  }, { passive: false });
+  addEventListener('mouseup', (e) => {
+    if (orbit && dragging && moved < 6 && mode === 2) dropRipple(e.clientX, e.clientY);
+    dragging = false;
+  });
   addEventListener('mousemove', (e) => {
     if (mode !== 2) return;
+    if (orbit && dragging) {
+      orbitYaw -= e.movementX * 0.005;
+      orbitPitch = Math.max(0.08, Math.min(1.25, orbitPitch + e.movementY * 0.004));
+      moved += Math.abs(e.movementX) + Math.abs(e.movementY);
+      applyOrbitPose();
+      return;
+    }
     if (document.pointerLockElement === canvas || dragging) { lookX += e.movementX; lookY += e.movementY; }
   });
   canvas.addEventListener('touchstart', (e) => {
     touchN = e.touches.length;
     if (mode === 2) e.preventDefault();
+    if (orbit && e.touches[0]) { touchLX = e.touches[0].clientX; touchLY = e.touches[0].clientY; moved = 0; }
   }, { passive: false });
   canvas.addEventListener('touchmove', (e) => {
     if (mode !== 2 || !e.touches.length) return;
     const t = e.touches[0];
-    if (touchLX != null) { lookX += (t.clientX - touchLX) * 1.4; lookY += (t.clientY - touchLY) * 1.4; }
+    if (orbit && e.touches.length === 1 && touchLX != null) {
+      orbitYaw -= (t.clientX - touchLX) * 0.007;
+      orbitPitch = Math.max(0.08, Math.min(1.25, orbitPitch + (t.clientY - touchLY) * 0.006));
+      moved += Math.abs(t.clientX - touchLX) + Math.abs(t.clientY - touchLY);
+      applyOrbitPose();
+    } else if (orbit && e.touches.length >= 2) {
+      orbitDist = Math.min(180, Math.max(4, orbitDist * 0.985));
+      applyOrbitPose();
+    } else if (touchLX != null) {
+      lookX += (t.clientX - touchLX) * 1.4; lookY += (t.clientY - touchLY) * 1.4;
+    }
     touchLX = t.clientX; touchLY = t.clientY; touchN = e.touches.length;
     e.preventDefault();
   }, { passive: false });
-  canvas.addEventListener('touchend', (e) => { touchN = e.touches.length; if (!e.touches.length) { touchLX = null; touchLY = null; } });
+  canvas.addEventListener('touchend', (e) => {
+    const t = e.changedTouches && e.changedTouches[0];
+    if (orbit && e.touches.length === 0 && moved < 8 && t) dropRipple(t.clientX, t.clientY);
+    touchN = e.touches.length;
+    if (!e.touches.length) { touchLX = null; touchLY = null; }
+  });
   document.addEventListener('pointerlockchange', () => {
-    if (document.pointerLockElement !== $('c') && mode === 2 && !qstr.has('shot')) openMenu();
+    if (document.pointerLockElement !== $('c') && mode === 2 && !orbit && !qstr.has('shot')) openMenu();
   });
 }
 let touchLX = null, touchLY = null;
@@ -631,10 +890,11 @@ let introT = 0, introFrom = null, introTo = null;
 function openMenu() {
   if (mode === 0) return;
   mode = 0;
-  document.body.classList.remove('playing');
+  document.body.classList.remove('playing', 'dock-open');
   if (document.pointerLockElement) document.exitPointerLock();
 }
 function goSpot(i) {
+  orbit = false;
   const s = spots[i];
   if (!s) return;
   camX = s.x; camY = s.y; camZ = s.z; yaw = s.yaw; pitch = s.pitch;
@@ -816,16 +1076,18 @@ async function main() {
     const code = shaderCode(q.hres, q.span);
     const mod = device.createShaderModule({ code: code });
     const blitMod = device.createShaderModule({ code: blitShaderCode() });
+    const simMod = device.createShaderModule({ code: SIM_WGSL });
     const info = await mod.getCompilationInfo();
     const binfo = await blitMod.getCompilationInfo();
-    const errs = info.messages.concat(binfo.messages).filter((m) => m.type === 'error');
+    const sinfo = await simMod.getCompilationInfo();
+    const errs = info.messages.concat(binfo.messages, sinfo.messages).filter((m) => m.type === 'error');
     if (errs.length) {
       fail(errs.map((e) => e.lineNum + ':' + e.linePos + '  ' + e.message).join('\n'));
       return;
     }
 
-    const uf = new Float32Array(128);
-    const ur = new Float32Array(128);
+    const uf = new Float32Array(160);
+    const ur = new Float32Array(160);
     for (let i = 0; i < 8; i++) {
       const w = WAVES[i];
       const L = Math.hypot(w[0], w[1]) || 1;
@@ -834,8 +1096,8 @@ async function main() {
     }
     ur.set(uf);
 
-    const ubuf = device.createBuffer({ size: 512, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const rbuf = device.createBuffer({ size: 512, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const ubuf = device.createBuffer({ size: 640, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 640, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const htex = device.createTexture({
       size: [q.hres, q.hres],
@@ -856,7 +1118,14 @@ async function main() {
     const geoLayout = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
+        { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 2, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
+      ]
+    });
+    const simLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 1, visibility: FS, buffer: { type: 'uniform' } }
       ]
     });
     const waterLayout = device.createBindGroupLayout({
@@ -982,14 +1251,48 @@ async function main() {
       primitive: { topology: 'triangle-list' },
       depthStencil: depthOn('depth24plus', true, 'always')
     });
+    const simPL = device.createPipelineLayout({ bindGroupLayouts: [simLayout] });
+    const simPipe = await pipe({
+      layout: simPL,
+      vertex: { module: simMod, entryPoint: 'vs' },
+      fragment: { module: simMod, entryPoint: 'fs', targets: [{ format: 'rgba16float' }] },
+      primitive: { topology: 'triangle-list' }
+    });
 
     const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
     let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null;
     const READ = qstr.has('read');
     let readTex = null, readDepth = null, readBuf = null, readBpr = 0;
-    let bgGeo, bgGeoR, bgUB, bgUBR, bgBlit, bgWater;
+    let bgGeoSet = [null, null], bgGeoR, bgUB, bgUBR, bgBlit, bgWater;
     let viewW = 2, viewH = 2;
     const hview = htex.createView();
+    const ripTex = [0, 1].map(() => device.createTexture({
+      size: [256, 256],
+      format: 'rgba16float',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    }));
+    const ripViews = ripTex.map((t) => t.createView());
+    const simBuf = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const simU = new Float32Array(12);
+    const simBG = [0, 1].map((i) => device.createBindGroup({
+      layout: simLayout,
+      entries: [
+        { binding: 0, resource: ripViews[i] },
+        { binding: 1, resource: { buffer: simBuf } }
+      ]
+    }));
+    let ripIndex = 0;
+    const simPass = {
+      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }]
+    };
+    {
+      const enc0 = device.createCommandEncoder();
+      for (let i = 0; i < 2; i++) {
+        simPass.colorAttachments[0].view = ripViews[i];
+        enc0.beginRenderPass(simPass).end();
+      }
+      device.queue.submit([enc0.finish()]);
+    }
 
     function destroyTex(t) { if (t) t.destroy(); }
     function resize() {
@@ -1020,8 +1323,16 @@ async function main() {
         readBuf = device.createBuffer({ size: readBpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       }
       const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView();
-      bgGeo = device.createBindGroup({ layout: geoLayout, entries: [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: hview }] });
-      bgGeoR = device.createBindGroup({ layout: geoLayout, entries: [{ binding: 0, resource: { buffer: rbuf } }, { binding: 1, resource: hview }] });
+      const geoGroup = (buf, view) => device.createBindGroup({
+        layout: geoLayout,
+        entries: [
+          { binding: 0, resource: { buffer: buf } },
+          { binding: 1, resource: hview },
+          { binding: 2, resource: view }
+        ]
+      });
+      bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
+      bgGeoR = geoGroup(rbuf, ripViews[0]);
       bgUB = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: ubuf } }] });
       bgUBR = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: rbuf } }] });
       bgBlit = device.createBindGroup({ layout: blitLayout, entries: [
@@ -1093,14 +1404,24 @@ async function main() {
       invert(VP, INV);
       arr.set(VP, 0); arr.set(INV, 16);
       arr[48] = eyeX; arr[49] = eyeY; arr[50] = eyeZ; arr[51] = time;
-      arr[52] = SUN[0]; arr[53] = SUN[1]; arr[54] = SUN[2]; arr[55] = underFlag;
-      arr[56] = 1.08; arr[57] = 0.98; arr[58] = 0.84; arr[59] = 0.92;
+      const ca = Math.cos(wp.sunAng), sa = Math.sin(wp.sunAng);
+      const sx = SUN[0] * ca - SUN[2] * sa;
+      const sz = SUN[0] * sa + SUN[2] * ca;
+      const sl = Math.hypot(sx, SUN[1], sz) || 1;
+      arr[52] = sx / sl; arr[53] = SUN[1] / sl; arr[54] = sz / sl; arr[55] = underFlag;
+      arr[56] = 1.08 * wp.sun; arr[57] = 0.98 * wp.sun; arr[58] = 0.84 * wp.sun; arr[59] = 0.92;
       arr[60] = 0.73; arr[61] = 0.79; arr[62] = 0.84; arr[63] = Math.tan(fov * 0.5);
       arr[64] = right[0]; arr[65] = right[1]; arr[66] = right[2]; arr[67] = viewW / viewH;
       arr[68] = up[0]; arr[69] = up[1]; arr[70] = up[2]; arr[71] = clipBelow;
       arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;
       arr[79] = q.clouds;
       arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0;
+      arr[128] = wp.amp; arr[129] = wp.spd; arr[130] = wp.frq; arr[131] = wp.dir;
+      arr[132] = wp.rough; arr[133] = wp.refl; arr[134] = wp.refr; arr[135] = wp.alpha;
+      arr[136] = wp.sun; arr[137] = wp.sky; arr[138] = wp.layers; arr[139] = wp.paused;
+      arr[140] = wp.deep[0]; arr[141] = wp.deep[1]; arr[142] = wp.deep[2]; arr[143] = wp.depthK;
+      arr[144] = wp.shal[0]; arr[145] = wp.shal[1]; arr[146] = wp.shal[2]; arr[147] = wp.rip;
+      arr[148] = simOx; arr[149] = simOz; arr[150] = simDomain; arr[151] = wp.cx;
     }
 
     device.lost.then((info) => { window.__gpuerr = 'lost ' + (info && info.message); console.error('LOST', info && info.message); });
@@ -1110,7 +1431,8 @@ async function main() {
     function frameBody(now) {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      time += dt;
+      if (mode === 2) { if (!wp.paused) time += dt * wp.sim; }
+      else time += dt;
       frames++;
       if (!ready && frames > 8) {
         ready = true;
@@ -1148,6 +1470,21 @@ async function main() {
         pitch = introFrom.pitch + (introTo.pitch - introFrom.pitch) * t;
         if (Math.abs(lookX) + Math.abs(lookY) > 12) introT = 1;
         if (introT >= 1) { mode = 2; showHint = 7; fly = false; dive = 0; }
+      } else if (mode === 2 && orbit) {
+        const ofx = Math.sin(orbitYaw), ofz = -Math.cos(orbitYaw);
+        const orx = Math.cos(orbitYaw), orz = Math.sin(orbitYaw);
+        const osp = (K.ShiftLeft || K.ShiftRight) ? 22 : 9;
+        if (K.KeyW) { targetX += ofx * osp * dt; targetZ += ofz * osp * dt; }
+        if (K.KeyS) { targetX -= ofx * osp * dt; targetZ -= ofz * osp * dt; }
+        if (K.KeyD) { targetX += orx * osp * dt; targetZ += orz * osp * dt; }
+        if (K.KeyA) { targetX -= orx * osp * dt; targetZ -= orz * osp * dt; }
+        if (K.KeyE || K.Space) orbitDist = Math.max(4, orbitDist - 16 * dt);
+        if (K.KeyQ) orbitDist = Math.min(160, orbitDist + 16 * dt);
+        applyOrbitPose();
+        const orr = Math.hypot(camX, camZ);
+        if (orr > 980) { camX *= 980 / orr; camZ *= 980 / orr; }
+        if (camY > 320) camY = 320;
+        if (camY < 0.35) camY = 0.35;
       } else if (mode === 2) {
         yaw += lookX * 0.00215; pitch -= lookY * 0.00215;
         pitch = Math.max(-1.4, Math.min(1.4, pitch));
@@ -1249,7 +1586,35 @@ async function main() {
         device.queue.writeBuffer(birdInstB, 0, birdData);
       }
 
+      if (pendingSplat && !wp.paused) {
+        simU[0] = pendingSplat.x; simU[1] = pendingSplat.z; simU[2] = pendingSplat.s; simU[3] = pendingSplat.r;
+        pendingSplat = null;
+      } else simU[2] = 0;
+      simU[4] = Math.min(0.4, 0.16 * wp.ripSpd * wp.sim);
+      simU[5] = 0.994;
+      simU[6] = simDomain;
+      simU[8] = simOx; simU[9] = simOz;
+      device.queue.writeBuffer(simBuf, 0, simU);
+
       const enc = device.createCommandEncoder();
+      if (mode === 2 && !wp.paused) {
+        if (ripClear) {
+          for (let i = 0; i < 2; i++) {
+            simPass.colorAttachments[0].view = ripViews[i];
+            enc.beginRenderPass(simPass).end();
+          }
+          ripClear = 0;
+          ripIndex = 0;
+        }
+        simPass.colorAttachments[0].view = ripViews[1 - ripIndex];
+        const rpSim = enc.beginRenderPass(simPass);
+        rpSim.setPipeline(simPipe);
+        rpSim.setBindGroup(0, simBG[ripIndex]);
+        rpSim.draw(3);
+        rpSim.end();
+        ripIndex = 1 - ripIndex;
+      }
+      const geoNow = bgGeoSet[ripIndex];
       if (uf[86] > 0.5) {
         reflPass.colorAttachments[0].view = reflTex.createView();
         reflPass.depthStencilAttachment.view = reflDepth.createView();
@@ -1260,18 +1625,18 @@ async function main() {
       scenePass.colorAttachments[0].view = sceneTex.createView();
       scenePass.depthStencilAttachment.view = sceneDepth.createView();
       const sp = enc.beginRenderPass(scenePass);
-      drawWorld(sp, bgUB, bgGeo, true);
+      drawWorld(sp, bgUB, geoNow, true);
       sp.end();
 
       const drawSwap = (colorView, depthView) => {
         swapPass.colorAttachments[0].view = colorView;
         swapPass.depthStencilAttachment.view = depthView;
-        const wp = enc.beginRenderPass(swapPass);
-        wp.setPipeline(pipes.blit); wp.setBindGroup(0, bgBlit); wp.draw(3);
-        wp.setPipeline(pipes.water); wp.setBindGroup(0, bgGeo); wp.setBindGroup(1, bgWater);
-        wp.setVertexBuffer(0, waterVB); wp.setIndexBuffer(waterIB, 'uint32');
-        wp.drawIndexed(water.idx.length);
-        wp.end();
+        const pass = enc.beginRenderPass(swapPass);
+        pass.setPipeline(pipes.blit); pass.setBindGroup(0, bgBlit); pass.draw(3);
+        pass.setPipeline(pipes.water); pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgWater);
+        pass.setVertexBuffer(0, waterVB); pass.setIndexBuffer(waterIB, 'uint32');
+        pass.drawIndexed(water.idx.length);
+        pass.end();
       };
       if (READ && readTex) drawSwap(readTex.createView(), readDepth.createView());
       drawSwap(context.getCurrentTexture().createView(), swapDepth.createView());
@@ -1333,15 +1698,15 @@ async function main() {
     }
 
     bootKeys();
+    bindStudio();
     goEl.addEventListener('click', () => {
       if (!audio) { audio = makeAudio(); if (audio) audio.ac.resume(); }
-      const s = spots[0];
-      introFrom = { x: camX, y: camY, z: camZ, yaw: yaw, pitch: pitch };
-      introTo = { x: s.x, y: s.y, z: s.z, yaw: s.yaw, pitch: s.pitch };
-      introT = 0;
-      mode = 1;
-      document.body.classList.add('playing');
-      $('c').requestPointerLock();
+      document.body.classList.add('playing', 'studio', 'dock-open');
+      orbit = true;
+      applyPreset('tropical', true);
+      mode = 2;
+      showHint = 8;
+      $('hint').textContent = 'Drag to orbit · scroll to zoom · click the water';
     });
     menuBtn.addEventListener('click', () => {
       if (mode === 0) {
@@ -1359,6 +1724,15 @@ async function main() {
       }
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';
+    } else if (qstr.has('studio')) {
+      document.body.classList.add('playing', 'studio');
+      if (!qstr.has('nodock')) document.body.classList.add('dock-open');
+      orbit = true;
+      applyPreset(qstr.get('preset') || 'tropical', true);
+      mode = 2;
+      barEl.parentElement.hidden = true;
+      statusEl.textContent = '';
+      if (qstr.has('read')) pendingSplat = { x: targetX, z: targetZ, s: 0.5, r: 1.8 };
     }
 
     requestAnimationFrame(frame);

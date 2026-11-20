@@ -28,9 +28,16 @@ function shaderCode(res, span) {
   pad0: f32,
   waves: array<vec4<f32>, 8>,
   steep: array<vec4<f32>, 2>,
+  ctrl: vec4<f32>,
+  mat: vec4<f32>,
+  lit: vec4<f32>,
+  deepC: vec4<f32>,
+  shalC: vec4<f32>,
+  ripO: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var htex: texture_2d<f32>;
+@group(0) @binding(2) var ripTex: texture_2d<f32>;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
@@ -120,7 +127,7 @@ fn skyColor(rd: vec3<f32>) -> vec3<f32> {
       col = mix(col, cc, dens * fade * 0.92);
     }
   }
-  return col;
+  return col * max(F.lit.y, 0.0);
 }
 
 fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
@@ -416,22 +423,30 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
   var brk = 0.0;
   let D = max(depth, 0.25);
   let dist = length(F.camPos.xz - xz);
-  let kP = 6.2831853 / F.waves[0].w;
+  let ampK = max(F.ctrl.x, 0.0);
+  let spdK = F.ctrl.y;
+  let frqK = max(F.ctrl.z, 0.2);
+  let cs = cos(F.ctrl.w);
+  let sn = sin(F.ctrl.w);
+  let detailK = max(F.ripO.w, 0.0);
+  let kP = 6.2831853 / F.waves[0].w * frqK;
   let wP = sqrt(G * kP);
   for (var i = 0; i < 8; i++) {
+    if (f32(i) >= F.lit.z) { break; }
     let w = F.waves[i];
-    let dir = w.xy;
-    let k = 6.2831853 / w.w;
-    let fade = waveGain(w.w, dist);
-    let feel = 1.0 - smoothstep(w.w * 0.08, w.w * 0.45, D);
-    var As = w.z * scale * fade * (1.0 + feel * 0.85);
+    let dir = vec2<f32>(w.x * cs - w.y * sn, w.x * sn + w.y * cs);
+    let len = w.w / frqK;
+    let k = 6.2831853 / len;
+    let fade = waveGain(len, dist) * select(1.0, detailK, i >= 4);
+    let feel = 1.0 - smoothstep(len * 0.08, len * 0.45, D);
+    var As = w.z * ampK * scale * fade * (1.0 + feel * 0.85);
     let Q = min(steepQ(i) + feel * 0.45, 1.05);
     let steep = k * As * Q;
     if (steep > 0.72) { As *= 0.72 / steep; }
     let collapse = 1.0 - smoothstep(0.35, 1.6, D);
     As *= 1.0 - collapse * 0.65;
-    var omega = sqrt(G * k);
-    if (i == 1) { omega = wP * (k / kP); }
+    var omega = sqrt(G * k) * spdK;
+    if (i == 1) { omega = wP * (k / kP) * spdK; }
     let phase = k * dot(dir, xz) - omega * F.time;
     let s = sin(phase);
     let c = cos(phase);
@@ -460,7 +475,7 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
           + cos(along * 6.2 - F.time * 4.0) * 0.3
           + cos(along * 15.0 + F.time * 6.4) * 0.16 * fine
           + cos(dot(xz, cross) * 9.0 + F.time * 4.6) * 0.1 * fine;
-  let amp = 0.06 * detail;
+  let amp = 0.06 * detail * F.shalC.w * max(F.ripO.w, 0.0);
   n.x += (wind.x * rip + cross.x * rip * 0.25) * amp;
   n.z += (wind.y * rip + cross.y * rip * 0.25) * amp;
   var o: Sea;
@@ -525,6 +540,20 @@ fn warp(t: f32) -> f32 {
   let u = (exp(k * abs(x)) - 1.0) / (exp(k) - 1.0);
   return sign(x) * u * 0.5 + 0.5;
 }
+fn ripAt(xz: vec2<f32>) -> vec3<f32> {
+  let dom = max(F.ripO.z, 1.0);
+  let uv = (xz - F.ripO.xy) / dom;
+  let fade = smoothstep(0.0, 0.07, uv.x) * smoothstep(1.0, 0.93, uv.x)
+           * smoothstep(0.0, 0.07, uv.y) * smoothstep(1.0, 0.93, uv.y);
+  if (fade <= 0.0) { return vec3<f32>(0.0); }
+  let p = clamp(vec2<i32>(uv * 255.0), vec2<i32>(0), vec2<i32>(254));
+  let h = textureLoad(ripTex, p, 0).r;
+  let hx = textureLoad(ripTex, p + vec2<i32>(1, 0), 0).r;
+  let hz = textureLoad(ripTex, p + vec2<i32>(0, 1), 0).r;
+  let e = dom / 255.0;
+  let k = F.shalC.w * fade;
+  return vec3<f32>(h * k, (h - hx) / e * k * 0.85, (h - hz) / e * k * 0.85);
+}
 @vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
   let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
   let field = sampleField(xz);
@@ -534,6 +563,7 @@ fn warp(t: f32) -> f32 {
   let reach = mix(900.0, 260.0, sat(F.camPos.y / 32.0));
   let geom = smoothstep(reach, reach * 0.2, dist);
   var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.04, 1.0, geom), xz.y + s.disp.z * geom);
+  w.y += ripAt(xz).x * geom;
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -553,10 +583,12 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let scale = field.y;
   let bed = field.x;
   let S = seaAt(in.xz0, scale, max(-bed, 0.2));
-  let N = S.nrm;
+  let rip = ripAt(in.xz0);
+  let N = normalize(S.nrm + vec3<f32>(rip.y, 0.0, rip.z));
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+  let reflK = sat(F.mat.y);
   let distS = length(in.world - F.camPos);
   let crest = smoothstep(0.78, 0.42, S.jac) * smoothstep(0.25, 0.7, scale);
   let foam = sat(max(crest, S.brk * 0.85));
@@ -595,13 +627,13 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
         let edge = smoothstep(0.0, 0.05, uv.x) * smoothstep(1.0, 0.95, uv.x)
                  * smoothstep(0.0, 0.05, uv.y) * smoothstep(1.0, 0.95, uv.y);
         let rs = textureSampleLevel(reflTex, reflSamp, uv, 0.0);
-        reflCol = mix(reflCol, rs.rgb, rs.a * edge * (1.0 - foam));
+        reflCol = mix(reflCol, rs.rgb, rs.a * edge * (1.0 - foam) * reflK);
       }
     }
   }
 
   let ndl = max(dot(N, F.sunDir), 0.0);
-  var base = vec3<f32>(0.01, 0.05, 0.11);
+  var base = F.deepC.rgb;
   var seeBottom = 0.0;
   if (dep < 0.9995) {
     var look = in.clip.xy;
@@ -609,29 +641,30 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     var d = in.world.y - sp.y;
     if (d > -0.05) {
       // The surface bends the view of the bottom. Reject a sample that lands on something above the water.
-      let bend = N.xz * clamp(d, 0.0, 2.4) * 16.0;
+      let bend = N.xz * clamp(d, 0.0, 2.4) * 16.0 * F.mat.z;
       let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
       let rd = textureLoad(sceneDepth, vec2<i32>(shifted), 0);
       if (rd < 0.999) {
         let rw = worldAt(shifted, rd);
         if (rw.y < in.world.y - 0.03) { look = shifted; sp = rw; d = in.world.y - rw.y; }
       }
-      let trans = exp(-max(d, 0.04) * vec3<f32>(0.45, 0.13, 0.08));
+      let trans = exp(-max(d, 0.04) * vec3<f32>(0.45, 0.13, 0.08) * max(F.deepC.w, 0.05));
       let sceneCol = textureLoad(sceneTex, vec2<i32>(look), 0).rgb;
-      base = sceneCol * trans + vec3<f32>(0.02, 0.13, 0.16) * (1.0 - trans);
+      base = sceneCol * trans + F.shalC.rgb * (1.0 - trans);
       seeBottom = exp(-max(d, 0.0) * 0.85);
     }
   }
   let nearW = seaFade(distS);
   base *= 0.9 + 0.16 * ndl * nearW;
   base = mix(base, vec3<f32>(0.93, 0.95, 0.93), foam * nearW * 0.75);
+  base = mix(F.deepC.rgb, base, sat(F.mat.w));
 
-  let fresB = fres * (1.0 - seeBottom * 0.72);
+  let fresB = fres * reflK * (1.0 - seeBottom * 0.72);
   var col = mix(base, reflCol, fresB * (1.0 - foam * nearW * 0.65));
   let H = normalize(V + F.sunDir);
   let ndh = max(dot(N, H), 0.0);
-  let power = mix(360.0, 72.0, sat(distS / 200.0));
-  col += F.sunCol * pow(ndh, power) * fres * 8.0 * nearW;
+  let power = mix(360.0, 72.0, sat(distS / 200.0)) * mix(1.0, 0.22, sat(F.mat.x));
+  col += F.sunCol * pow(ndh, power) * fres * reflK * 8.0 * nearW;
   let sss = pow(sat(dot(-V, F.sunDir)), 4.0) * sat(S.disp.y) * sat(1.0 - N.y);
   col += vec3<f32>(0.2, 0.55, 0.38) * sss * 0.7;
 
