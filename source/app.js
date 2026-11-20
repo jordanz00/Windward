@@ -526,19 +526,21 @@ function smooth01(e0, e1, x) {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
 }
-const WATER = {
-  calm: { amp: 0.48, spd: 0.7, frq: 0.78, dir: 0, layers: 6, cx: 0.65, rough: 0.12, refl: 1.05, refr: 0.72, alpha: 1, depthK: 0.72, sun: 1, sky: 1, sunAng: 0, sim: 0.85, rip: 0.5, ripSpd: 0.75, disturb: 0.65, ripSize: 1.4, deep: [0.012, 0.05, 0.12], shal: [0.04, 0.16, 0.18], dist: 42, pitch: 0.22, spot: 4 },
-  tropical: { amp: 0.72, spd: 0.9, frq: 0.95, dir: 0.08, layers: 8, cx: 1, rough: 0.08, refl: 0.95, refr: 1.15, alpha: 1, depthK: 0.62, sun: 1.08, sky: 1.04, sunAng: -0.15, sim: 1, rip: 0.85, ripSpd: 1, disturb: 1, ripSize: 1.3, deep: [0.01, 0.09, 0.12], shal: [0.05, 0.32, 0.28], dist: 22, pitch: 0.38, spot: 3 },
-  deep: { amp: 1.35, spd: 0.82, frq: 0.7, dir: 0, layers: 8, cx: 0.85, rough: 0.18, refl: 1.15, refr: 0.65, alpha: 0.82, depthK: 1.45, sun: 0.88, sky: 0.82, sunAng: 0.1, sim: 0.9, rip: 0.65, ripSpd: 0.85, disturb: 1.1, ripSize: 1.8, deep: [0.004, 0.018, 0.05], shal: [0.012, 0.06, 0.09], dist: 34, pitch: 0.26, spot: 4 },
-  pool: { amp: 0.05, spd: 0.45, frq: 1.7, dir: 0, layers: 2, cx: 0.35, rough: 0.02, refl: 1.25, refr: 1.45, alpha: 1, depthK: 0.28, sun: 1.15, sky: 1.08, sunAng: 0.35, sim: 1, rip: 1.35, ripSpd: 0.7, disturb: 0.85, ripSize: 0.9, deep: [0.02, 0.16, 0.2], shal: [0.2, 0.48, 0.44], dist: 12, pitch: 0.82, spot: 3 },
-  lake: { amp: 0.22, spd: 0.5, frq: 1.05, dir: 0.45, layers: 5, cx: 0.7, rough: 0.16, refl: 1, refr: 0.85, alpha: 0.95, depthK: 0.9, sun: 0.95, sky: 0.98, sunAng: 0.2, sim: 0.8, rip: 0.45, ripSpd: 0.6, disturb: 0.7, ripSize: 1.5, deep: [0.02, 0.06, 0.07], shal: [0.06, 0.16, 0.12], dist: 28, pitch: 0.3, spot: 3 },
-  storm: { amp: 1.85, spd: 1.35, frq: 1.12, dir: 0.55, layers: 8, cx: 1.45, rough: 0.48, refl: 0.72, refr: 0.55, alpha: 0.7, depthK: 1.25, sun: 0.5, sky: 0.55, sunAng: 0.6, sim: 1.2, rip: 1.4, ripSpd: 1.55, disturb: 1.6, ripSize: 2.2, deep: [0.008, 0.02, 0.035], shal: [0.03, 0.07, 0.08], dist: 28, pitch: 0.3, spot: 4 },
-  shallow: { amp: 0.32, spd: 1.05, frq: 1.25, dir: 0, layers: 7, cx: 1.1, rough: 0.06, refl: 0.62, refr: 1.4, alpha: 1, depthK: 0.32, sun: 1.12, sky: 1.05, sunAng: -0.05, sim: 1, rip: 1.15, ripSpd: 1.1, disturb: 1, ripSize: 1.2, deep: [0.04, 0.14, 0.12], shal: [0.22, 0.42, 0.28], dist: 14, pitch: 0.7, spot: 3 }
+const PLACES = {
+  lagoon: { title: 'Tropical Lagoon', line: 'Clear water over pale sand', swatch: 'linear-gradient(#cfe7ea, #2f9d96 46%, #e4d2ae)', amp: 0.55, spd: 0.85, frq: 0.9, dir: 0.08, layers: 7, cx: 0.9, rough: 0.06, refl: 0.9, refr: 1.2, alpha: 1, depthK: 0.55, sun: 1.08, sky: 1.05, sunAng: -0.1, sim: 1, rip: 0.75, ripSpd: 0.95, disturb: 0.85, ripSize: 1.15, deep: [0.01, 0.1, 0.13], shal: [0.06, 0.34, 0.3], mood: [0.55, 0, 0.12, 0.65], dist: 22, pitch: 0.36, spot: 3 },
+  ocean: { title: 'Open Ocean', line: 'Long swell running to the horizon', swatch: 'linear-gradient(#b7cbe4, #1d5f98 42%, #0c335c)', amp: 1.15, spd: 0.78, frq: 0.62, dir: 0.04, layers: 8, cx: 0.72, rough: 0.14, refl: 1.12, refr: 0.68, alpha: 0.9, depthK: 1.35, sun: 1, sky: 1, sunAng: 0.05, sim: 0.9, rip: 0.5, ripSpd: 0.8, disturb: 0.75, ripSize: 1.7, deep: [0.006, 0.028, 0.075], shal: [0.02, 0.09, 0.13], mood: [0.22, 0.04, 0.32, 0.8], dist: 52, pitch: 0.16, spot: 4 },
+  cove: { title: 'Hidden Cove', line: 'Quiet water under the cliff', swatch: 'linear-gradient(#c5d0c4, #6e9084 44%, #314e4c)', amp: 0.58, spd: 0.92, frq: 1.02, dir: 0.32, layers: 6, cx: 0.78, rough: 0.1, refl: 0.86, refr: 1.02, alpha: 1, depthK: 0.82, sun: 0.96, sky: 0.98, sunAng: 0.22, sim: 0.95, rip: 0.65, ripSpd: 0.85, disturb: 0.8, ripSize: 1.05, deep: [0.012, 0.055, 0.09], shal: [0.05, 0.2, 0.18], mood: [0.32, 0.1, 0.22, 1.0], dist: 18, pitch: 0.4, spot: 1 },
+  lake: { title: 'Calm Lake', line: 'A glass surface and a long reflection', swatch: 'linear-gradient(#e4ebe6, #8aa4a6 52%, #3c5552)', amp: 0.1, spd: 0.38, frq: 0.88, dir: 0.2, layers: 4, cx: 0.4, rough: 0.03, refl: 1.28, refr: 0.7, alpha: 0.94, depthK: 1.05, sun: 0.9, sky: 0.96, sunAng: 0.16, sim: 0.65, rip: 0.32, ripSpd: 0.5, disturb: 0.5, ripSize: 1.7, deep: [0.014, 0.042, 0.05], shal: [0.04, 0.11, 0.09], mood: [0.12, 0.14, 0.48, 0.2], dist: 30, pitch: 0.12, spot: 3 },
+  storm: { title: 'Stormy Ocean', line: 'A heavy sky and a short, steep sea', swatch: 'linear-gradient(#8b9094, #2a3842 48%, #141c22)', amp: 1.42, spd: 1.18, frq: 0.92, dir: 0.35, layers: 8, cx: 1.15, rough: 0.2, refl: 0.78, refr: 0.55, alpha: 0.8, depthK: 1.2, sun: 0.46, sky: 0.66, sunAng: 0.42, sim: 1.05, rip: 0.9, ripSpd: 1.15, disturb: 1.05, ripSize: 1.6, deep: [0.01, 0.025, 0.04], shal: [0.025, 0.06, 0.07], mood: [0, 0.62, 0.38, 1.05], dist: 34, pitch: 0.4, spot: 4 },
+  reef: { title: 'Shallow Reef', line: 'The bottom showing through turquoise', swatch: 'linear-gradient(#d7f0ea, #2eae9e 40%, #e7d3a4)', amp: 0.26, spd: 0.95, frq: 1.18, dir: 0, layers: 6, cx: 0.95, rough: 0.05, refl: 0.55, refr: 1.45, alpha: 1, depthK: 0.28, sun: 1.12, sky: 1.06, sunAng: -0.04, sim: 1, rip: 0.85, ripSpd: 1, disturb: 0.75, ripSize: 0.95, deep: [0.02, 0.15, 0.15], shal: [0.22, 0.46, 0.32], mood: [0.62, 0, 0.08, 0.35], dist: 16, pitch: 0.78, tx: 196, tz: -2, yaw: 2.6 },
+  pool: { title: 'Swimming Pool', line: 'Still water, and the sand underneath', swatch: 'linear-gradient(#e7f2f2, #8fd0cc 58%, #d5e0cf)', amp: 0.035, spd: 0.32, frq: 1.7, dir: 0, layers: 2, cx: 0.22, rough: 0.02, refl: 1.1, refr: 1.5, alpha: 1, depthK: 0.2, sun: 1.1, sky: 1.06, sunAng: 0.18, sim: 1, rip: 0.5, ripSpd: 0.6, disturb: 0.55, ripSize: 0.65, deep: [0.02, 0.18, 0.22], shal: [0.28, 0.52, 0.46], mood: [0.35, 0, 0.04, 0.12], dist: 9, pitch: 1.02, spot: 3 }
 };
+const PLACE_ALIAS = { tropical: 'lagoon', calm: 'ocean', deep: 'ocean', shallow: 'reef', storm: 'storm', pool: 'pool', lake: 'lake', lagoon: 'lagoon', ocean: 'ocean', cove: 'cove', reef: 'reef' };
+const WP_KEYS = ['amp', 'spd', 'frq', 'dir', 'layers', 'cx', 'rough', 'refl', 'refr', 'alpha', 'depthK', 'sun', 'sky', 'sunAng', 'sim', 'rip', 'ripSpd', 'disturb', 'ripSize'];
 const wp = {
   amp: 1, spd: 1, frq: 1, dir: 0, layers: 8, cx: 1, rough: 0, refl: 1, refr: 1, alpha: 1, depthK: 1,
   sun: 1, sky: 1, sunAng: 0, sim: 1, rip: 1, ripSpd: 1, disturb: 1, ripSize: 1.3, paused: 0,
-  deep: [0.01, 0.05, 0.11], shal: [0.02, 0.13, 0.16]
+  deep: [0.01, 0.05, 0.11], shal: [0.02, 0.13, 0.16], mood: [0, 0, 0, 1]
 };
 let orbit = false;
 let orbitYaw = 0.5, orbitPitch = 0.38, orbitDist = 28;
@@ -547,7 +549,8 @@ let simOx = -60, simOz = -60;
 const simDomain = 120;
 let pendingSplat = null;
 let ripClear = 0;
-const home = { yaw: 0.5, pitch: 0.38, dist: 28, tx: 0, tz: 0 };
+let trip = null;
+let capTimer = 0;
 let downX = 0, downY = 0, moved = 0;
 
 function waveY(world, x, z, time) {
@@ -579,13 +582,49 @@ function waveY(world, x, z, time) {
   return y;
 }
 
-function aimAtBeach(i) {
-  const s = spots[i == null ? 3 : i] || spots[0];
-  if (!s) return;
-  const fx = Math.sin(s.yaw), fz = -Math.cos(s.yaw);
-  targetX = s.x + fx * 14;
-  targetZ = s.z + fz * 14;
-  orbitYaw = s.yaw + Math.PI;
+function lerpAng(a, b, u) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * u;
+}
+function ease01(t) {
+  const x = Math.max(0, Math.min(1, t));
+  return x * x * (3 - 2 * x);
+}
+function copyWp() {
+  const o = { deep: wp.deep.slice(), shal: wp.shal.slice(), mood: wp.mood.slice() };
+  WP_KEYS.forEach((k) => { o[k] = wp[k]; });
+  return o;
+}
+function mixWp(a, b, u) {
+  WP_KEYS.forEach((k) => {
+    wp[k] = (k === 'dir' || k === 'sunAng') ? lerpAng(a[k], b[k], u) : a[k] + (b[k] - a[k]) * u;
+  });
+  for (let i = 0; i < 3; i++) {
+    wp.deep[i] = a.deep[i] + (b.deep[i] - a.deep[i]) * u;
+    wp.shal[i] = a.shal[i] + (b.shal[i] - a.shal[i]) * u;
+  }
+  for (let i = 0; i < 4; i++) wp.mood[i] = a.mood[i] + (b.mood[i] - a.mood[i]) * u;
+}
+function putPlace(p) {
+  WP_KEYS.forEach((k) => { wp[k] = p[k]; });
+  wp.deep[0] = p.deep[0]; wp.deep[1] = p.deep[1]; wp.deep[2] = p.deep[2];
+  wp.shal[0] = p.shal[0]; wp.shal[1] = p.shal[1]; wp.shal[2] = p.shal[2];
+  wp.mood[0] = p.mood[0]; wp.mood[1] = p.mood[1]; wp.mood[2] = p.mood[2]; wp.mood[3] = p.mood[3];
+}
+function destOf(p) {
+  let tx, tz, yaw;
+  if (p.tx != null) {
+    tx = p.tx; tz = p.tz; yaw = p.yaw;
+  } else {
+    const s = spots[p.spot] || spots[0];
+    const fx = Math.sin(s.yaw), fz = -Math.cos(s.yaw);
+    tx = s ? s.x + fx * 14 : 0;
+    tz = s ? s.z + fz * 14 : 0;
+    yaw = s ? s.yaw + Math.PI : 0;
+  }
+  return { yaw: yaw, pitch: p.pitch, dist: p.dist, tx: tx, tz: tz };
 }
 function applyOrbitPose() {
   const op = -orbitPitch;
@@ -599,61 +638,68 @@ function applyOrbitPose() {
   yaw = orbitYaw;
   pitch = op;
 }
-function showVal(k, v) {
-  if (k === 'dir' || k === 'sunAng') return Math.round(v * 180 / Math.PI) + '°';
-  if (k === 'layers') return String(Math.round(v));
-  return Number(v).toFixed(2);
+function showCaption(p) {
+  const el = $('caption');
+  if (!el) return;
+  el.replaceChildren();
+  const b = document.createElement('b');
+  b.textContent = p.title;
+  const s = document.createElement('span');
+  s.textContent = p.line;
+  el.append(b, s);
+  el.classList.add('show');
+  capTimer = 3.6;
 }
-function syncSliders() {
-  document.querySelectorAll('#dock input[data-k]').forEach((el) => {
-    const k = el.dataset.k;
-    if (wp[k] == null) return;
-    el.value = wp[k];
-    const b = el.parentElement.querySelector('b');
-    if (b) b.textContent = showVal(k, wp[k]);
-  });
-  const deep = $('deepcol'), shal = $('shalcol');
-  if (deep) deep.value = toHex(wp.deep);
-  if (shal) shal.value = toHex(wp.shal);
+function markPlace(id) {
+  document.querySelectorAll('#places button').forEach((b) => b.classList.toggle('on', b.dataset.place === id));
 }
-function toHex(rgb) {
-  const g = (v) => Math.round(Math.pow(Math.min(1, Math.max(0, v)), 1 / 2.2) * 255).toString(16).padStart(2, '0');
-  return '#' + g(rgb[0]) + g(rgb[1]) + g(rgb[2]);
-}
-function fromHex(hex, out) {
-  const s = (i) => Math.pow(parseInt(hex.slice(i, i + 2), 16) / 255, 2.2);
-  out[0] = s(1); out[1] = s(3); out[2] = s(5);
-}
-function markCustom() {
-  const sel = $('preset');
-  if (sel && sel.value !== 'custom') sel.value = 'custom';
-}
-function applyPreset(name, moveCam) {
-  const p = WATER[name];
+function settlePlace(id) {
+  const p = PLACES[id];
   if (!p) return;
-  Object.keys(p).forEach((k) => {
-    if (k === 'deep' || k === 'shal' || k === 'dist' || k === 'pitch' || k === 'spot') return;
-    wp[k] = p[k];
-  });
-  wp.deep[0] = p.deep[0]; wp.deep[1] = p.deep[1]; wp.deep[2] = p.deep[2];
-  wp.shal[0] = p.shal[0]; wp.shal[1] = p.shal[1]; wp.shal[2] = p.shal[2];
-  wp.paused = 0;
-  const pause = $('pause');
-  if (pause) pause.textContent = 'Pause';
-  const sel = $('preset');
-  if (sel) sel.value = name;
-  syncSliders();
-  home.dist = p.dist;
-  home.pitch = p.pitch;
-  if (moveCam) {
-    aimAtBeach(p.spot);
-    orbitDist = p.dist;
-    orbitPitch = p.pitch;
-    home.yaw = orbitYaw;
-    home.tx = targetX;
-    home.tz = targetZ;
-    applyOrbitPose();
-  }
+  putPlace(p);
+  const d = destOf(p);
+  orbitYaw = d.yaw; orbitPitch = d.pitch; orbitDist = d.dist;
+  targetX = d.tx; targetZ = d.tz;
+  applyOrbitPose();
+  markPlace(id);
+  showCaption(p);
+}
+function startTrip(id) {
+  const p = PLACES[id];
+  if (!p) return;
+  const d = destOf(p);
+  trip = {
+    t: 0, dur: 2.8, id: id,
+    from: { yaw: orbitYaw, pitch: orbitPitch, dist: orbitDist, tx: targetX, tz: targetZ, wp: copyWp() },
+    to: d, wp: null
+  };
+  const snap = { deep: p.deep.slice(), shal: p.shal.slice(), mood: p.mood.slice() };
+  WP_KEYS.forEach((k) => { snap[k] = p[k]; });
+  trip.wp = snap;
+  markPlace(id);
+  showCaption(p);
+}
+function advanceTrip(dt) {
+  trip.t += dt;
+  const u = ease01(trip.t / trip.dur);
+  mixWp(trip.from.wp, trip.wp, u);
+  orbitYaw = lerpAng(trip.from.yaw, trip.to.yaw, u);
+  orbitPitch = trip.from.pitch + (trip.to.pitch - trip.from.pitch) * u;
+  orbitDist = trip.from.dist + (trip.to.dist - trip.from.dist) * u;
+  targetX = trip.from.tx + (trip.to.tx - trip.from.tx) * u;
+  targetZ = trip.from.tz + (trip.to.tz - trip.from.tz) * u;
+  applyOrbitPose();
+  const apart = Math.hypot(trip.to.tx - trip.from.tx, trip.to.tz - trip.from.tz);
+  camY += Math.sin(Math.PI * u) * Math.min(72, apart * 0.28);
+  if (camY > 320) camY = 320;
+  if (u >= 1) trip = null;
+}
+function enterPlace(name, animate) {
+  const id = PLACE_ALIAS[name] || name;
+  if (!PLACES[id]) return;
+  orbit = true;
+  if (animate) startTrip(id);
+  else { trip = null; settlePlace(id); }
 }
 function dropRipple(cx, cy) {
   const canvas = $('c');
@@ -682,53 +728,51 @@ function dropRipple(cx, cy) {
   pendingSplat = { x: x, z: z, s: 0.34 * wp.disturb, r: Math.max(0.35, wp.ripSize) };
 }
 function bindStudio() {
-  document.querySelectorAll('#dock input[data-k]').forEach((el) => {
-    el.addEventListener('input', () => {
-      const k = el.dataset.k;
-      wp[k] = parseFloat(el.value);
-      if (k === 'layers') wp.layers = Math.round(wp.layers);
-      const b = el.parentElement.querySelector('b');
-      if (b) b.textContent = showVal(k, wp[k]);
-      markCustom();
+  const nav = $('places');
+  if (!nav) return;
+  Object.keys(PLACES).forEach((id) => {
+    const p = PLACES[id];
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.place = id;
+    b.className = 'card';
+    const sw = document.createElement('i');
+    sw.style.background = p.swatch;
+    const name = document.createElement('b');
+    name.textContent = p.title;
+    const line = document.createElement('span');
+    line.textContent = p.line;
+    b.append(sw, name, line);
+    b.addEventListener('click', () => {
+      document.body.classList.remove('places-open');
+      enterPlace(id, mode === 2);
     });
+    nav.append(b);
   });
-  const deep = $('deepcol'), shal = $('shalcol');
-  if (deep) deep.addEventListener('input', () => { fromHex(deep.value, wp.deep); markCustom(); });
-  if (shal) shal.addEventListener('input', () => { fromHex(shal.value, wp.shal); markCustom(); });
-  const sel = $('preset');
-  if (sel) sel.addEventListener('change', () => { if (sel.value !== 'custom') applyPreset(sel.value, true); });
-  const hide = $('dockhide');
-  if (hide) hide.addEventListener('click', () => document.body.classList.remove('dock-open'));
-  const show = $('dockbtn');
-  if (show) show.addEventListener('click', () => document.body.classList.add('dock-open'));
-  const pause = $('pause');
-  if (pause) pause.addEventListener('click', () => {
-    wp.paused = wp.paused ? 0 : 1;
-    pause.textContent = wp.paused ? 'Play' : 'Pause';
-  });
-  const resetR = $('resetr');
-  if (resetR) resetR.addEventListener('click', () => { pendingSplat = null; ripClear = 1; });
-  const resetC = $('resetc');
-  if (resetC) resetC.addEventListener('click', () => {
-    orbit = true;
-    orbitYaw = home.yaw; orbitPitch = home.pitch; orbitDist = home.dist;
-    targetX = home.tx; targetZ = home.tz;
-    applyOrbitPose();
-  });
-  const full = $('full');
-  if (full) full.addEventListener('click', () => {
-    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
-    else document.exitFullscreen();
-  });
-  const walk = $('walk');
-  if (walk) walk.addEventListener('click', () => {
+  $('placebtn').addEventListener('click', () => document.body.classList.toggle('places-open'));
+  $('walkbtn').addEventListener('click', () => {
+    trip = null;
     orbit = false;
     mode = 2;
-    $('hint').textContent = 'WASD move · mouse look · 1–6 places · Esc menu';
+    document.body.classList.remove('places-open', 'cinema');
+    $('hint').textContent = 'WASD move · mouse look · Q dive · 1–6 places · Esc menu';
     showHint = 6;
     $('hint').classList.add('show');
   });
-  syncSliders();
+  $('watchbtn').addEventListener('click', () => {
+    const on = !document.body.classList.contains('cinema');
+    document.body.classList.toggle('cinema', on);
+    document.body.classList.remove('places-open', 'cinema-peek');
+    if (on && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  });
+  addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) document.body.classList.remove('cinema', 'cinema-peek');
+  });
+  addEventListener('mousemove', (e) => {
+    if (!document.body.classList.contains('cinema')) return;
+    document.body.classList.toggle('cinema-peek', e.clientY > innerHeight - 88);
+  });
 }
 
 const SIM_WGSL = `struct Sim {
@@ -764,8 +808,10 @@ struct SV { @builtin(position) clip: vec4<f32> }
   let xz = S.origin + uv * S.k.z;
   let d = length(xz - S.splat.xy);
   let rad = max(S.splat.w, 0.35);
-  if (S.splat.z != 0.0 && d < rad * 3.0) {
-    nh += S.splat.z * exp(-(d * d) / (rad * rad));
+  if (S.splat.z != 0.0 && d < rad * 3.2) {
+    let g = exp(-(d * d) / (rad * rad));
+    let ring = exp(-(d * d) / (rad * rad * 2.6));
+    nh += S.splat.z * (g * 1.15 - ring * 0.62);
   }
   return vec4<f32>(clamp(nh, -1.6, 1.6), clamp(nv, -0.8, 0.8), 0.0, 1.0);
 }
@@ -814,7 +860,19 @@ function bootKeys() {
     if (e.code === 'KeyM') { muted = !muted; if (audio) audio.master.gain.value = muted ? 0 : 0.9; }
     if (e.code === 'KeyH') statsEl.hidden = !statsEl.hidden;
     if (e.code === 'KeyF' && mode === 2 && !orbit) fly = !fly;
-    if (e.code === 'Escape') openMenu();
+    if (e.code === 'Escape') {
+      if (document.body.classList.contains('cinema')) {
+        document.body.classList.remove('cinema', 'cinema-peek');
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        return;
+      }
+      if (document.body.classList.contains('places-open')) {
+        document.body.classList.remove('places-open');
+        return;
+      }
+      openMenu();
+    }
+    if (e.code === 'KeyC' && mode === 2) $('watchbtn').click();
     if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goSpot(e.code.charCodeAt(5) - 49);
   });
   addEventListener('keyup', (e) => { if (K[e.code] != null) K[e.code] = 0; });
@@ -838,6 +896,7 @@ function bootKeys() {
   addEventListener('mousemove', (e) => {
     if (mode !== 2) return;
     if (orbit && dragging) {
+      if (trip) trip = null;
       orbitYaw -= e.movementX * 0.005;
       orbitPitch = Math.max(0.08, Math.min(1.25, orbitPitch + e.movementY * 0.004));
       moved += Math.abs(e.movementX) + Math.abs(e.movementY);
@@ -855,6 +914,7 @@ function bootKeys() {
     if (mode !== 2 || !e.touches.length) return;
     const t = e.touches[0];
     if (orbit && e.touches.length === 1 && touchLX != null) {
+      if (trip) trip = null;
       orbitYaw -= (t.clientX - touchLX) * 0.007;
       orbitPitch = Math.max(0.08, Math.min(1.25, orbitPitch + (t.clientY - touchLY) * 0.006));
       moved += Math.abs(t.clientX - touchLX) + Math.abs(t.clientY - touchLY);
@@ -890,7 +950,7 @@ let introT = 0, introFrom = null, introTo = null;
 function openMenu() {
   if (mode === 0) return;
   mode = 0;
-  document.body.classList.remove('playing', 'dock-open');
+  document.body.classList.remove('playing', 'places-open', 'cinema', 'cinema-peek');
   if (document.pointerLockElement) document.exitPointerLock();
 }
 function goSpot(i) {
@@ -1422,6 +1482,11 @@ async function main() {
       arr[140] = wp.deep[0]; arr[141] = wp.deep[1]; arr[142] = wp.deep[2]; arr[143] = wp.depthK;
       arr[144] = wp.shal[0]; arr[145] = wp.shal[1]; arr[146] = wp.shal[2]; arr[147] = wp.rip;
       arr[148] = simOx; arr[149] = simOz; arr[150] = simDomain; arr[151] = wp.cx;
+      arr[152] = wp.mood[0]; arr[153] = wp.mood[1]; arr[154] = wp.mood[2]; arr[155] = wp.mood[3];
+      const over = wp.mood[1];
+      arr[60] = 0.73 * (1 - over * 0.4) + over * 0.52;
+      arr[61] = 0.79 * (1 - over * 0.35) + over * 0.54;
+      arr[62] = 0.84 * (1 - over * 0.22) + over * 0.58;
     }
 
     device.lost.then((info) => { window.__gpuerr = 'lost ' + (info && info.message); console.error('LOST', info && info.message); });
@@ -1471,6 +1536,8 @@ async function main() {
         if (Math.abs(lookX) + Math.abs(lookY) > 12) introT = 1;
         if (introT >= 1) { mode = 2; showHint = 7; fly = false; dive = 0; }
       } else if (mode === 2 && orbit) {
+        if (trip) { advanceTrip(dt); }
+        else {
         const ofx = Math.sin(orbitYaw), ofz = -Math.cos(orbitYaw);
         const orx = Math.cos(orbitYaw), orz = Math.sin(orbitYaw);
         const osp = (K.ShiftLeft || K.ShiftRight) ? 22 : 9;
@@ -1485,6 +1552,7 @@ async function main() {
         if (orr > 980) { camX *= 980 / orr; camZ *= 980 / orr; }
         if (camY > 320) camY = 320;
         if (camY < 0.35) camY = 0.35;
+        }
       } else if (mode === 2) {
         yaw += lookX * 0.00215; pitch -= lookY * 0.00215;
         pitch = Math.max(-1.4, Math.min(1.4, pitch));
@@ -1591,7 +1659,7 @@ async function main() {
         pendingSplat = null;
       } else simU[2] = 0;
       simU[4] = Math.min(0.4, 0.16 * wp.ripSpd * wp.sim);
-      simU[5] = 0.994;
+      simU[5] = 0.996;
       simU[6] = simDomain;
       simU[8] = simOx; simU[9] = simOz;
       device.queue.writeBuffer(simBuf, 0, simU);
@@ -1693,6 +1761,10 @@ async function main() {
         hintEl.classList.add('show');
         if (showHint <= 0) hintEl.classList.remove('show');
       }
+      if (capTimer > 0) {
+        capTimer -= dt;
+        if (capTimer <= 0) { const cap = $('caption'); if (cap) cap.classList.remove('show'); }
+      }
       window.__frames = frames;
       requestAnimationFrame(frame);
     }
@@ -1701,12 +1773,12 @@ async function main() {
     bindStudio();
     goEl.addEventListener('click', () => {
       if (!audio) { audio = makeAudio(); if (audio) audio.ac.resume(); }
-      document.body.classList.add('playing', 'studio', 'dock-open');
+      document.body.classList.add('playing', 'studio');
       orbit = true;
-      applyPreset('tropical', true);
       mode = 2;
-      showHint = 8;
-      $('hint').textContent = 'Drag to orbit · scroll to zoom · click the water';
+      enterPlace('lagoon', false);
+      showHint = 7;
+      $('hint').textContent = 'Drag to look · click the water · Places to travel';
     });
     menuBtn.addEventListener('click', () => {
       if (mode === 0) {
@@ -1726,9 +1798,8 @@ async function main() {
       statusEl.textContent = '';
     } else if (qstr.has('studio')) {
       document.body.classList.add('playing', 'studio');
-      if (!qstr.has('nodock')) document.body.classList.add('dock-open');
       orbit = true;
-      applyPreset(qstr.get('preset') || 'tropical', true);
+      enterPlace(qstr.get('preset') || 'lagoon', false);
       mode = 2;
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';

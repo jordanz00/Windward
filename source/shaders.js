@@ -34,6 +34,7 @@ function shaderCode(res, span) {
   deepC: vec4<f32>,
   shalC: vec4<f32>,
   ripO: vec4<f32>,
+  mood: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var htex: texture_2d<f32>;
@@ -111,22 +112,27 @@ fn skyColor(rd: vec3<f32>) -> vec3<f32> {
   let air = pow(1.0 - up, 1.5);
   let warm = vec3<f32>(1.05, 0.68, 0.34);
   col += warm * (pow(sat(mu), 5.0) * 0.16 + pow(sat(mu), 32.0) * 0.38) * (0.25 + air);
-  col += vec3<f32>(1.2, 1.02, 0.88) * pow(sat(mu), 2200.0) * 18.0;
+  let over = sat(F.mood.y);
+  col += vec3<f32>(1.2, 1.02, 0.88) * pow(sat(mu), 2200.0) * 18.0 * (1.0 - over);
   if (rd.y > 0.012) {
     let t = (480.0 - F.camPos.y) / rd.y;
     if (t > 0.0 && t < 12000.0) {
       let hit = F.camPos.xz + rd.xz * t;
       let uv = hit * 0.00022 + vec2<f32>(F.time * 0.0022, F.time * 0.0009);
       let d = cloudDens(uv);
-      let dens = smoothstep(0.40, 0.72, d);
+      let dens = smoothstep(mix(0.40, 0.22, over), mix(0.72, 0.5, over), d);
       let dl = cloudDens(uv + F.sunDir.xz * 0.012);
       let lit = sat(0.22 + (dl - d) * 3.6);
       var cc = mix(vec3<f32>(0.46, 0.50, 0.56), vec3<f32>(1.05, 1.02, 0.98), lit);
       cc += vec3<f32>(1.0, 0.78, 0.48) * pow(sat(mu), 3.0) * dens * 0.22;
       let fade = smoothstep(0.012, 0.18, rd.y) * sat(1.0 - t / 11000.0);
-      col = mix(col, cc, dens * fade * 0.92);
+      col = mix(col, cc, dens * fade * mix(0.92, 1.0, over));
     }
   }
+  let warmK = sat(F.mood.x);
+  col = mix(col, col * vec3<f32>(1.08, 0.97, 0.9) + vec3<f32>(0.04, 0.02, 0.0), warmK * 0.55);
+  col = mix(col, vec3<f32>(0.50, 0.53, 0.56) * (0.45 + 0.7 * up), over * 0.82);
+  col = mix(F.horiz, col, 1.0 - sat(F.mood.z) * 0.28 * (1.0 - up));
   return col * max(F.lit.y, 0.0);
 }
 
@@ -656,7 +662,7 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   }
   let nearW = seaFade(distS);
   base *= 0.9 + 0.16 * ndl * nearW;
-  base = mix(base, vec3<f32>(0.93, 0.95, 0.93), foam * nearW * 0.75);
+  base = mix(base, vec3<f32>(0.93, 0.95, 0.93), foam * nearW * 0.75 * max(F.mood.w, 0.0));
   base = mix(F.deepC.rgb, base, sat(F.mat.w));
 
   let fresB = fres * reflK * (1.0 - seeBottom * 0.72);
