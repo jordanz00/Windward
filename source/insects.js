@@ -32,25 +32,7 @@ function bugLobe(m, x0, x1, ry, rz, yc, zc, tone, n, kind, segs) {
 // leg that walks, g is its stride in metres, signed by which tripod it belongs to; the
 // shader swings the foot by it and leaves the hip where it is.
 function bugLimb(m, pts, r, col, g, kind, sides) {
-  const base = m.pos.length / 3, n = pts.length, S = sides || 3;
-  for (let i = 0; i < n; i++) {
-    const p = pts[i], q = pts[Math.min(i + 1, n - 1)], o = pts[Math.max(i - 1, 0)];
-    let dx = q[0] - o[0], dy = q[1] - o[1], dz = q[2] - o[2];
-    const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
-    let ux = -dz, uy = 0, uz = dx;
-    if (Math.abs(dy) > 0.95) { ux = 1; uz = 0; }
-    const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
-    const vx = dy * uz - dz * uy, vy = dz * ux - dx * uz, vz = dx * uy - dy * ux;
-    const rr = r * (1 - 0.55 * i / (n - 1));
-    for (let k = 0; k < S; k++) {
-      const c = Math.cos(k * 6.2832 / S), s = Math.sin(k * 6.2832 / S), nx = ux * c + vx * s, ny = uy * c + vy * s, nz = uz * c + vz * s;
-      m.v(p[0] + nx * rr, p[1] + ny * rr, p[2] + nz * rr, nx, ny, nz, col[0], col[1], col[2], (g || 0) * i / (n - 1), kind || 0, 0, 0);
-    }
-    if (i) for (let k = 0; k < S; k++) {
-      const a = base + (i - 1) * S + k, b = base + (i - 1) * S + (k + 1) % S;
-      m.tri(a, a + S, b); m.tri(b, a + S, b + S);
-    }
-  }
+  tube(m, pts, sides || 3, false, (t) => [r * (1 - 0.55 * t), col[0], col[1], col[2], (g || 0) * t, kind || 0, 0, 0]);
 }
 // A wing lying flat, hinged on the body's long axis with its root at x0. len is the span,
 // wid the widest chord, e moves the widest point (under 1 toward the root, over 1 toward
@@ -387,7 +369,7 @@ BugLife.prototype.fly = function (a, tx, ty, tz, vmax, acc, dt) {
 };
 // The gust at a place, the same cells the plants bend to.
 BugLife.prototype.blow = function (a, k, dt) {
-  const g = env.speed * (0.4 + 1.4 * vnoise((a.x - env.gustOff[0]) * 0.018, (a.z - env.gustOff[1]) * 0.018) * env.v[5]) * k * dt;
+  const g = envWindAt(a.x, a.z) * k * dt;
   a.x += env.wx0 * g; a.z += env.wz0 * g;
 };
 BugLife.prototype.newHome = function (a, cx, cz) {
@@ -677,10 +659,9 @@ BugLife.prototype.find = function (id, st) {
 const BUG_WGSL = `
 struct BugIn {
   @location(0) p: vec3<f32>,
-  @location(1) n: vec3<f32>,
-  @location(2) c: vec3<f32>,
-  @location(3) sway: f32,
-  @location(4) kind: f32,
+  // As a plant's vertex: normal and kind, colour and sway.
+  @location(1) n: vec4<f32>,
+  @location(2) c: vec4<f32>,
   @location(5) uv: vec2<f32>,
   // Instance: place and heading; size, pitch, roll, wing sweep; tint and glow or wing
   // pattern; wing angle, beat depth, beat phase, walking phase; fade.
@@ -704,20 +685,20 @@ struct BugV {
 // swings from the hip; then the whole animal is rolled, pitched, turned and put in its place.
 fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
   var v = v0;
-  let k = i32(in.kind + 0.5);
+  let k = i32(in.n.w + 0.5);
   if (k == 2 || k == 3) {
-    let side = sign(in.sway);
-    let th = in.i3.x + in.i3.y * sin(in.i3.z - (abs(in.sway) - 1.0) * 1.3);
+    let side = sign(in.c.w);
+    let th = in.i3.x + in.i3.y * sin(in.i3.z - (abs(in.c.w) - 1.0) * 1.3);
     let cs = cos(in.i1.w); let sn = sin(in.i1.w);
     let ct = cos(th); let st = sin(th);
     let zz = v.z * side;
     let x1 = v.x * cs - zz * sn;
     let z1 = v.x * sn + zz * cs;
     v = vec3<f32>(x1, v.y * ct + z1 * st, (z1 * ct - v.y * st) * side);
-  } else if (in.sway != 0.0 && place > 0.5) {
-    let ph = in.i3.w + select(0.0, 3.14159, in.sway < 0.0);
-    v.x += sin(ph) * abs(in.sway);
-    v.y += max(cos(ph), 0.0) * abs(in.sway) * 0.4;
+  } else if (in.c.w != 0.0 && place > 0.5) {
+    let ph = in.i3.w + select(0.0, 3.14159, in.c.w < 0.0);
+    v.x += sin(ph) * abs(in.c.w);
+    v.y += max(cos(ph), 0.0) * abs(in.c.w) * 0.4;
   }
   let cr = cos(in.i1.z); let sr = sin(in.i1.z);
   v = vec3<f32>(v.x, v.y * cr - v.z * sr, v.y * sr + v.z * cr);
@@ -730,11 +711,11 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
 @vertex fn vsBug(in: BugIn) -> BugV {
   var o: BugV;
   o.world = bugTurn(in, in.p, 1.0);
-  if (in.kind > 4.5) { o.world += (F.right * in.uv.x + F.upv * in.uv.y) * 0.06 + normalize(F.camPos - o.world) * 0.03; }
-  o.nrm = bugTurn(in, in.n, 0.0);
-  o.col = in.c * in.i2.rgb;
-  if ((in.kind > 1.5 && in.kind < 2.5) || in.kind > 5.5) { o.col = in.c; }
-  o.kind = in.kind;
+  if (in.n.w > 4.5) { o.world += (F.right * in.uv.x + F.upv * in.uv.y) * 0.06 + normalize(F.camPos - o.world) * 0.03; }
+  o.nrm = bugTurn(in, in.n.xyz, 0.0);
+  o.col = in.c.rgb * in.i2.rgb;
+  if ((in.n.w > 1.5 && in.n.w < 2.5) || in.n.w > 5.5) { o.col = in.c.rgb; }
+  o.kind = in.n.w;
   o.uv = in.uv;
   o.glow = vec2<f32>(in.i2.w, in.i4.x);
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
@@ -743,7 +724,7 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
 @vertex fn vsShadowBug(in: BugIn) -> ShadowV {
   var o: ShadowV;
   o.clip = F.shadowVP * vec4<f32>(bugTurn(in, in.p, 1.0), 1.0);
-  if (in.kind > 4.5) { o.clip = vec4<f32>(0.0, 0.0, 2.0, 1.0); }
+  if (in.n.w > 4.5) { o.clip = vec4<f32>(0.0, 0.0, 2.0, 1.0); }
   return o;
 }
 @fragment fn fsBug(in: BugV) -> @location(0) vec4<f32> {

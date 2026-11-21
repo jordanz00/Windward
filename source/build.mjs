@@ -1,11 +1,19 @@
 import { readFileSync, writeFileSync } from 'fs';
+import { gzipSync } from 'zlib';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
-const js = [read('island.js'), read('shaders.js'), read('ocean.js'), read('shore.js'), read('score.js'), read('fish.js'), read('env.js'), read('insects.js'), read('app.js')].join('\n');
+const parts = ['gpu.js', 'island.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'env.js', 'insects.js', 'app.js'];
+// The source is written to be read. The page that ships is the same text with the
+// comment lines, the blank lines and the indentation taken out: no line is joined to
+// another and no name is changed, so what runs is what is written. --dev keeps it whole.
+const dev = process.argv.includes('--dev');
+const pack = (text) => dev ? text : text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//')).join('\n');
+const jsFull = parts.map(read).join('\n');
+const js = pack(jsFull);
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -14,7 +22,7 @@ const html = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Windward</title>
 <style>
-${css}
+${pack(css)}
 </style>
 </head>
 <body>
@@ -66,5 +74,9 @@ ${js}
 
 const out = join(root, 'index.html');
 writeFileSync(out, html);
-const kb = Buffer.byteLength(html) / 1024;
-console.log('index.html', kb.toFixed(1), 'KB');
+// What the page weighs, said every build so a change in it is seen. Shader source is the
+// text inside the multi-line template strings, which are all WGSL.
+const kb = (n) => (n / 1024).toFixed(1) + ' KB';
+const wgsl = (text) => (text.match(/`[^`]*`/g) || []).filter((t) => t.includes('\n')).reduce((n, t) => n + Buffer.byteLength(t), 0);
+console.log('source     ' + kb(Buffer.byteLength(jsFull) + Buffer.byteLength(css)) + ', of which script ' + kb(Buffer.byteLength(jsFull)) + ' and in it shaders ' + kb(wgsl(jsFull)));
+console.log('index.html ' + kb(Buffer.byteLength(html)) + (dev ? ' (dev build)' : '') + ', gzip ' + kb(gzipSync(html, { level: 9 }).length) + ', of which script ' + kb(Buffer.byteLength(js)) + ' and in it shaders ' + kb(wgsl(js)));

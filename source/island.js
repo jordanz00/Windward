@@ -196,13 +196,6 @@ function makeWorld(res, span, data) {
   return { res: res, span: span, step: (span * 2) / (res - 1), org: -span, data: data };
 }
 
-function buildWorld(res, span) {
-  const data = new Float32Array(res * res * 2);
-  fillHeights(data, res, span, 0, res);
-  fillDamp(data, res, span, 0, res);
-  return makeWorld(res, span, data);
-}
-
 function buildWorldAsync(res, span, progress) {
   const data = new Float32Array(res * res * 2);
   // Yield by the clock, not by the row. A timer per slice costs more than the slice.

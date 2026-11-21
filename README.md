@@ -39,19 +39,21 @@ You stay on the sand. Step into the water and you swim; hold `Q` to go under and
 
 ## How it is built
 
-`source/` is the readable copy. `node source/build.mjs` writes `index.html` next to this file.
+`source/` is the readable copy. `node source/build.mjs` writes `index.html` next to this file and prints the sizes of the source, the page, the script in it and the shaders in that. The page is the source with indentation, blank lines and comment lines taken out; no names are changed and no lines are joined, so an error in the page still points at a line you can find. `node source/build.mjs --dev` writes the page with the source as it is.
 
 | File | What it is |
 |---|---|
+| `source/gpu.js` | Four helpers that every layout, bind group, render target and pass is written with |
 | `source/island.js` | The fixed-seed coast: beach, cliffs, bay, reef, and where the swell is allowed to stand up |
 | `source/shaders.js` | WGSL: sky, terrain, plants, and the water |
-| `source/ocean.js` | The spectral sea: two FFT wave tiles and the slopes that glitter |
+| `source/ocean.js` | The spectral sea: three FFT wave tiles, the slopes that glitter, and the one lookup the sea shader and the surf solver both read them with |
 | `source/shore.js` | Shallow water on the beach: run-up, foam, and the sand it leaves wet |
 | `source/fish.js` | The reef and what lives on it: coral, seagrass, eight kinds of fish, and how they behave |
 | `source/env.js` | The one state everything reads: the hour, the sun and moon, the weather, the wind |
 | `source/insects.js` | Ten kinds of insect, the flowering shrubs they visit, and how they behave |
 | `source/app.js` | WebGPU, the camera, the boats and trees, the sound |
 | `source/ui.css` | The card on top of the picture |
+| `source/build.mjs` | Joins the files above into `index.html` and reports the sizes |
 
 The water is a Gerstner swell running with the wind, with a bound harmonic that peaks the crests. As the bottom rises the crest leans forward and breaks into foam; the lagoon stays sheltered. On the beach a shallow-water grid, finer than the island mesh, takes the swell onto the sand. The water runs up as a thin sheet from its own momentum, and the foam is carried with that flow. The wind sea is two headings on two scales, so the crests do not repeat as one pattern. A third spectral cascade carries the 0.45 to 5 m chop that gives water its texture, the swell stays low offshore and stands up where the bottom shoals, and foam is drawn as a network whose ribbons widen with the simulated density. The interior is forest over leaf litter, rocks are cut along planes, and wet sand reflects the sky. Palms carry feathered fronds, the inland trees are a different shape, and the sound is a drifting surf bed with separate wave breaks and bird calls. Under that, an original score called Beneath the Blue unfolds at a slow tempo: written chords and melodic phrases, played by a pad, a bell, a soft pluck, and a rounded bass. N quiets it. The bracket keys set its presence. The surface mesh is packed tightly around the camera and runs out to the haze, so a crest nearby stays a curve. Past the mesh, the same sea is drawn to the horizon, and the island sits in open water in every direction. Color comes from depth: sand shows through the shallows, red light dies first offshore, and the glancing angle reflects the sky. The surface bends the view of the bottom, and the same waves focus the sun into caustics on the sand. A half-resolution mirror puts the island in the water. The long swell is still Gerstner. The shorter waves are a spectral tile, solved on the GPU, and the sun path is the facets of that surface: a pixel lights only when a facet faces the sun. Under the surface, the disk of sky is the refraction out of the water; outside that cone the surface reflects.
 
@@ -71,7 +73,8 @@ Nothing is allocated per frame on purpose: the uniform buffer, the bird list, an
 - **Shadows.** One depth map covers the island and is redrawn only when the sun moves. A second, 2048 texels across 52 m, follows the viewer so leaflets and trunks cast sharp shadows on the sand nearby.
 - **Sky.** Air and clouds are one small panorama: Rayleigh and Mie scattering, and cumulus marched through a slab with the march starting at each cloud's surface. It is baked a strip per frame and read by the sky, by reflections in water and wet sand, and by the haze.
 - **Sand.** Dry sand is shaded from a height: pits with raised rims, wind ripples in patches, and grain. Each scale is left out once it is smaller than a pixel. Below a ragged line the sand is damp, darker and smooth, and the last high wash has left a wrack line.
-- **Startup.** Render pipelines compile in parallel while the height field and the planting run. The surf simulation warms up over the first frames instead of before them. `window.__perf` holds the time of each startup step in milliseconds, and `?perf` in the address logs it.
+- **Startup.** Pipelines compile in parallel while the height field, the planting, the wave spectra and the surf grid are made, with the sea's shader started first because it takes longest. The first picture waits only for the sky, the land, the plants, their shadows and the sea. The wash on the sand, the shafts in the air, the grass, the birds, fish, insects and rain are drawn from the frame their pipeline arrives, a fraction of a second later. `window.__perf` holds the time of each startup step in milliseconds, and `?perf` in the address logs it.
+- **One of each.** Trunks, limbs, stems, coral branches and insect legs are swept by one `tube` function. Plants, rocks, boats, coral, fish and insects share one 32-byte vertex (position as floats, normal, colour and texture coordinate as half floats) and 16-bit indices. The sea shader and the surf solver read the wave tiles through the same lookup, the two sun glints on water are one GGX lobe, and the gust at a point is one function that the leaves, the birds, the insects and the sound all ask.
 
 ### Under the water
 
@@ -107,7 +110,33 @@ For captures, `?tod=<hour>` sets the clock, `?wx=<clear|clouds|gusts|overcast|dr
 
 `?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
 
-Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, 1.2 to 1.5 s with the reef and the fish, 1.4 to 1.6 s with the weather, the flowering shrubs and the insects (0.1 to 0.2 s more), and 1.5 s with the rebuilt forest trees (1.45 s for the build before them, measured the same way). The built page is 429 KB, 131 KB gzipped; the environment, the insects and their sound are 99 KB of that, the reef and fish 67 KB. Frame rate on real GPUs has not been measured.
+## Size and cost
+
+Measured on a software rasterizer (lavapipe, four cores, no GPU) at High detail, 1400 by 900, standing on the beach. "Before" is the build before the pass that shared the code; "after" is this one. Kilobytes are 1024 bytes.
+
+| | Before | After |
+|---|---|---|
+| Source, all of `source/` but the build script | 427.3 KB | 412.6 KB |
+| of which script | 421.0 KB | 406.3 KB |
+| of which shaders (WGSL) | 132.6 KB | 127.8 KB |
+| `index.html` | 429.5 KB | 332.9 KB |
+| `index.html`, gzipped | 131.5 KB | 102.9 KB |
+| Shader modules | 5 | 4 |
+| Navigation to first picture | 1.39 to 1.47 s | 0.82 to 0.89 s |
+| Navigation to settled frame | 1.51 to 1.61 s | 0.88 to 1.10 s |
+| Buffers allocated | 30.9 MB | 21.4 MB |
+| Textures allocated | 69.2 MB | 53.2 MB |
+| Script time per frame, median over three views | 0.8 to 1.2 ms | 0.9 to 1.1 ms |
+| Render passes per frame | 7 | 7 |
+| Compute passes per frame | 15 | 2 |
+| Compute dispatches per frame | 15 | 15 |
+| Draw calls per frame | 90 | 90 |
+| Triangles per frame, beach | 1.58 M | 1.42 M |
+| Triangles per frame, from the air | 3.41 M | 3.25 M |
+| Buffer writes per frame | 13 | 12 |
+| Buffers, textures or bind groups created per frame | 0 | 0 |
+
+Memory is the sum of what the page asks the GPU for, not what a driver uses. Time on the GPU per frame, and frame rate, cannot be measured without a GPU and have not been.
 
 ## License
 

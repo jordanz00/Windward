@@ -35,29 +35,14 @@ struct ShoreU {
 const NX: u32 = ${SHORE_NX}u;
 const NZ: u32 = ${SHORE_NZ}u;
 
-fn hash21s(p: vec2<f32>) -> f32 {
-  var p3 = fract(vec3<f32>(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
 fn rot2(p: vec2<f32>) -> vec2<f32> {
   let cs = cos(U.dir);
   let sn = sin(U.dir);
   return vec2<f32>(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
 }
+${OCEAN_TAP_WGSL}
 fn oceanSample(xz: vec2<f32>) -> f32 {
-  let p = fract(rot2(xz) / 220.0) * 128.0;
-  let i = vec2<i32>(floor(p));
-  let f = fract(p);
-  let x0 = i.x & 127;
-  let y0 = i.y & 127;
-  let x1 = (i.x + 1) & 127;
-  let y1 = (i.y + 1) & 127;
-  let a = textureLoad(shapeTex, vec2<i32>(x0, y0), 0).x;
-  let b = textureLoad(shapeTex, vec2<i32>(x1, y0), 0).x;
-  let c = textureLoad(shapeTex, vec2<i32>(x0, y1), 0).x;
-  let d = textureLoad(shapeTex, vec2<i32>(x1, y1), 0).x;
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  return oceanTap(shapeTex, rot2(xz) / 220.0).x;
 }
 fn steepOf(i: i32) -> f32 {
   if (i == 0) { return U.steep.x; }
@@ -245,7 +230,6 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let uSd = dot(dwn.yz, S);
   let div = (uAr - uAl + uSu - uSd) * invDx * 0.5;
   let shear = (dot(up.yz, A) - dot(dwn.yz, A) + uAr - uAl) * invDx * 0.5;
-  let etaC = hN + b;
   let etaL = max(l.x, 0.0) + bl;
   let etaR = max(r.x, 0.0) + br;
   let etaD = max(dwn.x, 0.0) + bd;
@@ -397,17 +381,7 @@ async function createShore(device, world, anchor, shapeView) {
   const info = await module.getCompilationInfo();
   const errs = info.messages.filter((m) => m.type === 'error');
   if (errs.length) throw new Error(errs.map((e) => e.lineNum + ':' + e.message).join('\n'));
-  const layout = device.createBindGroupLayout({
-    entries: [
-      { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-      { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
-      { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-      { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-      { binding: 4, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
-      { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-      { binding: 6, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } }
-    ]
-  });
+  const layout = layoutOf(device, GPUShaderStage.COMPUTE, 'tottout');
   const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
   const pipe = (name) => device.createComputePipeline({ layout: pl, compute: { module: module, entryPoint: name } });
   const pipes = { seed: pipe('seed'), step: pipe('shoreStep'), copy: pipe('copy') };
@@ -419,18 +393,7 @@ async function createShore(device, world, anchor, shapeView) {
   u[13] = nz;
   const bedView = bedTex.createView();
   const shape = shapeView;
-  const group = (src, dst, srcW, dstW) => device.createBindGroup({
-    layout: layout,
-    entries: [
-      { binding: 0, resource: src.createView() },
-      { binding: 1, resource: dst.createView() },
-      { binding: 2, resource: bedView },
-      { binding: 3, resource: srcW.createView() },
-      { binding: 4, resource: dstW.createView() },
-      { binding: 5, resource: { buffer: ubuf } },
-      { binding: 6, resource: shape }
-    ]
-  });
+  const group = (src, dst, srcW, dstW) => groupOf(device, layout, [src.createView(), dst.createView(), bedView, srcW.createView(), dstW.createView(), ubuf, shape]);
   const stepBG = [
     group(state[0], state[1], wet[0], wet[1]),
     group(state[1], state[0], wet[1], wet[0])
@@ -459,29 +422,32 @@ async function createShore(device, world, anchor, shapeView) {
     }
     device.queue.writeBuffer(ubuf, 0, u);
   }
-  function dispatch(enc, pipeline, bg) {
+  function run(enc, steps) {
     const p = enc.beginComputePass();
-    p.setPipeline(pipeline);
-    p.setBindGroup(0, bg);
-    p.dispatchWorkgroups(nx / 8, nz / 8);
+    for (const [pipeline, bg] of steps) {
+      p.setPipeline(pipeline);
+      p.setBindGroup(0, bg);
+      p.dispatchWorkgroups(nx / 8, nz / 8);
+    }
     p.end();
   }
   function seed(enc) {
     writeWaves(0, 0.02);
-    dispatch(enc, pipes.seed, stepBG[0]);
-    dispatch(enc, pipes.copy, copyBG[1]);
+    run(enc, [[pipes.seed, stepBG[0]], [pipes.copy, copyBG[1]]]);
     ping = 1;
   }
   function encode(enc, time, dt) {
     // CFL at dx 0.32 m and a ~8 m/s bore is about 0.016 s. Stay under it.
+    // The uniforms are written once: every step of one encoder would read the last write anyway.
     const n = Math.max(1, Math.min(5, Math.ceil(dt / 0.012)));
-    const stepDt = dt / n;
+    writeWaves(time, dt / n);
+    const steps = [];
     for (let s = 0; s < n; s++) {
-      writeWaves(time - dt + stepDt * (s + 1), stepDt);
-      dispatch(enc, pipes.step, stepBG[ping]);
+      steps.push([pipes.step, stepBG[ping]]);
       ping = 1 - ping;
     }
-    dispatch(enc, pipes.copy, copyBG[ping]);
+    steps.push([pipes.copy, copyBG[ping]]);
+    run(enc, steps);
   }
 
   return {

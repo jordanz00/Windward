@@ -44,8 +44,6 @@ const $ = (id) => document.getElementById(id);
 const statusEl = $('status');
 const barEl = $('bar');
 const goEl = $('go');
-const panelEl = $('panel');
-const scrimEl = $('scrim');
 const hintEl = $('hint');
 const statsEl = $('stats');
 const failEl = $('fail');
@@ -220,28 +218,44 @@ function icosphere(sub, rad, col) {
   return m;
 }
 
+// One tube, swept along a line of points, is every trunk, limb, stem, coral branch and
+// insect leg on the island. at(t, ang, len, p) describes a place on it, t along and ang
+// around, len metres from its foot, on the point p: [radius, r, g, b, sway, kind, u, v].
+// With seam each ring repeats its first vertex, for bark whose pattern has to wrap.
+// Returns the direction it ends in.
+function tube(m, pts, sides, seam, at) {
+  const n = pts.length, ring = sides + (seam ? 1 : 0), base = m.pos.length / 3;
+  let len = 0, tx = 0, ty = 1, tz = 0;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], a = pts[Math.max(i - 1, 0)], b = pts[Math.min(i + 1, n - 1)];
+    tx = b[0] - a[0]; ty = b[1] - a[1]; tz = b[2] - a[2];
+    const tl = Math.hypot(tx, ty, tz) || 1;
+    tx /= tl; ty /= tl; tz /= tl;
+    // Some direction across the line, then the one square to both.
+    const rx = Math.abs(tz) > 0.9 ? 1 : 0, rz = 1 - rx;
+    let ux = ty * rz, uy = tz * rx - tx * rz, uz = -ty * rx;
+    const ul = Math.hypot(ux, uy, uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    const vx = ty * uz - tz * uy, vy = tz * ux - tx * uz, vz = tx * uy - ty * ux;
+    if (i) len += Math.hypot(p[0] - a[0], p[1] - a[1], p[2] - a[2]);
+    for (let k = 0; k < ring; k++) {
+      const ang = k / sides * 6.2832, c = Math.cos(ang), sn = Math.sin(ang);
+      const nx = ux * c + vx * sn, ny = uy * c + vy * sn, nz = uz * c + vz * sn;
+      const A = at(i / (n - 1), ang, len, p);
+      m.v(p[0] + nx * A[0], p[1] + ny * A[0], p[2] + nz * A[0], nx, ny, nz, A[1], A[2], A[3], A[4], A[5], A[6], A[7]);
+    }
+    if (i) for (let k = 0; k < sides; k++) {
+      const q = base + (i - 1) * ring + k, r = base + (i - 1) * ring + (k + 1) % ring;
+      m.tri(q, q + ring, r); m.tri(r, q + ring, r + ring);
+    }
+  }
+  return [tx, ty, tz];
+}
+// A plain upright stem.
 function cylinder(sides, rings, r0, r1, h, col, swayTop) {
-  const m = new Mesh();
-  const rows = [];
-  for (let i = 0; i <= rings; i++) {
-    const t = i / rings;
-    const y = h * t;
-    const r = r0 + (r1 - r0) * t;
-    const row = [];
-    for (let k = 0; k < sides; k++) {
-      const a = k / sides * Math.PI * 2;
-      const nx = Math.cos(a), nz = Math.sin(a);
-      row.push(m.v(nx * r, y, nz * r, nx, 0, nz, col[0], col[1], col[2], swayTop * t));
-    }
-    rows.push(row);
-  }
-  for (let i = 0; i < rings; i++) {
-    for (let k = 0; k < sides; k++) {
-      const a = rows[i][k], b = rows[i][(k + 1) % sides];
-      const c = rows[i + 1][k], d = rows[i + 1][(k + 1) % sides];
-      m.tri(a, c, b); m.tri(b, c, d);
-    }
-  }
+  const m = new Mesh(), pts = [];
+  for (let i = 0; i <= rings; i++) pts.push([0, h * (i / rings), 0]);
+  tube(m, pts, sides, false, (t) => [r0 + (r1 - r0) * t, col[0], col[1], col[2], swayTop * t, SOLID, 0, 0]);
   return m;
 }
 
@@ -555,32 +569,11 @@ function forestMask(x, z, h, grad) {
   return smooth01(1.9, 4.4, h) * (1 - smooth01(0.55, 1.0, grad)) * smooth01(-0.62, -0.12, forestNoise(x, z));
 }
 
-// A limb: a tube along a line of points, tapering, with wood for a surface. flare swells
-// the foot into buttress roots.
+// A limb: a tapering tube with wood for a surface. flare swells the foot into buttress roots.
 function addLimb(m, pts, r0, r1, sides, col, sway0, sway1, flare) {
-  const n = pts.length, rows = [];
-  let len = 0;
-  for (let i = 0; i < n; i++) {
-    const p = pts[i], a = pts[Math.max(i - 1, 0)], b = pts[Math.min(i + 1, n - 1)];
-    let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2];
-    const tl = Math.hypot(tx, ty, tz) || 1;
-    tx /= tl; ty /= tl; tz /= tl;
-    const rx = Math.abs(tz) > 0.9 ? 1 : 0, rz = 1 - rx;
-    let ux = ty * rz, uy = tz * rx - tx * rz, uz = -ty * rx;
-    const ul = Math.hypot(ux, uy, uz) || 1;
-    ux /= ul; uy /= ul; uz /= ul;
-    const vx = ty * uz - tz * uy, vy = tz * ux - tx * uz, vz = tx * uy - ty * ux;
-    if (i) len += Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1], p[2] - pts[i - 1][2]);
-    const t = i / (n - 1), r = r0 + (r1 - r0) * t, row = [];
-    for (let k = 0; k <= sides; k++) {
-      const ang = k / sides * 6.2832, c = Math.cos(ang), sn = Math.sin(ang);
-      const nx = ux * c + vx * sn, ny = uy * c + vy * sn, nz = uz * c + vz * sn;
-      const rr = r * (1 + (flare ? flare * Math.pow(1 - t, 5) * (0.5 + Math.max(0, Math.cos(ang * 3 + flare * 40))) : 0));
-      row.push(m.v(p[0] + nx * rr, p[1] + ny * rr, p[2] + nz * rr, nx, ny, nz, col[0], col[1], col[2], sway0 + (sway1 - sway0) * t, WOOD, k / sides, len));
-    }
-    rows.push(row);
-  }
-  for (let i = 0; i < n - 1; i++) for (let k = 0; k < sides; k++) { const a = rows[i][k], b = rows[i][k + 1], c = rows[i + 1][k], d = rows[i + 1][k + 1]; m.tri(a, c, b); m.tri(b, c, d); }
+  tube(m, pts, sides, true, (t, ang, len) => [
+    (r0 + (r1 - r0) * t) * (1 + (flare ? flare * Math.pow(1 - t, 5) * (0.5 + Math.max(0, Math.cos(ang * 3 + flare * 40))) : 0)),
+    col[0], col[1], col[2], sway0 + (sway1 - sway0) * t, WOOD, ang / 6.2832, len]);
 }
 
 // A forest tree: a buttressed trunk that bows, limbs that rise and then reach out, and a
@@ -737,29 +730,39 @@ function packBird(pos, wing) {
   }
   return o;
 }
-// Every prototype mesh in one vertex buffer and one index buffer.
-// 13 floats a vertex: position, normal, colour, sway, kind, uv.
-const VSTRIDE = 13;
+// Every prototype mesh in one vertex buffer and one index buffer. A vertex is 32 bytes:
+// the position as three floats, then eight half floats: normal and kind, colour and sway, uv.
+// Indices are 16 bit and count from the start of their own mesh.
+const VBYTES = 32;
+const halfF = new Float32Array(1), halfU = new Uint32Array(halfF.buffer);
+function half(x) {
+  halfF[0] = x;
+  const b = halfU[0], s = (b >>> 16) & 0x8000, e = ((b >>> 23) & 255) - 112, m = b & 0x7fffff;
+  if (e <= 0) return e < -10 ? s : s | ((((m | 0x800000) >> (13 - e)) + 1) >> 1);
+  if (e > 30) return s | 0x7c00;
+  return (s | (e << 10) | (m >> 13)) + ((m >> 12) & 1);
+}
 function packMeshes(list) {
   let nv = 0, ni = 0;
   for (const m of list) { nv += m.pos.length / 3; ni += m.idx.length; }
-  const o = new Float32Array(nv * VSTRIDE), idx = new Uint32Array(ni);
+  const f = new Float32Array(nv * VBYTES / 4), h = new Uint16Array(f.buffer), idx = new Uint16Array(ni);
   const ranges = [];
   let v0 = 0, i0 = 0;
   for (const m of list) {
     const n = m.pos.length / 3;
+    if (n > 65535) throw new Error('mesh too large for 16-bit indices');
     for (let i = 0; i < n; i++) {
-      const at = (v0 + i) * VSTRIDE;
-      o[at] = m.pos[i * 3]; o[at + 1] = m.pos[i * 3 + 1]; o[at + 2] = m.pos[i * 3 + 2];
-      o[at + 3] = m.nrm[i * 3]; o[at + 4] = m.nrm[i * 3 + 1]; o[at + 5] = m.nrm[i * 3 + 2];
-      o[at + 6] = m.col[i * 3]; o[at + 7] = m.col[i * 3 + 1]; o[at + 8] = m.col[i * 3 + 2];
-      o[at + 9] = m.sway[i]; o[at + 10] = m.kind[i]; o[at + 11] = m.uv[i * 2]; o[at + 12] = m.uv[i * 2 + 1];
+      const a = (v0 + i) * 8, b = a * 2 + 6;
+      f[a] = m.pos[i * 3]; f[a + 1] = m.pos[i * 3 + 1]; f[a + 2] = m.pos[i * 3 + 2];
+      h[b] = half(m.nrm[i * 3]); h[b + 1] = half(m.nrm[i * 3 + 1]); h[b + 2] = half(m.nrm[i * 3 + 2]); h[b + 3] = half(m.kind[i]);
+      h[b + 4] = half(m.col[i * 3]); h[b + 5] = half(m.col[i * 3 + 1]); h[b + 6] = half(m.col[i * 3 + 2]); h[b + 7] = half(m.sway[i]);
+      h[b + 8] = half(m.uv[i * 2]); h[b + 9] = half(m.uv[i * 2 + 1]);
     }
     idx.set(m.idx, i0);
     ranges.push({ first: i0, count: m.idx.length, base: v0 });
     v0 += n; i0 += m.idx.length;
   }
-  return { vert: o, idx: idx, ranges: ranges };
+  return { vert: f, idx: idx, ranges: ranges };
 }
 
 // Plants and rocks are a few prototype meshes drawn many times. An instance is
@@ -897,27 +900,6 @@ function findBeach(world) {
       const sc = (x < -80 ? 3 : 0) + (6 - Math.abs(h - 0.5) * 3) - s * 2 - Math.abs(hit - 5) * 0.08;
       if (sc > bs) { bs = sc; best = { x: x, z: z, h: h, fx: fx, fz: fz, hit: hit }; }
     }
-  }
-  return best;
-}
-
-function seawardYaw(world, x, z) {
-  let best = null, bestScore = -1;
-  for (let i = 0; i < 36; i++) {
-    const yaw = i / 36 * Math.PI * 2;
-    const fx = Math.sin(yaw), fz = -Math.cos(yaw);
-    let hit = -1;
-    for (let d = 4; d <= 42; d += 2) {
-      if (fieldSample(world, x + fx * d, z + fz * d) < -0.04) { hit = d; break; }
-    }
-    if (hit < 8 || hit > 32) continue;
-    const rx = Math.cos(yaw), rz = Math.sin(yaw);
-    const hL = fieldSample(world, x + rx * 12, z + rz * 12);
-    const hR = fieldSample(world, x - rx * 12, z - rz * 12);
-    const wide = (hL > 0.05 && hL < 2.4 && hR > 0.05 && hR < 2.4) ? 1 : 0;
-    const inland = fieldSample(world, x - fx * 8, z - fz * 8);
-    const score = wide * 12 + (inland > fieldSample(world, x, z) ? 3 : 0) - Math.abs(hit - 16) * 0.15;
-    if (score > bestScore) { bestScore = score; best = yaw; }
   }
   return best;
 }
@@ -1647,257 +1629,101 @@ async function main() {
 
     const code = shaderCode(q.hres, q.span);
     const mod = device.createShaderModule({ code: code });
-    const blitMod = device.createShaderModule({ code: blitShaderCode() });
     const simMod = device.createShaderModule({ code: SIM_WGSL });
     const oceanMod = device.createShaderModule({ code: OCEAN_WGSL });
     const VS = GPUShaderStage.VERTEX, FS = GPUShaderStage.FRAGMENT;
-    const ubLayout = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } }]
-    });
-    const geoLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 2, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 3, visibility: VS | FS, texture: { sampleType: 'depth' } },
-        { binding: 4, visibility: VS | FS, sampler: { type: 'comparison' } },
-        { binding: 5, visibility: VS | FS, buffer: { type: 'uniform' } },
-        { binding: 6, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 7, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 8, visibility: VS | FS, texture: { sampleType: 'float' } },
-        { binding: 9, visibility: VS | FS, sampler: { type: 'filtering' } },
-        { binding: 10, visibility: VS | FS, texture: { sampleType: 'depth' } }
-      ]
-    });
-    const simLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 1, visibility: FS, buffer: { type: 'uniform' } }
-      ]
-    });
-    const waterLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 1, visibility: FS, texture: { sampleType: 'depth' } },
-        { binding: 2, visibility: FS, texture: { sampleType: 'float' } },
-        { binding: 3, visibility: FS, sampler: { type: 'filtering' } },
-        { binding: 4, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 5, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 6, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 7, visibility: FS, texture: { sampleType: 'float' } }
-      ]
-    });
-    const blitLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 2, visibility: FS, texture: { sampleType: 'depth' } },
-        { binding: 3, visibility: FS, texture: { sampleType: 'float' } },
-        { binding: 4, visibility: FS, sampler: { type: 'filtering' } }
-      ]
-    });
+    // One letter a binding; the letters are listed in gpu.js.
+    const ubLayout = layoutOf(device, VS | FS, 'u');
+    const geoLayout = layoutOf(device, VS | FS, 'uttdcuttfsd');
+    const simLayout = layoutOf(device, FS, 'tu');
+    const waterLayout = layoutOf(device, VS | FS, 'tdfstttf');
     // The air pass reads the scene's depth and nothing else from the second group.
-    const airLayout = device.createBindGroupLayout({ entries: [{ binding: 1, visibility: FS, texture: { sampleType: 'depth' } }] });
+    const airLayout = layoutOf(device, FS, 'd', 1);
     const geoPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout] });
     const skyPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout] });
     const waterPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, waterLayout] });
-    const blitPL = device.createPipelineLayout({ bindGroupLayouts: [blitLayout] });
 
+    // A vertex buffer layout from [location, byte offset, float count] triples.
+    const vbuf = (stride, attrs, inst) => ({
+      arrayStride: stride, stepMode: inst ? 'instance' : 'vertex',
+      attributes: attrs.map(([shaderLocation, offset, n]) => ({ shaderLocation, offset, format: n > 1 ? 'float32x' + n : 'float32' }))
+    });
+    const posBuf = [vbuf(12, [[0, 0, 3]])], gridBuf = [vbuf(8, [[0, 0, 2]])], oneVec4 = vbuf(16, [[2, 0, 4]], true);
     const meshBuffers = [
-      { arrayStride: VSTRIDE * 4, attributes: [
-        { shaderLocation: 0, offset: 0, format: 'float32x3' },
-        { shaderLocation: 1, offset: 12, format: 'float32x3' },
-        { shaderLocation: 2, offset: 24, format: 'float32x3' },
-        { shaderLocation: 3, offset: 36, format: 'float32' },
-        { shaderLocation: 4, offset: 40, format: 'float32' },
-        { shaderLocation: 5, offset: 44, format: 'float32x2' }
-      ] },
-      { arrayStride: ISTRIDE * 4, stepMode: 'instance', attributes: [
-        { shaderLocation: 6, offset: 0, format: 'float32x4' },
-        { shaderLocation: 7, offset: 16, format: 'float32x4' },
-        { shaderLocation: 8, offset: 32, format: 'float32x4' }
-      ] }
+      { arrayStride: VBYTES, attributes: [[0, 0, 'float32x3'], [1, 12, 'float16x4'], [2, 20, 'float16x4'], [5, 28, 'float16x2']].map(([shaderLocation, offset, format]) => ({ shaderLocation, offset, format })) },
+      vbuf(ISTRIDE * 4, [[6, 0, 4], [7, 16, 4], [8, 32, 4]], true)
     ];
+    const bugBuffers = [meshBuffers[0], vbuf(BUG_STRIDE * 4, [6, 7, 8, 9, 10, 11].map((l, i) => [l, i * 16, 4]), true)];
     const depthOn = (fmt, write, cmp) => ({ format: fmt, depthWriteEnabled: write, depthCompare: cmp });
+    // Three depth states cover every draw: into the scene, into a shadow map, and over the finished frame.
+    const sceneZ = depthOn('depth32float', true, 'less');
+    // Sixteen bits is under a centimetre of the island map's 614 m of depth, and half the memory.
+    const shadowFmt = 'depth16unorm';
+    const shadowZ = { ...sceneZ, format: shadowFmt, depthBias: 2, depthBiasSlopeScale: 2, depthBiasClamp: 0 };
+    const overZ = depthOn('depth24plus', false, 'less');
+    const over = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
+    const lerp = { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' };
+    const sceneFmt = 'rgba16float';
+    const airPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, airLayout] });
+    const simPL = device.createPipelineLayout({ bindGroupLayouts: [simLayout] });
     const pipes = {};
     // Every pipeline starts compiling now, in the driver, while this thread shapes the coast.
-    const jobs = [];
-    const pipe = (name, desc) => { jobs.push(device.createRenderPipelineAsync(desc).then((p) => { pipes[name] = p; })); };
-    const sceneFmt = 'rgba16float';
-    const skyDesc = {
-      layout: geoPL,
-      vertex: { module: mod, entryPoint: 'vsSky' },
-      fragment: { module: mod, entryPoint: 'fsSky', targets: [{ format: sceneFmt }] },
-      primitive: { topology: 'triangle-list' },
-      depthStencil: depthOn('depth32float', true, 'always')
+    // The first picture waits only for the ones listed before `late` is set: sky, land, plants,
+    // their shadows, the sea. The wash on the sand, the air's own pass, grass, wildlife and rain
+    // join when they are ready.
+    // name, layout, vertex entry, fragment entry (none for a shadow), then what differs from
+    // the common case: buffers, cull, depth, the target's format and blend, another module.
+    const jobs = [], lateJobs = [];
+    let late = false;
+    const whenBuilt = (name, set, promise) => (late ? lateJobs : jobs).push(promise.then((p) => { set[name] = p; }));
+    const pipe = (name, layout, vs, fs, o) => {
+      const m = o.module || mod;
+      whenBuilt(name, pipes, device.createRenderPipelineAsync({
+        layout: layout,
+        vertex: { module: m, entryPoint: vs, buffers: o.buffers },
+        fragment: fs ? { module: m, entryPoint: fs, targets: [{ format: o.format || sceneFmt, blend: o.blend }] } : undefined,
+        primitive: { topology: 'triangle-list', cullMode: o.cull || 'none' },
+        depthStencil: o.depth
+      }));
     };
-    pipe('sky', skyDesc);
-    pipe('skyBake', {
-      layout: skyPL,
-      vertex: { module: mod, entryPoint: 'vsSky' },
-      fragment: { module: mod, entryPoint: 'fsSkyBake', targets: [{ format: sceneFmt, blend: {
-        color: { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' },
-        alpha: { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' }
-      } }] },
-      primitive: { topology: 'triangle-list' }
-    });
-    pipe('terrain', {
-      layout: geoPL,
-      vertex: { module: mod, entryPoint: 'vsTerrain', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
-      fragment: { module: mod, entryPoint: 'fsTerrain', targets: [{ format: sceneFmt }] },
-      primitive: { topology: 'triangle-list', cullMode: 'back' },
-      depthStencil: depthOn('depth32float', true, 'less')
-    });
-    pipe('mesh', {
-      layout: geoPL,
-      vertex: { module: mod, entryPoint: 'vsMesh', buffers: meshBuffers },
-      fragment: { module: mod, entryPoint: 'fsMesh', targets: [{ format: sceneFmt }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: depthOn('depth32float', true, 'less')
-    });
-    const shadowBias = { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2, depthBiasClamp: 0 };
-    pipe('shadowTerrain', {
-      layout: skyPL,
-      vertex: { module: mod, entryPoint: 'vsShadowTerrain', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
-      primitive: { topology: 'triangle-list', cullMode: 'back' },
-      depthStencil: shadowBias
-    });
-    pipe('shadowMesh', {
-      layout: skyPL,
-      vertex: { module: mod, entryPoint: 'vsShadowMesh', buffers: meshBuffers },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: shadowBias
-    });
-    pipe('fish', {
-      layout: geoPL,
-      vertex: { module: mod, entryPoint: 'vsFish', buffers: meshBuffers },
-      fragment: { module: mod, entryPoint: 'fsFish', targets: [{ format: sceneFmt }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: depthOn('depth32float', true, 'less')
-    });
-    const bugBuffers = [meshBuffers[0], { arrayStride: BUG_STRIDE * 4, stepMode: 'instance', attributes: [6, 7, 8, 9, 10, 11].map((l, i) => ({ shaderLocation: l, offset: i * 16, format: 'float32x4' })) }];
-    // Insects go straight onto the finished frame, after the water, so a clear wing over the
-    // lagoon is a film over the lagoon and not a hole in it.
-    pipe('bug', {
-      layout: geoPL,
-      vertex: { module: mod, entryPoint: 'vsBug', buffers: bugBuffers },
-      fragment: { module: mod, entryPoint: 'fsBug', targets: [{ format: format, blend: {
-        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
-      } }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: depthOn('depth24plus', true, 'less')
-    });
-    pipe('shadowBug', {
-      layout: skyPL,
-      vertex: { module: mod, entryPoint: 'vsShadowBug', buffers: bugBuffers },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: shadowBias
-    });
-    pipe('shadowFish', {
-      layout: skyPL,
-      vertex: { module: mod, entryPoint: 'vsShadowFish', buffers: meshBuffers },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: shadowBias
-    });
-    pipe('grass', {
-      layout: geoPL,
-      vertex: { module: mod, entryPoint: 'vsGrass', buffers: [
-        { arrayStride: 24, attributes: [
-          { shaderLocation: 0, offset: 0, format: 'float32x3' },
-          { shaderLocation: 1, offset: 16, format: 'float32x2' }
-        ] },
-        { arrayStride: 16, stepMode: 'instance', attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x4' }] }
-      ] },
-      fragment: { module: mod, entryPoint: 'fsGrass', targets: [{ format: sceneFmt }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: depthOn('depth32float', true, 'less')
-    });
-    pipe('bird', {
-      layout: geoPL,
-      vertex: { module: mod, entryPoint: 'vsBird', buffers: [
-        { arrayStride: 16, attributes: [
-          { shaderLocation: 0, offset: 0, format: 'float32x3' },
-          { shaderLocation: 1, offset: 12, format: 'float32' }
-        ] },
-        { arrayStride: 16, stepMode: 'instance', attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x4' }] }
-      ] },
-      fragment: { module: mod, entryPoint: 'fsBird', targets: [{ format: sceneFmt }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: depthOn('depth32float', true, 'less')
-    });
-    pipe('water', {
-      layout: waterPL,
-      vertex: { module: mod, entryPoint: 'vsWater', buffers: [{ arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
-      fragment: { module: mod, entryPoint: 'fsWater', targets: [{ format: format }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: depthOn('depth24plus', false, 'less')
-    });
-    pipe('shore', {
-      layout: waterPL,
-      vertex: { module: mod, entryPoint: 'vsShore', buffers: [{ arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
-      fragment: { module: mod, entryPoint: 'fsWater', targets: [{
-        format: format,
-        blend: {
-          color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
-        }
-      }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      // The beach mesh is coarser than the sheet, so a depth test hides the wash
-      // behind the sand it is running over. Trees and cliffs are still rejected
-      // in the fragment shader.
-      depthStencil: depthOn('depth24plus', false, 'always')
-    });
-    const airPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, airLayout] });
-    pipe('drops', {
-      layout: airPL,
-      vertex: { module: mod, entryPoint: 'vsDrops' },
-      fragment: { module: mod, entryPoint: 'fsDrops', targets: [{ format: format, blend: {
-        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
-      } }] },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: depthOn('depth24plus', false, 'less')
-    });
-    pipe('air', {
-      layout: airPL,
-      vertex: { module: mod, entryPoint: 'vsSky' },
-      fragment: { module: mod, entryPoint: 'fsAir', targets: [{ format: sceneFmt }] },
-      primitive: { topology: 'triangle-list' }
-    });
-    pipe('blit', {
-      layout: blitPL,
-      vertex: { module: blitMod, entryPoint: 'vsBlit' },
-      fragment: { module: blitMod, entryPoint: 'fsBlit', targets: [{ format: format }] },
-      primitive: { topology: 'triangle-list' },
-      depthStencil: depthOn('depth24plus', true, 'always')
-    });
-    const simPL = device.createPipelineLayout({ bindGroupLayouts: [simLayout] });
-    pipe('sim', {
-      layout: simPL,
-      vertex: { module: simMod, entryPoint: 'vs' },
-      fragment: { module: simMod, entryPoint: 'fs', targets: [{ format: 'rgba16float' }] },
-      primitive: { topology: 'triangle-list' }
-    });
-
-    const oceanLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 3, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } }
-      ]
-    });
+    // The sea first: its shader is the longest to compile, so it is given the longest start.
+    pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, depth: overZ });
+    pipe('sky', geoPL, 'vsSky', 'fsSky', { depth: depthOn('depth32float', true, 'always') });
+    pipe('skyBake', skyPL, 'vsSky', 'fsSkyBake', { blend: { color: lerp, alpha: lerp } });
+    pipe('terrain', geoPL, 'vsTerrain', 'fsTerrain', { buffers: posBuf, cull: 'back', depth: sceneZ });
+    pipe('mesh', geoPL, 'vsMesh', 'fsMesh', { buffers: meshBuffers, depth: sceneZ });
+    pipe('shadowTerrain', skyPL, 'vsShadowTerrain', null, { buffers: posBuf, cull: 'back', depth: shadowZ });
+    pipe('shadowMesh', skyPL, 'vsShadowMesh', null, { buffers: meshBuffers, depth: shadowZ });
+    // The finished scene goes to the screen through the water's own two groups.
+    pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: depthOn('depth24plus', true, 'always') });
+    const oceanLayout = layoutOf(device, GPUShaderStage.COMPUTE, 'rwuo');
     const oceanPL = device.createPipelineLayout({ bindGroupLayouts: [oceanLayout] });
     const oceanPipes = {};
     for (const [key, entry] of [['evolve', 'evolve'], ['rows', 'ifft_rows'], ['cols', 'ifft_cols'], ['slopes', 'slopes']]) {
-      jobs.push(device.createComputePipelineAsync({
-        layout: oceanPL, compute: { module: oceanMod, entryPoint: entry }
-      }).then((p) => { oceanPipes[key] = p; }));
+      whenBuilt(key, oceanPipes, device.createComputePipelineAsync({ layout: oceanPL, compute: { module: oceanMod, entryPoint: entry } }));
     }
-    const pipesReady = Promise.all(jobs);
+    late = true;
+    // The wash on the beach starts from still water and takes its first frames to arrive, so
+    // its pipeline can too. The beach mesh is coarser than the sheet, so a depth test hides the
+    // wash behind the sand it is running over. Trees and cliffs are still rejected in the
+    // fragment shader.
+    pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: depthOn('depth24plus', false, 'always') });
+    pipe('air', airPL, 'vsSky', 'fsAir', {});
+    pipe('grass', geoPL, 'vsGrass', 'fsGrass', { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: sceneZ });
+    pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: [vbuf(16, [[0, 0, 3], [1, 12, 1]]), oneVec4], depth: sceneZ });
+    pipe('fish', geoPL, 'vsFish', 'fsFish', { buffers: meshBuffers, depth: sceneZ });
+    pipe('shadowFish', skyPL, 'vsShadowFish', null, { buffers: meshBuffers, depth: shadowZ });
+    // Insects go straight onto the finished frame, after the water, so a clear wing over the
+    // lagoon is a film over the lagoon and not a hole in it.
+    pipe('bug', geoPL, 'vsBug', 'fsBug', { buffers: bugBuffers, format: format, blend: over, depth: depthOn('depth24plus', true, 'less') });
+    pipe('shadowBug', skyPL, 'vsShadowBug', null, { buffers: bugBuffers, depth: shadowZ });
+    pipe('drops', airPL, 'vsDrops', 'fsDrops', { format: format, blend: over, depth: overZ });
+    pipe('sim', simPL, 'vs', 'fs', { module: simMod });
+    // A capture waits for everything, so it is always the whole picture.
+    const READ = qstr.has('read');
+    const pipesReady = Promise.all(READ ? jobs.concat(lateJobs) : jobs);
     pipesReady.catch(() => {});
+    Promise.all(lateJobs).catch((err) => console.error(err));
     mark('kick');
 
     setStatus('Sculpting the coast', 0.1);
@@ -2154,7 +1980,7 @@ async function main() {
     setStatus('Tuning the swell', 0.78);
     await new Promise((r) => setTimeout(r, 0));
 
-    const infos = await Promise.all([mod, blitMod, simMod, oceanMod].map((m) => m.getCompilationInfo()));
+    const infos = await Promise.all([mod, simMod, oceanMod].map((m) => m.getCompilationInfo()));
     const errs = [].concat(...infos.map((n) => n.messages)).filter((m) => m.type === 'error');
     if (errs.length) {
       fail(errs.map((e) => e.lineNum + ':' + e.linePos + '  ' + e.message).join('\n'));
@@ -2199,6 +2025,8 @@ async function main() {
       x0: -q.textent, z0: -q.textent, size: q.textent * 2,
       fn: (x, z) => fieldSample(world, x, z)
     });
+    let landLo = 0, landHi = 0;
+    for (let i = 1; i < terrain.pos.length; i += 3) { landLo = Math.min(landLo, terrain.pos[i]); landHi = Math.max(landHi, terrain.pos[i]); }
     const water = gridMesh(q.water, null);
     const shoreMesh = gridMesh(112, null);
     const packed = scatter.packed;
@@ -2223,15 +2051,12 @@ async function main() {
     const farDraws = scatter.collect(farArr, 0, null, 0, 0, 0, 1e9, 9);
     const instFarB = upload(farArr, GPUBufferUsage.VERTEX);
     let mainDraws = [], reflDraws = [], shadowFor = null;
-    function drawMeshes(pass, pipeline, bg, buf, draws) {
-      if (!draws.length) return;
+    // Plants, fish and insects are all drawn the same way: one buffer of prototypes, one of
+    // instances, and a list of runs. A pipeline that is still being built draws nothing yet.
+    function drawMeshes(pass, pipeline, bg, vb, ib, buf, draws) {
+      if (!pipeline || !draws.length) return;
       pass.setPipeline(pipeline); pass.setBindGroup(0, bg);
-      pass.setVertexBuffer(0, meshVB); pass.setVertexBuffer(1, buf); pass.setIndexBuffer(meshIB, 'uint32');
-      for (let i = 0; i < draws.length; i += 5) pass.drawIndexed(draws[i + 1], draws[i + 4], draws[i], draws[i + 2], draws[i + 3]);
-    }
-    function drawMeshes2(pass, pipeline, bg, vb, ib, buf, draws) {
-      pass.setPipeline(pipeline); pass.setBindGroup(0, bg);
-      pass.setVertexBuffer(0, vb); pass.setVertexBuffer(1, buf); pass.setIndexBuffer(ib, 'uint32');
+      pass.setVertexBuffer(0, vb); pass.setVertexBuffer(1, buf); pass.setIndexBuffer(ib, 'uint16');
       for (let i = 0; i < draws.length; i += 5) pass.drawIndexed(draws[i + 1], draws[i + 4], draws[i], draws[i + 2], draws[i + 3]);
     }
     const grassVB = upload(grassVert, GPUBufferUsage.VERTEX);
@@ -2254,38 +2079,23 @@ async function main() {
 
     mark('buffers');
     setStatus('Warming the light', 0.9);
-    await pipesReady;
-    mark('pipelines');
     const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
     const shadowSamp = device.createSampler({ compare: 'less-equal', magFilter: 'linear', minFilter: 'linear' });
-    const shadowTex = device.createTexture({
-      size: [2048, 2048],
-      format: 'depth32float',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    });
-    const shadowView = shadowTex.createView();
+    const shadowView = targetOf(device, 2048, 2048, shadowFmt).createView();
     // A second, tight shadow map around the eye. The island map has 33 cm texels,
     // which cannot hold the shadow of a leaflet. This one has 2.5 cm texels.
     const NEAR_R = 26, NEAR_RES = 2048;
-    const nearView = device.createTexture({
-      size: [NEAR_RES, NEAR_RES], format: 'depth32float',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    }).createView();
-    const nearPass = {
-      colorAttachments: [],
-      depthStencilAttachment: { view: nearView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
-    };
+    const nearView = targetOf(device, NEAR_RES, NEAR_RES, shadowFmt).createView();
+    const nearPass = passOf(undefined, null, nearView);
     const NEARVP = new Float32Array(16);
-    const bgUBN = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: nbuf } }] });
+    const bgUBN = groupOf(device, ubLayout, [nbuf]);
     let nearDraws = [];
+    const nearRows = [0, 0];
     // The sky panorama. Sizes match SKYW and SKYH in the shader.
     const SKYW = 1536, SKYH = 384, SKY_STRIPS = 16;
-    const skyView = device.createTexture({
-      size: [SKYW, SKYH], format: sceneFmt,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    }).createView();
+    const skyView = targetOf(device, SKYW, SKYH, sceneFmt).createView();
     const skySamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
-    const skyPass = { colorAttachments: [{ view: skyView, loadOp: 'load', storeOp: 'store' }] };
+    const skyPass = passOf(skyView);
     let skyStrip = 0, skyFor = null, skyFresh = 0, skySettle = 0;
     const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 56], 0.3, 0, 11);
     const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
@@ -2304,15 +2114,7 @@ async function main() {
         usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING
       });
       const view = tex.createView();
-      const bg = device.createBindGroup({
-        layout: oceanLayout,
-        entries: [
-          { binding: 0, resource: { buffer: store(h0) } },
-          { binding: 1, resource: { buffer: store(new Float32Array(h0.length)) } },
-          { binding: 2, resource: { buffer: ub } },
-          { binding: 3, resource: view }
-        ]
-      });
+      const bg = groupOf(device, oceanLayout, [store(h0), store(new Float32Array(h0.length)), ub, view]);
       return { size, ub, view, bg };
     }
     const chopH0 = makeOceanH0(OCEAN_N, 24, [6.5, 1.5], 0.001, [0.45, 5], 0, 0.1, 47, 1.6);
@@ -2324,35 +2126,20 @@ async function main() {
       cascades[0].view
     );
     mark('shore');
-    const shadowPass = {
-      colorAttachments: [],
-      depthStencilAttachment: { view: shadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
-    };
+    await pipesReady;
+    mark('pipelines');
+    const shadowPass = passOf(undefined, null, shadowView);
     let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null, airTex = null, bgAir = null;
-    const READ = qstr.has('read');
     let readTex = null, readDepth = null, readBuf = null, readBpr = 0;
-    let bgGeoSet = [null, null], bgGeoR, bgUB, bgUBR, bgBlit, bgWater;
+    let bgGeoSet = [null, null], bgGeoR, bgUB, bgUBR, bgWater;
     let viewW = 2, viewH = 2;
     const hview = htex.createView();
-    const ripTex = [0, 1].map(() => device.createTexture({
-      size: [256, 256],
-      format: 'rgba16float',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    }));
-    const ripViews = ripTex.map((t) => t.createView());
+    const ripViews = [0, 1].map(() => targetOf(device, 256, 256, 'rgba16float').createView());
     const simBuf = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const simU = new Float32Array(12);
-    const simBG = [0, 1].map((i) => device.createBindGroup({
-      layout: simLayout,
-      entries: [
-        { binding: 0, resource: ripViews[i] },
-        { binding: 1, resource: { buffer: simBuf } }
-      ]
-    }));
+    const simBG = ripViews.map((v) => groupOf(device, simLayout, [v, simBuf]));
     let ripIndex = 0;
-    const simPass = {
-      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }]
-    };
+    const simPass = passOf(null, [0, 0, 0, 0]);
     {
       const enc0 = device.createCommandEncoder();
       for (let i = 0; i < 2; i++) {
@@ -2362,7 +2149,11 @@ async function main() {
       device.queue.submit([enc0.finish()]);
     }
 
-    const airPass = { colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] };
+    const scenePass = passOf(null, [0.45, 0.55, 0.62, 1], null);
+    const reflPass = passOf(null, [0, 0, 0, 0], null);
+    const swapPass = passOf(null, [0.55, 0.65, 0.72, 1], null);
+    let swapDepthView = null, readViews = null;
+    const airPass = passOf(null, [0, 0, 0, 1]);
     function destroyTex(t) { if (t) t.destroy(); }
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, q.dpr);
@@ -2375,94 +2166,60 @@ async function main() {
       canvas.width = w; canvas.height = h;
       context.configure({ device: device, format: format, alphaMode: 'opaque' });
       destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth); destroyTex(airTex);
-      sceneTex = device.createTexture({ size: [w, h], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-      sceneDepth = device.createTexture({ size: [w, h], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-      swapDepth = device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      sceneTex = targetOf(device, w, h, sceneFmt);
+      sceneDepth = targetOf(device, w, h, 'depth32float');
+      swapDepth = targetOf(device, w, h, 'depth24plus', 0);
       const rw = Math.max(2, w >> 1), rh = Math.max(2, h >> 1);
-      reflTex = device.createTexture({ size: [rw, rh], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-      reflDepth = device.createTexture({ size: [rw, rh], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
-      airTex = device.createTexture({ size: [rw, rh], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      reflTex = targetOf(device, rw, rh, sceneFmt);
+      reflDepth = targetOf(device, rw, rh, 'depth32float', 0);
+      airTex = targetOf(device, rw, rh, sceneFmt);
       viewW = w; viewH = h;
       if (READ) {
         if (readTex) readTex.destroy();
         if (readDepth) readDepth.destroy();
         if (readBuf) readBuf.destroy();
         readBpr = (Math.ceil((w * 4) / 256) * 256);
-        readTex = device.createTexture({ size: [w, h], format: format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
-        readDepth = device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+        readTex = targetOf(device, w, h, format, GPUTextureUsage.COPY_SRC);
+        readDepth = targetOf(device, w, h, 'depth24plus', 0);
         readBuf = device.createBuffer({ size: readBpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        readViews = [readTex.createView(), readDepth.createView()];
       }
       const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView(), av = airTex.createView();
+      // Views are made here, once per size, not once per frame.
       airPass.colorAttachments[0].view = av;
-      bgAir = device.createBindGroup({ layout: airLayout, entries: [{ binding: 1, resource: sd }] });
-      const geoGroup = (buf, view) => device.createBindGroup({
-        layout: geoLayout,
-        entries: [
-          { binding: 0, resource: { buffer: buf } },
-          { binding: 1, resource: hview },
-          { binding: 2, resource: view },
-          { binding: 3, resource: shadowView },
-          { binding: 4, resource: shadowSamp },
-          { binding: 5, resource: { buffer: shoreSim.ubuf } },
-          { binding: 6, resource: shoreSim.stateView },
-          { binding: 7, resource: shoreSim.wetView },
-          { binding: 8, resource: skyView },
-          { binding: 9, resource: skySamp },
-          { binding: 10, resource: nearView }
-        ]
-      });
+      scenePass.colorAttachments[0].view = sv;
+      scenePass.depthStencilAttachment.view = sd;
+      reflPass.colorAttachments[0].view = rv;
+      reflPass.depthStencilAttachment.view = reflDepth.createView();
+      swapDepthView = swapDepth.createView();
+      bgAir = groupOf(device, airLayout, [sd], 1);
+      const geoGroup = (buf, rip) => groupOf(device, geoLayout,
+        [buf, hview, rip, shadowView, shadowSamp, shoreSim.ubuf, shoreSim.stateView, shoreSim.wetView, skyView, skySamp, nearView]);
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
       bgGeoR = geoGroup(rbuf, ripViews[0]);
-      bgUB = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: ubuf } }] });
-      bgUBR = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: rbuf } }] });
-      bgBlit = device.createBindGroup({ layout: blitLayout, entries: [
-        { binding: 0, resource: { buffer: ubuf } },
-        { binding: 1, resource: sv },
-        { binding: 2, resource: sd },
-        { binding: 3, resource: av },
-        { binding: 4, resource: samp }
-      ] });
-      bgWater = device.createBindGroup({ layout: waterLayout, entries: [
-        { binding: 0, resource: sv },
-        { binding: 1, resource: sd },
-        { binding: 2, resource: rv },
-        { binding: 3, resource: samp },
-        { binding: 4, resource: cascades[0].view },
-        { binding: 5, resource: cascades[1].view },
-        { binding: 6, resource: cascades[2].view },
-        { binding: 7, resource: av }
-      ] });
+      bgUB = groupOf(device, ubLayout, [ubuf]);
+      bgUBR = groupOf(device, ubLayout, [rbuf]);
+      bgWater = groupOf(device, waterLayout, [sv, sd, rv, samp, cascades[0].view, cascades[1].view, cascades[2].view, av]);
     }
     resize();
     addEventListener('resize', resize);
-
-    const scenePass = {
-      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0.45, g: 0.55, b: 0.62, a: 1 } }],
-      depthStencilAttachment: { view: null, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
-    };
-    const reflPass = {
-      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
-      depthStencilAttachment: { view: null, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
-    };
-    const swapPass = {
-      colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0.55, g: 0.65, b: 0.72, a: 1 } }],
-      depthStencilAttachment: { view: null, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
-    };
 
     function drawWorld(pass, ub, geo, birds, draws) {
       pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3);
       pass.setPipeline(pipes.terrain); pass.setBindGroup(0, geo);
       pass.setVertexBuffer(0, terrainVB); pass.setIndexBuffer(terrainIB, 'uint32');
       pass.drawIndexed(terrain.idx.length);
-      drawMeshes(pass, pipes.mesh, geo, instB, draws);
-      if (birds && q.birds) {
+      drawMeshes(pass, pipes.mesh, geo, meshVB, meshIB, instB, draws);
+      // The gulls go to roost as the light goes.
+      const flock = Math.round(q.birds * (1 - env.night));
+      if (birds && flock && pipes.bird) {
         pass.setPipeline(pipes.bird); pass.setBindGroup(0, geo);
         pass.setVertexBuffer(0, birdVB); pass.setVertexBuffer(1, birdInstB);
         pass.setIndexBuffer(birdIB, 'uint16');
-        pass.drawIndexed(bgeom.idx.length, q.birds);
+        pass.drawIndexed(bgeom.idx.length, flock);
       }
-      if (birds && fishDraws.length) drawMeshes2(pass, pipes.fish, geo, fishVB, fishIB, fishInstB, fishDraws);
-      if (birds && grassCount) {
+      if (birds) drawMeshes(pass, pipes.fish, geo, fishVB, fishIB, fishInstB, fishDraws);
+      if (birds && grassCount && pipes.grass) {
         pass.setPipeline(pipes.grass); pass.setBindGroup(0, geo);
         pass.setVertexBuffer(0, grassVB); pass.setVertexBuffer(1, grassInstB);
         pass.setIndexBuffer(grassIB, 'uint16');
@@ -2532,6 +2289,13 @@ async function main() {
       const da = Math.round(pa / tex) * tex - pa, db = Math.round(pb / tex) * tex - pb;
       ncx += srx * da + sux * db; ncy += sry * da + suy * db; ncz += srz * da + suz * db;
       nearC[0] = ncx; nearC[1] = ncy; nearC[2] = ncz;
+      // Only the rows of the land that can stand in the box are drawn into it: its footprint,
+      // carried along the light from the deepest sea floor to the highest ground.
+      const ly1 = Math.max(ly, 0.05), lift = NEAR_R * Math.abs(suy), wide = NEAR_R * (Math.abs(srz) + Math.abs(suz));
+      const ta = Math.max(-120, (landLo - ncy - lift) / ly1) * lz, tb = Math.min(120, (landHi - ncy + lift) / ly1) * lz;
+      const rowOf = (z) => Math.max(0, Math.min(q.terrain - 1, (z + q.textent) / (q.textent * 2) * (q.terrain - 1)));
+      const row0 = Math.floor(rowOf(ncz + Math.min(ta, tb) - wide)), row1 = Math.ceil(rowOf(ncz + Math.max(ta, tb) + wide));
+      nearRows[0] = row0 * (q.terrain - 1) * 6; nearRows[1] = Math.max(0, row1 - row0) * (q.terrain - 1) * 6;
       viewFrom([ncx + lx * 120, ncy + ly * 120, ncz + lz * 120], [srx, sry, srz], [sux, suy, suz], [sfx, sfy, sfz], V);
       ortho(P, -NEAR_R, NEAR_R, -NEAR_R, NEAR_R, 1, 240);
       matmul(P, V, NEARVP);
@@ -2547,7 +2311,8 @@ async function main() {
       try { frameBody(now); } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
     }
     function frameBody(now) {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      // A capture steps the clock by a fixed amount, so two captures of one build are the same picture.
+      const dt = READ ? 1 / 30 : Math.min(0.05, (now - last) / 1000);
       last = now;
       if (mode === 2) { if (!wp.paused) time += dt * wp.sim; }
       else time += dt;
@@ -2767,8 +2532,10 @@ async function main() {
           while (turn > Math.PI) turn -= Math.PI * 2;
           while (turn < -Math.PI) turn += Math.PI * 2;
           hd += (dist > 150 ? turn * 0.45 : Math.sin(time * 0.19 + i * 1.7) * 0.28) * dt;
-          x += Math.cos(hd) * sp * dt;
-          z += Math.sin(hd) * sp * dt;
+          // A bird flies through moving air: it is carried a third as fast as the wind blows.
+          const drift = envWindAt(x, z) * 0.35;
+          x += (Math.cos(hd) * sp + env.wx0 * drift) * dt;
+          z += (Math.sin(hd) * sp + env.wz0 * drift) * dt;
           const ground = fieldSample(world, x, z);
           const y = Math.max(birdMeta[i * 4 + 3] + Math.sin(time * 0.35 + i) * 3.5, ground + 9);
           birdMeta[i * 4] = x; birdMeta[i * 4 + 1] = z; birdMeta[i * 4 + 2] = hd;
@@ -2793,20 +2560,20 @@ async function main() {
       device.queue.writeBuffer(simBuf, 0, simU);
 
       const enc = device.createCommandEncoder();
-      for (let ci = 0; ci < cascades.length; ci++) {
-        const c = cascades[ci];
-        oceanU[0] = time;
-        oceanU[1] = c.size;
-        device.queue.writeBuffer(c.ub, 0, oceanU);
-        const steps = ['evolve', 'rows', 'cols', 'slopes'];
-        for (let s = 0; s < steps.length; s++) {
-          const cp = enc.beginComputePass();
-          cp.setPipeline(oceanPipes[steps[s]]);
+      {
+        // Every cascade's spectrum is advanced and transformed in one compute pass.
+        const cp = enc.beginComputePass();
+        for (const c of cascades) {
+          oceanU[0] = time; oceanU[1] = c.size;
+          device.queue.writeBuffer(c.ub, 0, oceanU);
           cp.setBindGroup(0, c.bg);
-          if (s === 1 || s === 2) cp.dispatchWorkgroups(OCEAN_N);
-          else cp.dispatchWorkgroups(OCEAN_N / 16, OCEAN_N / 16);
-          cp.end();
+          for (const step of ['evolve', 'rows', 'cols', 'slopes']) {
+            cp.setPipeline(oceanPipes[step]);
+            if (step === 'rows' || step === 'cols') cp.dispatchWorkgroups(OCEAN_N);
+            else cp.dispatchWorkgroups(OCEAN_N / 16, OCEAN_N / 16);
+          }
         }
+        cp.end();
       }
       // The surf starts from still water and is run forward over the first frames,
       // so the first picture does not wait for it.
@@ -2816,7 +2583,7 @@ async function main() {
         device.queue.submit([e.finish()]);
       }
       if (!wp.paused) shoreSim.encode(enc, time, dt);
-      if (mode === 2 && !wp.paused) {
+      if (mode === 2 && !wp.paused && pipes.sim) {
         if (ripClear) {
           for (let i = 0; i < 2; i++) {
             simPass.colorAttachments[0].view = ripViews[i];
@@ -2868,35 +2635,34 @@ async function main() {
         spass.setPipeline(pipes.shadowTerrain); spass.setBindGroup(0, bgUB);
         spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
         spass.drawIndexed(terrain.idx.length);
-        drawMeshes(spass, pipes.shadowMesh, bgUB, instFarB, farDraws);
+        drawMeshes(spass, pipes.shadowMesh, bgUB, meshVB, meshIB, instFarB, farDraws);
         spass.end();
       }
       {
         const np = enc.beginRenderPass(nearPass);
         np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
         np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
-        np.drawIndexed(terrain.idx.length);
-        drawMeshes(np, pipes.shadowMesh, bgUBN, instB, nearDraws);
-        if (fishDraws.length) drawMeshes2(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
-        if (bugDraws.length) drawMeshes2(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
+        np.drawIndexed(nearRows[1], 1, nearRows[0]);
+        drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
+        drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
+        drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
         np.end();
       }
       if (uf[86] > 0.5) {
-        reflPass.colorAttachments[0].view = reflTex.createView();
-        reflPass.depthStencilAttachment.view = reflDepth.createView();
         const rp = enc.beginRenderPass(reflPass);
         drawWorld(rp, bgUBR, bgGeoR, false, reflDraws);
         rp.end();
       }
-      scenePass.colorAttachments[0].view = sceneTex.createView();
-      scenePass.depthStencilAttachment.view = sceneDepth.createView();
       const sp = enc.beginRenderPass(scenePass);
       drawWorld(sp, bgUB, geoNow, true, mainDraws);
       sp.end();
       {
         const ap = enc.beginRenderPass(airPass);
-        ap.setPipeline(pipes.air); ap.setBindGroup(0, geoNow); ap.setBindGroup(1, bgAir);
-        ap.draw(3);
+        // Until its pipeline is built the pass only clears, which reads as clear air.
+        if (pipes.air) {
+          ap.setPipeline(pipes.air); ap.setBindGroup(0, geoNow); ap.setBindGroup(1, bgAir);
+          ap.draw(3);
+        }
         ap.end();
       }
 
@@ -2904,15 +2670,18 @@ async function main() {
         swapPass.colorAttachments[0].view = colorView;
         swapPass.depthStencilAttachment.view = depthView;
         const pass = enc.beginRenderPass(swapPass);
-        pass.setPipeline(pipes.blit); pass.setBindGroup(0, bgBlit); pass.draw(3);
-        pass.setPipeline(pipes.water); pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgWater);
+        pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgWater);
+        pass.setPipeline(pipes.blit); pass.draw(3);
+        pass.setPipeline(pipes.water);
         pass.setVertexBuffer(0, waterVB); pass.setIndexBuffer(waterIB, 'uint32');
         pass.drawIndexed(water.idx.length);
-        pass.setPipeline(pipes.shore);
-        pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
-        pass.drawIndexed(shoreMesh.idx.length);
-        if (bugDraws.length) drawMeshes2(pass, pipes.bug, geoNow, bugVB, bugIB, bugInstB, bugDraws);
-        if (!under) {
+        if (pipes.shore) {
+          pass.setPipeline(pipes.shore);
+          pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
+          pass.drawIndexed(shoreMesh.idx.length);
+        }
+        drawMeshes(pass, pipes.bug, geoNow, bugVB, bugIB, bugInstB, bugDraws);
+        if (!under && pipes.drops) {
           // Spray always, where waves break; rain and its splashes by how hard it is falling;
           // motes by how much the damp air and the low sun have to show.
           pass.setPipeline(pipes.drops); pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgAir);
@@ -2924,8 +2693,8 @@ async function main() {
         }
         pass.end();
       };
-      if (READ && readTex) drawSwap(readTex.createView(), readDepth.createView());
-      if (!(READ && frames === 16)) drawSwap(context.getCurrentTexture().createView(), swapDepth.createView());
+      if (READ && readTex) drawSwap(readViews[0], readViews[1]);
+      if (!(READ && frames === 16)) drawSwap(context.getCurrentTexture().createView(), swapDepthView);
       let doRead = false;
       if (READ && readTex && frames === 16) {
         enc.copyTextureToBuffer(
@@ -2977,7 +2746,7 @@ async function main() {
         audio.surf.gain.value = (muted ? 0 : 0.16) * shore * (under ? 0.25 : 1);
         audio.hiss.gain.value = (muted ? 0 : 0.045) * nearBreak * (under ? 0.1 : 1);
         // The same gust that is bending the plants here, by ear.
-        const gust = env.speed * (0.4 + 1.4 * vnoise((camX - env.gustOff[0]) * 0.018, (camZ - env.gustOff[1]) * 0.018) * env.v[5]);
+        const gust = envWindAt(camX, camZ);
         const sy = env.sun[1], dark = smooth01(0.1, -0.08, sy);
         audio.wind.gain.value = (muted ? 0 : 0.05) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.3 : 0.8) * (0.35 + 0.65 * gust * gust / 20);
         audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2));
@@ -3087,23 +2856,6 @@ async function main() {
       if (qstr.has('read')) pendingSplat = { x: targetX, z: targetZ, s: 0.5, r: 1.8 };
     }
 
-    function encodeOcean(enc, t) {
-      for (let ci = 0; ci < cascades.length; ci++) {
-        const c = cascades[ci];
-        oceanU[0] = t;
-        oceanU[1] = c.size;
-        device.queue.writeBuffer(c.ub, 0, oceanU);
-        const steps = ['evolve', 'rows', 'cols', 'slopes'];
-        for (let s = 0; s < steps.length; s++) {
-          const cp = enc.beginComputePass();
-          cp.setPipeline(oceanPipes[steps[s]]);
-          cp.setBindGroup(0, c.bg);
-          if (s === 1 || s === 2) cp.dispatchWorkgroups(OCEAN_N);
-          else cp.dispatchWorkgroups(OCEAN_N / 16, OCEAN_N / 16);
-          cp.end();
-        }
-      }
-    }
     {
       const seedEnc = device.createCommandEncoder();
       shoreSim.seed(seedEnc);

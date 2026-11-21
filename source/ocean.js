@@ -4,6 +4,21 @@
 
 const OCEAN_N = 128;
 
+// WGSL shared by everything that reads a cascade: the texel at `p` (in tiles, any value),
+// wrapped and weighted between its four neighbours. The sea's shader and the surf's solver
+// both include it, so the wave a breaker rides is the wave that is drawn.
+const OCEAN_TAP_WGSL = `
+fn oceanTap(tex: texture_2d<f32>, p: vec2<f32>) -> vec4<f32> {
+  let q = fract(p) * ${OCEAN_N}.0;
+  let i = vec2<i32>(floor(q));
+  let f = fract(q);
+  let j = (i + 1) & vec2<i32>(${OCEAN_N - 1});
+  let k = i & vec2<i32>(${OCEAN_N - 1});
+  return mix(mix(textureLoad(tex, k, 0), textureLoad(tex, vec2<i32>(j.x, k.y), 0), f.x),
+             mix(textureLoad(tex, vec2<i32>(k.x, j.y), 0), textureLoad(tex, j, 0), f.x), f.y);
+}
+`;
+
 const OCEAN_WGSL = `
 struct OceanU {
   time: f32,

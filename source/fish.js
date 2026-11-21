@@ -247,39 +247,15 @@ function makeFish(sp, lod) {
 // ---- The reef. Sizes in metres; the instance scale varies each piece.
 
 function coralTube(m, pts, r0, r1, sides, col, t0, t1, sw, cap) {
-  // pts: points along the branch. Adds a tapering tube with a rounded end. sw: how far it sways per metre of height.
-  let prev = null;
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[Math.max(i - 1, 0)], b = pts[Math.min(i + 1, pts.length - 1)];
-    let dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
-    const dl = Math.hypot(dx, dy, dz) || 1;
-    dx /= dl; dy /= dl; dz /= dl;
-    let sx = dy, sy = -dx, sz = 0;
-    if (Math.abs(dz) > 0.9) { sx = 0; sy = dz; sz = -dy; }
-    const sl = Math.hypot(sx, sy, sz) || 1;
-    sx /= sl; sy /= sl; sz /= sl;
-    const ux = dy * sz - dz * sy, uy = dz * sx - dx * sz, uz = dx * sy - dy * sx;
-    const u = i / (pts.length - 1), r = r0 + (r1 - r0) * u, t = t0 + (t1 - t0) * u;
-    const sh = 0.5 + 0.5 * t;
-    const row = [];
-    for (let k = 0; k < sides; k++) {
-      const an = k / sides * Math.PI * 2, ca = Math.cos(an), sa = Math.sin(an);
-      const nx = sx * ca + ux * sa, ny = sy * ca + uy * sa, nz = sz * ca + uz * sa;
-      row.push(m.v(pts[i][0] + nx * r, pts[i][1] + ny * r, pts[i][2] + nz * r, nx, ny, nz, col[0] * sh, col[1] * sh, col[2] * sh, (sw || 0) * Math.max(pts[i][1], 0), CORAL, 0, t));
-    }
-    if (prev) {
-      for (let k = 0; k < sides; k++) {
-        const k1 = (k + 1) % sides;
-        m.tri(prev[k], row[k], prev[k1]); m.tri(prev[k1], row[k], row[k1]);
-      }
-    }
-    prev = row;
-    if (i === pts.length - 1) {
-      const c = r * (cap == null ? 1 : cap);
-      const tip = m.v(pts[i][0] + dx * c, pts[i][1] + dy * c, pts[i][2] + dz * c, dx, dy, dz, col[0], col[1], col[2], (sw || 0) * Math.max(pts[i][1], 0), CORAL, 0, t1);
-      for (let k = 0; k < sides; k++) m.tri(row[k], tip, row[(k + 1) % sides]);
-    }
-  }
+  // A tapering branch with a rounded end. sw: how far it sways per metre of height.
+  const sway = (p) => (sw || 0) * Math.max(p[1], 0);
+  const d = tube(m, pts, sides, false, (u, ang, len, p) => {
+    const t = t0 + (t1 - t0) * u, sh = 0.5 + 0.5 * t;
+    return [r0 + (r1 - r0) * u, col[0] * sh, col[1] * sh, col[2] * sh, sway(p), CORAL, 0, t];
+  });
+  const e = pts[pts.length - 1], c = r1 * (cap == null ? 1 : cap), ring = m.pos.length / 3 - sides;
+  const tip = m.v(e[0] + d[0] * c, e[1] + d[1] * c, e[2] + d[2] * c, d[0], d[1], d[2], col[0], col[1], col[2], sway(e), CORAL, 0, t1);
+  for (let k = 0; k < sides; k++) m.tri(ring + k, tip, ring + (k + 1) % sides);
 }
 
 const CORAL_TONES = [[0.74, 0.42, 0.17], [0.70, 0.31, 0.30], [0.78, 0.55, 0.18], [0.62, 0.30, 0.14], [0.50, 0.42, 0.16], [0.50, 0.34, 0.56]];
@@ -1011,16 +987,16 @@ struct FishV {
 struct FishAt { p: vec3<f32>, n: vec3<f32> }
 fn fishPlace(in: MeshIn) -> FishAt {
   var p = in.p;
-  var n = in.n;
+  var n = in.n.xyz;
   let s = 0.5 - p.x;
   let seed = in.i2.z;
   // Paired fins scull, each fish to its own time.
-  if (in.sway > 0.0) {
+  if (in.c.w > 0.0) {
     let ft = F.time * (4.0 + 5.0 * fract(seed * 7.3)) + seed * 40.0;
-    let open = in.sway * (0.035 + 0.05 * in.i2.w * (0.6 + 0.4 * sin(ft)));
+    let open = in.c.w * (0.035 + 0.05 * in.i2.w * (0.6 + 0.4 * sin(ft)));
     p.z += sign(p.z) * open;
-    p.y += in.sway * 0.03 * in.i2.w * cos(ft);
-    p.x += in.sway * 0.02 * in.i2.w * sin(ft);
+    p.y += in.c.w * 0.03 * in.i2.w * cos(ft);
+    p.x += in.c.w * 0.02 * in.i2.w * sin(ft);
   }
   // A wave runs from the head to the tail, growing as it goes. A turn bends the whole body.
   let amp = in.i1.w;
@@ -1046,8 +1022,8 @@ fn fishPlace(in: MeshIn) -> FishAt {
   var o: FishV;
   o.world = at.p;
   o.nrm = at.n;
-  o.col = in.c;
-  o.kind = in.kind;
+  o.col = in.c.rgb;
+  o.kind = in.n.w;
   o.uv = in.uv;
   o.who = vec3<f32>(in.i2.y, in.i2.z, in.i1.x);
   o.clip = F.viewProj * vec4<f32>(at.p, 1.0);

@@ -127,6 +127,11 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   env.gustOff[0] += env.wx0 * env.speed * 0.6 * dt; env.gustOff[1] += env.wz0 * env.speed * 0.6 * dt;
   envLight(env.cover);
 }
+// The wind at a place in m/s, gusts and all: the same travelling cells the shader bends the
+// plants by. Insects are carried by it, birds drift on it, and the sound of it is this number.
+function envWindAt(x, z) {
+  return env.speed * (0.4 + 1.4 * vnoise((x - env.gustOff[0]) * 0.018, (z - env.gustOff[1]) * 0.018) * env.v[5]);
+}
 function envLabel() {
   const h = env.goal != null ? env.goal : env.hour;
   let name = 'Night';

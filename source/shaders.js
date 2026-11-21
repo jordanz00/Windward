@@ -653,55 +653,6 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   return sandC * sandW + grassC * grassW + rockC * rock;
 }
 
-struct Wash { runup: f32, foam: f32, wet: f32, beach: f32 }
-fn washAt(xz: vec2<f32>) -> Wash {
-  var o: Wash;
-  o.runup = 0.0;
-  o.foam = 0.0;
-  o.wet = 0.0;
-  o.beach = 0.0;
-  let h = sampleField(xz).x;
-  if (h < -0.55 || h > 2.3) { return o; }
-  let e = 2.2;
-  let hx = sampleField(xz + vec2<f32>(e, 0.0)).x - sampleField(xz - vec2<f32>(e, 0.0)).x;
-  let hz = sampleField(xz + vec2<f32>(0.0, e)).x - sampleField(xz - vec2<f32>(0.0, e)).x;
-  let g = vec2<f32>(hx, hz);
-  let slope = length(g) / (e * 2.0);
-  // Gentle beach only. A cliff face does not take a wash.
-  let gentle = smoothstep(0.01, 0.045, slope) * smoothstep(0.72, 0.28, slope);
-  let band = smoothstep(2.1, 0.15, h) * smoothstep(-0.45, 0.0, h);
-  let beach = gentle * band;
-  if (beach < 0.02) { return o; }
-  let up = g / max(length(g), 1e-3);
-  let along = dot(xz, vec2<f32>(-up.y, up.x));
-  // Energy a few meters downhill, because the beach itself stores no wave scale.
-  let energy = sat(sampleField(xz - up * 7.0).y);
-  let ph = F.time * 0.62 - along * 0.045;
-  let p1 = pow(sat(sin(ph)), 1.55);
-  let p2 = pow(sat(sin(F.time * 0.27 - along * 0.07 + 1.9)), 1.8);
-  let reach = mix(0.55, 1.25, energy);
-  // Signed meters, so the waterline wanders along the beach instead of tracing one contour.
-  let wander = (n2(vec2<f32>(along * 0.045, floor(F.time * 0.33))) - 0.42) * 0.95
-             + (n2(vec2<f32>(along * 0.16, 2.4)) - 0.4) * 0.42
-             + (n2(vec2<f32>(along * 0.5, F.time * 0.2)) - 0.5) * 0.16;
-  let runup = max((0.08 + 0.46 * p1 + 0.18 * p2) * reach + wander, 0.05);
-  let high = max((0.28 + 0.2 * (0.5 + 0.5 * sin(F.time * 0.1 - along * 0.018))) * reach + wander * 0.65, runup);
-  let below = runup - h;
-  let rising = sat(cos(ph));
-  let flow = select(-0.7, 1.0, rising > 0.4);
-  let streak = n2(vec2<f32>(along * 0.72, h * 4.8 - F.time * 0.95 * flow));
-  let fine = n2(vec2<f32>(along * 2.4 + F.time * 0.2, h * 9.0));
-  let lip = exp(-abs(h - runup) * 10.0) * smoothstep(-0.02, 0.035, below);
-  let body = smoothstep(0.02, 0.12, below) * smoothstep(0.9, 0.2, below / max(runup, 0.08));
-  o.runup = runup;
-  // Holes in the lip, and thin streaks behind it. A solid band reads as paint.
-  let holes = smoothstep(0.45, 0.78, streak * 0.55 + fine * 0.45);
-  o.foam = sat(lip * holes + body * pow(max(streak, 0.0), 2.1) * 0.65) * beach;
-  o.wet = beach * smoothstep(high + 0.2, high - 0.35, h);
-  o.beach = beach;
-  return o;
-}
-
 struct SkyV {
   @builtin(position) clip: vec4<f32>,
   @location(0) ndc: vec2<f32>,
@@ -861,10 +812,9 @@ struct MeshV {
 }
 struct MeshIn {
   @location(0) p: vec3<f32>,
-  @location(1) n: vec3<f32>,
-  @location(2) c: vec3<f32>,
-  @location(3) sway: f32,
-  @location(4) kind: f32,
+  // The normal, and in w what the vertex is made of. The colour, and in w how far it gives to the wind.
+  @location(1) n: vec4<f32>,
+  @location(2) c: vec4<f32>,
   @location(5) uv: vec2<f32>,
   // Instance: position and yaw, scale and vertical stretch, tint.
   @location(6) i0: vec4<f32>,
@@ -904,19 +854,19 @@ fn plantShift(L: vec2<f32>, sway: f32) -> vec3<f32> {
 // harder blow, out of step along the plant.
 fn meshPlace(in: MeshIn) -> vec3<f32> {
   var w = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
-  if (in.sway <= 0.0) { return w; }
+  if (in.c.w <= 0.0) { return w; }
   // Under water there is no wind. Things lean one way and then the other with the surge.
   if (in.i0.y < -0.3) {
     let gust = sin(F.time * 1.15 + w.x * 0.5 + w.z * 0.35) * 0.7 + sin(F.time * 0.43 + w.z * 0.2) * 0.4;
-    w.x += gust * in.sway * 1.15;
-    w.z += gust * in.sway * 0.22;
-    w.y -= abs(gust) * in.sway * in.sway * 0.28;
+    w.x += gust * in.c.w * 1.15;
+    w.z += gust * in.c.w * 0.22;
+    w.y -= abs(gust) * in.c.w * in.c.w * 0.28;
     return w;
   }
   let L = plantLean(in.i0.xz, in.i1.x, in.i1.z);
   let v = L.z;
   let id = L.w;
-  let k = i32(in.kind + 0.5);
+  let k = i32(in.n.w + 0.5);
   var along = L.x;
   var across = L.y;
   if (k == 2) {
@@ -928,15 +878,15 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   } else if (k == 3) {
     along += sin(F.time * 1.9 + w.x * 0.8 + w.z * 0.6 + w.y) * 0.006 * v;
   }
-  return w + plantShift(vec2<f32>(along, across), in.sway);
+  return w + plantShift(vec2<f32>(along, across), in.c.w);
 }
 @vertex fn vsMesh(in: MeshIn) -> MeshV {
   var o: MeshV;
   o.world = meshPlace(in);
-  o.nrm = spinY(normalize(in.n / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
+  o.nrm = spinY(normalize(in.n.xyz / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
   // A tree's own tint is in its leaves. Its bark stays close to bark.
-  o.col = in.c * mix(in.i2.rgb, vec3<f32>(dot(in.i2.rgb, vec3<f32>(0.333))), select(0.0, 0.8, in.kind > 8.5));
-  o.kind = in.kind;
+  o.col = in.c.rgb * mix(in.i2.rgb, vec3<f32>(dot(in.i2.rgb, vec3<f32>(0.333))), select(0.0, 0.8, in.n.w > 8.5));
+  o.kind = in.n.w;
   o.uv = in.uv;
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
   return o;
@@ -1227,20 +1177,8 @@ fn seaFade(dist: f32) -> f32 {
   return smoothstep(reach, reach * 0.32, dist);
 }
 
-fn ggxSun(N: vec3<f32>, V: vec3<f32>, rough: f32, fres: f32) -> vec3<f32> {
-  let a = max(rough, 0.004);
-  let a2 = a * a;
-  let H = normalize(V + F.sunDir);
-  let ndh = max(dot(N, H), 0.0);
-  let ndv = max(dot(N, V), 0.001);
-  let ndl = max(dot(N, F.sunDir), 0.0);
-  let d = ndh * ndh * (a2 - 1.0) + 1.0;
-  let D = a2 / max(PI * d * d, 1e-6);
-  let k = a2 * 0.5;
-  let G = (ndv / (ndv * (1.0 - k) + k)) * (ndl / (ndl * (1.0 - k) + k));
-  // The peak is narrow. Scale it so a whole crest cannot clip to white.
-  return F.sunCol * (D * G * fres * ndl) / (4.0 * ndv) * 0.16;
-}
+// The sun's mirror image spread by a rough surface. One lobe serves the body of the sea
+// and the glitter on it.
 fn ggxGlint(N: vec3<f32>, V: vec3<f32>, rough: f32, fres: f32) -> vec3<f32> {
   let a = max(rough, 0.002);
   let a2 = a * a;
@@ -1401,7 +1339,8 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   var base = F.deepC.rgb;
   base = mix(base, vec3<f32>(0.86, 0.88, 0.86) * F.day.rgb, foam * 0.45);
   var col = mix(base, reflCol, fres * (1.0 - foam * 0.5));
-  col += ggxSun(N, V, rough, fres) * (1.0 - foam);
+  // The peak is narrow. It is scaled so a whole crest cannot clip to white.
+  col += ggxGlint(N, V, max(rough, 0.004), fres) * 0.16 * (1.0 - foam);
   return airMix(col, -V, distS);
 }
 
@@ -1462,19 +1401,9 @@ fn oceanRot(xz: vec2<f32>) -> vec2<f32> {
   let sn = sin(F.ctrl.w);
   return vec2<f32>(xz.x * cs - xz.y * sn, xz.x * sn + xz.y * cs);
 }
+${OCEAN_TAP_WGSL}
 fn oceanSample(tex: texture_2d<f32>, xz: vec2<f32>, size: f32) -> vec3<f32> {
-  let p = fract(oceanRot(xz) / size) * 128.0;
-  let i = vec2<i32>(floor(p));
-  let f = fract(p);
-  let x0 = i.x & 127;
-  let y0 = i.y & 127;
-  let x1 = (i.x + 1) & 127;
-  let y1 = (i.y + 1) & 127;
-  let a = textureLoad(tex, vec2<i32>(x0, y0), 0);
-  let b = textureLoad(tex, vec2<i32>(x1, y0), 0);
-  let c = textureLoad(tex, vec2<i32>(x0, y1), 0);
-  let d = textureLoad(tex, vec2<i32>(x1, y1), 0);
-  return mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
+  return oceanTap(tex, oceanRot(xz) / size).xyz;
 }
 // The same evolving spectrum, read on a second incommensurate scale, so a
 // 220 m tile does not repeat as a wallpaper. Both samples move with one clock.
@@ -1824,6 +1753,25 @@ fn airOver(col: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
   return col * a.a + a.rgb;
 }
 
+// The finished scene, with the air over it, to the screen. It writes the scene's depth
+// so that what is drawn afterwards, the water and the insects, is hidden by the land.
+struct BlitOut {
+  @builtin(frag_depth) d: f32,
+  @location(0) c: vec4<f32>,
+}
+@fragment fn fsBlit(in: SkyV) -> BlitOut {
+  let px = vec2<i32>(in.clip.xy);
+  // Under water the eye opens up: the same scene is exposed a little brighter.
+  var col = tonemap(airOver(textureLoad(sceneTex, px, 0).rgb, in.clip.xy) * (1.0 + 0.3 * F.under));
+  if (F.under > 0.5) {
+    col *= mix(1.0, 0.72, sat(length(in.clip.xy / F.res - 0.5) * 1.35));
+  }
+  var o: BlitOut;
+  o.d = textureLoad(sceneDepth, px, 0);
+  o.c = vec4<f32>(col, 1.0);
+  return o;
+}
+
 @fragment fn fsWater(in: WaterV) -> @location(0) vec4<f32> {
   let sh0 = shoreFetch(in.xz0);
   let shoreD = in.xz0 - SH.origin;
@@ -2087,84 +2035,5 @@ fn airOver(col: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
   return vec4<f32>(tonemap(airOver(col, in.clip.xy)), alpha);
 }
 
-`;
-}
-
-function blitShaderCode() {
-  // Separate module so its bindings don't have to match the water pass.
-  // The Frame prefix is identical, so the same uniform buffer can be bound.
-  return `struct Frame {
-  viewProj: mat4x4<f32>,
-  invViewProj: mat4x4<f32>,
-  reflVP: mat4x4<f32>,
-  camPos: vec3<f32>,
-  time: f32,
-  sunDir: vec3<f32>,
-  under: f32,
-  sunCol: vec3<f32>,
-  exposure: f32,
-  horiz: vec3<f32>,
-  tanHalf: f32,
-  right: vec3<f32>,
-  aspect: f32,
-  upv: vec3<f32>,
-  clipBelow: f32,
-  fwd: vec3<f32>,
-  steps: f32,
-  reflPos: vec3<f32>,
-  cloudOct: f32,
-  gridO: vec2<f32>,
-  cover: f32,
-  camDamp: f32,
-  res: vec2<f32>,
-  reflOn: f32,
-  pad0: f32,
-  waves: array<vec4<f32>, 8>,
-  steep: array<vec4<f32>, 2>,
-}
-@group(0) @binding(0) var<uniform> F: Frame;
-@group(0) @binding(1) var sceneTex: texture_2d<f32>;
-@group(0) @binding(2) var sceneDepth: texture_depth_2d;
-@group(0) @binding(3) var airTex: texture_2d<f32>;
-@group(0) @binding(4) var airSamp: sampler;
-
-fn tonemap(c: vec3<f32>) -> vec3<f32> {
-  let x = max(c, vec3<f32>(0.0)) * F.exposure;
-  let y = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-  return pow(y, vec3<f32>(0.4545));
-}
-fn sat(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
-
-struct SkyV {
-  @builtin(position) clip: vec4<f32>,
-  @location(0) ndc: vec2<f32>,
-}
-@vertex fn vsBlit(@builtin(vertex_index) id: u32) -> SkyV {
-  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
-  var o: SkyV;
-  o.ndc = p[id];
-  o.clip = vec4<f32>(p[id], 0.0, 1.0);
-  return o;
-}
-struct BlitOut {
-  @builtin(frag_depth) d: f32,
-  @location(0) c: vec4<f32>,
-}
-@fragment fn fsBlit(in: SkyV) -> BlitOut {
-  let px = vec2<i32>(in.clip.xy);
-  // Under water the eye opens up: the same scene is exposed a little brighter.
-  let uv = in.clip.xy / max(F.res, vec2<f32>(1.0));
-  let e = 1.5 / max(F.res, vec2<f32>(1.0));
-  let a = (textureSampleLevel(airTex, airSamp, uv + vec2<f32>(e.x, e.y * 0.4), 0.0) + textureSampleLevel(airTex, airSamp, uv + vec2<f32>(-e.x * 0.4, e.y), 0.0)
-    + textureSampleLevel(airTex, airSamp, uv - vec2<f32>(e.x, e.y * 0.4), 0.0) + textureSampleLevel(airTex, airSamp, uv - vec2<f32>(-e.x * 0.4, e.y), 0.0)) * 0.25;
-  var col = tonemap((textureLoad(sceneTex, px, 0).rgb * a.a + a.rgb) * (1.0 + 0.3 * F.under));
-  if (F.under > 0.5) {
-    col *= mix(1.0, 0.72, sat(length(uv - 0.5) * 1.35));
-  }
-  var o: BlitOut;
-  o.d = textureLoad(sceneDepth, px, 0);
-  o.c = vec4<f32>(col, 1.0);
-  return o;
-}
 `;
 }
