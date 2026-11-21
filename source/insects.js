@@ -199,7 +199,7 @@ const BUGS = [
   { id: 'mosquito', site: 'shade', n: 8, len: 0.006, reach: 7, tints: [[1, 1, 1]] },
   { id: 'beetle', site: 'litter', n: 8, len: 0.018, reach: 9, tints: [[0.05, 0.16, 0.09], [0.16, 0.09, 0.04], [0.03, 0.03, 0.035], [0.2, 0.14, 0.03]] },
   { id: 'ant', site: 'litter', n: 96, len: 0.007, reach: 6, tints: [[0.22, 0.07, 0.03], [0.05, 0.04, 0.035]] },
-  { id: 'firefly', site: 'shade', n: 80, len: 0.012, reach: 40, tints: [[1, 1, 1]] }
+  { id: 'firefly', site: 'shade', n: 80, len: 0.012, reach: 24, tints: [[1, 1, 1]] }
 ];
 // Two levels of detail each, in the order of BUGS; then the ant with its leaf.
 function bugMeshes() {
@@ -422,7 +422,7 @@ BugLife.prototype.newHome = function (a, cx, cz) {
     a.px = a.hx; a.pz = a.hz;
     for (let k = 0; k < 16; k++) { const r = 1 + k * 0.5, q = rnd() * 6.28, x = a.hx + Math.cos(q) * r, z = a.hz + Math.sin(q) * r, h = fieldSample(this.world, x, z); if (h > 0.05 && h < 1) { a.px = x; a.pz = z; break; } }
   }
-  if (B.id === 'firefly') { a.st = a.seed < 0.3 ? 1 : 0; a.per = 2.5 + rnd() * 3; a.t = a.st ? 1e9 : rnd() * a.per; a.fl = 0; if (a.st) a.y = a.hy + 0.006; }
+  if (B.id === 'firefly') { a.st = a.seed < 0.3 ? 1 : 0; a.per = 2.5 + rnd() * 3; a.t = a.st ? 1e9 : rnd() * a.per; a.fl = 0; if (a.st) a.y = a.hy + 0.05 + rnd() * 0.4; }
   if (B.id === 'beetle') { a.y = a.hy; a.t = 1 + rnd() * 3; }
   return true;
 };
@@ -637,7 +637,7 @@ BugLife.prototype.collect = function (out, vp, ex, ey, ez, pxw, ranges) {
     if (cw < -L || Math.abs(cx) > cw + L * 3 || Math.abs(cv) > cw + L * 3) continue;
     a.slot = (a.sp === 8 && a.leaf ? 20 : a.sp * 2) + (L > dist * 0.02 ? 0 : 1);
     // Too small to cover a pixel, it is drawn a few pixels long and that much fainter.
-    a.big = Math.max(1, dist * pxw * 3 / L);
+    a.big = Math.max(1, dist * pxw * 4 / L);
     counts[a.slot]++;
   }
   let run = 0;
@@ -730,7 +730,7 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
 @vertex fn vsBug(in: BugIn) -> BugV {
   var o: BugV;
   o.world = bugTurn(in, in.p, 1.0);
-  if (in.kind > 4.5) { o.world += (F.right * in.uv.x + F.upv * in.uv.y) * 0.04; }
+  if (in.kind > 4.5) { o.world += (F.right * in.uv.x + F.upv * in.uv.y) * 0.06 + normalize(F.camPos - o.world) * 0.03; }
   o.nrm = bugTurn(in, in.n, 0.0);
   o.col = in.c * in.i2.rgb;
   if ((in.kind > 1.5 && in.kind < 2.5) || in.kind > 5.5) { o.col = in.c; }
@@ -767,9 +767,9 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
   if (k == 5) {
     // The lantern's glow: cold yellow-green, and only while it is lit.
     let r = length(in.uv);
-    let ha = exp(-r * r * 4.5) * in.glow.x * 0.6 * step(r, 1.0);
-    if (ha < 0.02) { discard; }
-    return vec4<f32>(tonemap(vec3<f32>(0.7, 1.0, 0.22) * (0.4 + 2.2 * exp(-r * r * 9.0)) / max(F.exposure, 1.0)), ha);
+    let ha = exp(-r * r * 4.0) * in.glow.x * 0.6 * sat(1.0 - r);
+    if (ha < 0.01) { discard; }
+    return vec4<f32>(tonemap(vec3<f32>(0.5, 0.95, 0.1) * (0.25 + 1.3 * exp(-r * r * 12.0)) / max(F.exposure, 1.0)), ha);
   } else if (k == 4) {
     col += vec3<f32>(0.62, 1.0, 0.2) * in.glow.x * 9.0 / max(F.exposure, 1.0);
   } else if (k == 2) {
