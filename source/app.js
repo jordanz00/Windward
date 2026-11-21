@@ -1480,13 +1480,16 @@ function makeAudio() {
   const panLfo2 = ac.createOscillator(); panLfo2.frequency.value = 0.017;
   const panAmt2 = ac.createGain(); panAmt2.gain.value = 0.28;
   panLfo2.connect(panAmt2); panAmt2.connect(airPalm.pan.pan); panLfo2.start();
+  // Underwater rush (Abyssal): same noise bed, bandpass that opens with swim speed.
+  const rush = bed('bandpass', 280, 0.55);
   const api = {
     ac: ac, master: master, under: under,
     surf: surf.gain, hiss: hiss.gain, wind: wind.gain, insects: insects.gain,
     airFar: airFar.gain, airCoast: airCoast.gain, airPalm: airPalm.gain,
     airCanopy: airCanopy.gain, airGrass: airGrass.gain,
     airCoastF: airCoast.filter, airPalmF: airPalm.filter, airCanopyF: airCanopy.filter,
-    shoreAmt: 0.4, alive: true, hush: 1, birds: 1, _gustPeak: 0
+    rush: rush.gain, rushF: rush.filter,
+    shoreAmt: 0.4, underAmt: 0, alive: true, hush: 1, birds: 1, _gustPeak: 0, _tBub: 0
   };
   // ---- What lives in the air, by ear. Nothing here is a loop: each singer keeps its own
   // time, and how many are singing follows the hour, the rain, the wind and the trees.
@@ -1597,6 +1600,26 @@ function makeAudio() {
     setTimeout(drip, 40 + Math.random() * 260 / Math.max(wetness, 0.1));
   };
   drip();
+  // Underwater bubble bursts (Abyssal): short rising blips while submerged.
+  const bubble = () => {
+    if (!api.alive) return;
+    if (!muted && api.underAmt > 0.4 && Math.random() < 0.45) {
+      const t = ac.currentTime;
+      const n = 1 + ((Math.random() * 5) | 0);
+      for (let i = 0; i < n; i++) {
+        const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
+        const f0 = 480 + Math.random() * 900, len = 0.04 + Math.random() * 0.07;
+        const a = t + i * (0.03 + Math.random() * 0.05);
+        o.type = 'sine'; o.frequency.setValueAtTime(f0, a); o.frequency.exponentialRampToValueAtTime(f0 * 1.7, a + len);
+        g.gain.setValueAtTime(0.0001, a); g.gain.exponentialRampToValueAtTime(0.012 + Math.random() * 0.02, a + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, a + len);
+        p.pan.value = Math.random() * 1.6 - 0.8;
+        o.connect(g); g.connect(p); p.connect(under); o.start(a); o.stop(a + len + 0.02);
+      }
+    }
+    setTimeout(bubble, 180 + Math.random() * 520 / Math.max(api.underAmt, 0.15));
+  };
+  bubble();
   // Birds. A singer keeps a phrase of its own: the same notes in the same order every time,
   // a little faster or slower, from the same place, the way a bird repeats its song.
   const note = (t, f0, f1, len, peak, pan, type, trill) => {
@@ -3163,6 +3186,12 @@ async function main() {
           alt: camY - Math.max(land, 0) - 1.7, under: under, heard: bugLife.heard
         });
         audio.under.frequency.value = under ? 380 : 16000;
+        audio.underAmt = under ? 1 : 0;
+        // Swim-speed water rush while submerged (Abyssal audio cue).
+        const spd = Math.hypot(velX, velY, velZ);
+        const m = muted ? 0 : 1;
+        audio.rush.value = m * (under ? 0.045 * Math.pow(Math.min(spd / 14, 1), 1.2) : 0);
+        if (under) audio.rushF.frequency.value = 200 + spd * 12;
       }
       if (showHint > 0) {
         showHint -= dt;

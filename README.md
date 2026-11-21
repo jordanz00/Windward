@@ -2,7 +2,7 @@
 
 A small island you can walk, swim, and fly, drawn in the browser with WebGPU. The coast, the swell, the reef, the trees, the insects, the weather, and the sound are all computed when the page opens. The day passes, and the weather comes and goes. There are no image files, no 3D models, and no audio files. The page you open is one HTML file.
 
-It is in the same spirit as [Abyssal Garden](https://github.com/Noniv/abyssal-garden): one self-contained page, no engine, everything procedural. The place is different. This one is above the water, with a real swell, a beach, and a bay.
+It is in the same spirit as [Abyssal Garden](https://github.com/Noniv/abyssal-garden): one self-contained page, no engine, everything procedural. Techniques shared with that project — Beer's-law water fog, interference caustics, height-powered plant sway, Snell-window surface look, and procedural underwater ambience — are adapted here for a tropical island above and below the waterline.
 
 Best in Chrome. It also runs in Edge, and on a phone at Low detail.
 

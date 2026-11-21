@@ -501,22 +501,29 @@ fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
   return mix(1.0, shade, dayK);
 }
 
-// The colour clear tropical water goes to with distance: lit from above, so it dims under a cloud.
-// Brighter looking up toward the light, bluer and darker looking down and away.
-fn waterHaze(dy: f32) -> vec3<f32> {
-  // Depth shifts turquoise shallows toward deep blue; cloud cover dims transmission.
-  let depth = max(-F.camPos.y, 0.0);
-  let deepK = sat(depth / 9.0);
-  let shallow = mix(vec3<f32>(0.05, 0.28, 0.36), vec3<f32>(0.08, 0.36, 0.42), sat(dy * 1.4 + 0.45));
-  let deep = mix(vec3<f32>(0.008, 0.09, 0.22), vec3<f32>(0.03, 0.22, 0.34), sat(dy * 1.2 + 0.4));
-  let c = mix(shallow, deep, deepK);
-  let lit = mix(0.48, 1.0, cloudShade(F.camPos.xz, 0.0));
-  return c * lit * max(F.lit.y, 0.0) * F.day.rgb * exp(-depth * vec3<f32>(0.04, 0.015, 0.01));
+// Water optical constants (Abyssal-style Beer's law): scatter SIG, absorb KD — turquoise tropical mix.
+const W_SIG = vec3<f32>(0.042, 0.022, 0.018);
+const W_KD = vec3<f32>(0.055, 0.022, 0.016);
+const W_COL = vec3<f32>(0.14, 0.48, 0.72);
+// In-scattered water light along a ray (Beer's law integral + soft forward phase).
+fn waterFogIn(ro: vec3<f32>, rd: vec3<f32>, dist: f32) -> vec3<f32> {
+  let a = W_SIG - W_KD * rd.y;
+  let I = (1.0 - exp(-a * dist)) / max(a, vec3<f32>(1e-4));
+  let mu = max(dot(rd, F.sunDir), 0.0);
+  let phase = 1.15 + 0.35 * mu * mu * mu * mu;
+  let lit = mix(0.5, 1.0, cloudShade(ro.xz, ro.y)) * max(F.lit.y, 0.0);
+  return W_COL * W_SIG * exp(W_KD * min(ro.y, 0.0)) * I * phase * lit * F.day.rgb;
 }
-// Light scattered by the water itself reaches every side of a thing that is in it,
-// which is why nothing under water has a black shadow.
+fn waterHaze(dy: f32) -> vec3<f32> {
+  // Far-field water colour when looking into open sea (uses fog integral over a long path).
+  let rd = normalize(vec3<f32>(0.02, dy, 1.0));
+  return waterFogIn(F.camPos, rd, 80.0);
+}
+// Light scattered by the water itself reaches every side of a thing that is in it.
 fn waterFill(depth: f32) -> vec3<f32> {
-  return vec3<f32>(0.10, 0.21, 0.24) * F.under * sat(depth * 3.0) * exp(-depth * 0.12) * max(F.lit.y, 0.0) * F.day.rgb;
+  let sunDeep = exp(W_KD * (-depth) / max(F.sunDir.y, 0.12));
+  return W_COL * 0.55 * F.under * sat(depth * 3.0) * sunDeep * max(F.lit.y, 0.0) * F.day.rgb
+    * mix(0.55, 1.0, cloudShade(F.camPos.xz, 0.0));
 }
 // Aerial perspective. Air scatters blue out of the line of sight first, and the damp air
 // near the sea adds a pale veil that thins with height and thickens with humidity and rain.
@@ -552,47 +559,44 @@ fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
   let d = world - F.camPos;
   let dist = length(d);
   if (F.under > 0.5) {
-    // Stronger red/green absorption with distance; blue carries farther.
-    let absorb = exp(-dist * mix(vec3<f32>(0.045, 0.028, 0.018), vec3<f32>(0.09, 0.055, 0.035), sat(F.camDamp)));
-    return mix(waterHaze(d.y / max(dist, 0.01)), col * absorb, sat(exp(-dist * mix(0.024, 0.052, sat(F.camDamp)))));
+    let rd = d / max(dist, 1e-3);
+    let keep = exp(-W_SIG * dist * mix(0.85, 1.35, sat(F.camDamp)));
+    return col * keep + waterFogIn(F.camPos, rd, dist) * (0.55 + 0.45 * sat(exp(-dist * 0.02)));
   }
   return airMix(col, d / max(dist, 1e-3), dist);
 }
 
+// Interference caustic (Abyssal-style): folded sin/cos lattice, not a tiled noise wallpaper.
+fn causWave(uv: vec2<f32>, t: f32) -> f32 {
+  let p = uv * 6.2831853;
+  var i = p;
+  var c = 0.0;
+  for (var n = 1; n <= 5; n++) {
+    let tt = t * (1.0 - 3.5 / f32(n));
+    i = p + vec2<f32>(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+    let s = sin(i.x + tt);
+    let k = cos(i.y + tt);
+    c += abs(s * k) / (1.25 * sqrt(s * s + k * k) + 1e-4);
+  }
+  c = 1.17 - pow(c / 5.0, 1.4);
+  return pow(abs(c), 8.0);
+}
 fn caustic(xz: vec2<f32>) -> f32 {
-  // Surface waves refract sunlight onto the seabed. Bend follows the shared wind/swell
-  // heading (F.ctrl.w) so caustics move with the sea without sampling FFT in the geo pass.
   let depth = max(-sampleField(xz).x, 0.12);
   if (depth < 0.02 || F.sunDir.y < 0.04) { return 0.0; }
   let sy = max(F.sunDir.y, 0.18);
+  // Project seabed point up the sun ray to the surface, then sample the interference field.
   let surf = xz - F.sunDir.xz * (depth / sy);
-  let t = F.time;
+  let t = F.time * (0.35 + 0.25 * max(F.mood.w, 0.35));
   let dir = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
-  let along = vec2<f32>(surf.x * dir.x + surf.y * dir.y, -surf.x * dir.y + surf.y * dir.x);
-  let sea = max(F.mood.w, 0.35);
-  // Multi-frequency slopes advected along the swell — not a fixed wallpaper.
-  let b1 = vec2<f32>(
-    n2(along * 0.42 + vec2<f32>(t * 0.09 * sea, 1.2)),
-    n2(along * 0.42 + vec2<f32>(4.1, t * 0.07 * sea))
-  ) - 0.5;
-  let b2 = vec2<f32>(
-    n2(along * 1.55 + vec2<f32>(t * 0.24 * sea, 2.4)),
-    n2(along * 1.55 + vec2<f32>(3.3, t * 0.18 * sea))
-  ) - 0.5;
-  let bend = (b1 * 1.7 + b2 * 0.95) * (0.75 + 0.45 * sea);
-  let focus = sat(length(bend) * 2.0);
-  let cell = mix(1.35, 0.42, sat(depth / 6.0));
-  let p1 = (surf + bend * depth * 0.55) * cell * 0.55;
-  let p2 = (surf + bend * depth * 0.9) * cell * 1.7 + vec2<f32>(3.1, 1.7);
-  let e1 = laceCell(p1, t * 0.85);
-  let e2 = laceCell(p2, t * 1.55);
-  let l1 = 1.0 - smoothstep(0.0, 0.1, e1);
-  let l2 = 1.0 - smoothstep(0.0, 0.12, e2);
-  let net = l1 * l1 * (0.5 + 0.55 * focus) + l2 * l2 * 0.42;
+  let uv = vec2<f32>(dot(surf, dir), dot(surf, vec2<f32>(-dir.y, dir.x))) * mix(0.055, 0.028, sat(depth / 8.0));
+  let a = causWave(uv, t + 23.0);
+  let b = causWave(uv.yx * 0.72 + vec2<f32>(0.37, 0.11), t * 0.85 + 5.0);
+  let net = pow(a, 2.2) * (0.45 + 1.2 * b);
   let lit = cloudShade(xz, 0.0);
   let day = smoothstep(0.02, 0.12, F.sunTrue.y);
-  let shallow = smoothstep(0.02, 0.35, depth) * exp(-depth * 0.26);
-  return net * shallow * lit * day * 0.68;
+  let shallow = smoothstep(0.02, 0.4, depth) * exp(-depth * 0.22);
+  return sat(net * 4.5) * shallow * lit * day * 0.72;
 }
 
 fn shadowAt(p: vec3<f32>) -> f32 {
@@ -675,12 +679,13 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   var light = F.sunCol * keyTint * sunTerm * sh * 1.12 + sky * mix(0.85, 0.95, gold) + ground * 0.5;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
-    let absorb = exp(-depth * vec3<f32>(0.19, 0.06, 0.05));
-    light *= absorb;
+    // Sun energy attenuated along the beam path through water (Abyssal sunE).
+    let absorb = exp(W_KD * (-depth) / max(F.sunDir.y, 0.12));
+    light *= absorb * (0.55 + 0.45 * sat(depth / 8.0 + 0.2));
     if (world.y < -0.04) {
       let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
       let cau = caustic(world.xz);
-      light += F.sunCol * max(nl, 0.0) * sh * (cau * 3.1 - 0.14 * k) * absorb;
+      light += F.sunCol * max(nl, 0.0) * sh * (cau * 3.4 - 0.12 * k) * absorb;
     }
   }
   if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
@@ -982,10 +987,15 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   if (in.c.w <= 0.0) { return w; }
   // Under water there is no wind. Things lean one way and then the other with the surge.
   if (in.i0.y < -0.3) {
-    let gust = sin(F.time * 1.15 + w.x * 0.5 + w.z * 0.35) * 0.7 + sin(F.time * 0.43 + w.z * 0.2) * 0.4;
-    w.x += gust * in.c.w * 1.15;
-    w.z += gust * in.c.w * 0.22;
-    w.y -= abs(gust) * in.c.w * in.c.w * 0.28;
+    // Height-powered surge sway (Abyssal kelp): slow lean + faster tip flutter.
+    let h = max(w.y - in.i0.y, 0.0);
+    let ph = w.x * 0.031 + w.z * 0.017;
+    let a = 0.028 * pow(h + in.c.w, 1.2);
+    let gust = a * (sin(F.time * 0.55 + ph + h * 0.09) + 0.35 * sin(F.time * 1.35 + ph * 3.0 + h * 0.3));
+    let gustZ = a * (cos(F.time * 0.42 + ph * 1.3 + h * 0.07) + 0.35 * cos(F.time * 1.15 + ph * 2.0 + h * 0.23));
+    w.x += gust * 1.1;
+    w.z += gustZ * 1.1;
+    w.y -= (abs(gust) + abs(gustZ)) * in.c.w * 0.2;
     return w;
   }
   let L = plantLean(in.i0.xz, in.i1.x, in.i1.z, in.i1.w);
@@ -1218,14 +1228,16 @@ struct GrassV {
   let z = lp.x * s + lp.z * c;
   let ground = sampleField(vec2<f32>(inst.x, inst.y)).x;
   var w = vec3<f32>(inst.x + x, ground + lp.y, inst.y + z);
-  let sway = uv.y * (0.25 + weed * 0.45);
-  var ph = sin(F.time * 0.31 + inst.x * 0.012 + inst.y * 0.009) * 0.65 + sin(F.time * 2.6 + inst.x * 0.2 + inst.y * 0.17) * 0.45;
+  // Tip sway grows with height^1.25 (Abyssal leaf sway), plus shared wind for land grass.
+  let sway = pow(max(uv.y, 0.0), 1.25) * (0.28 + weed * 0.5);
+  var ph = sin(F.time * 0.5 + inst.x * 0.031 + inst.y * 0.017) * 0.7
+    + 0.35 * sin(F.time * 1.3 + inst.x * 0.09 + inst.y * 0.07);
   var dir = vec2<f32>(1.0, 0.35);
   if (weed < 0.5) {
-    // Grass has no stiffness to speak of: it lies over in a gust and shivers at the tip.
     let v = windAt(inst.xy);
     let id = fract(inst.x * 0.731 + inst.y * 0.417);
-    ph = v * v * 0.02 * (0.8 + 0.5 * sin(F.time * (2.2 + 1.5 * id) + id * 30.0)) + sin(F.time * (5.0 + 3.0 * id) + id * 50.0) * 0.03 * v * uv.y;
+    ph = v * v * 0.022 * (0.8 + 0.5 * sin(F.time * (2.2 + 1.5 * id) + id * 30.0))
+      + sin(F.time * (5.0 + 3.0 * id) + id * 50.0) * 0.035 * v * uv.y;
     dir = F.wind.xy;
   }
   w.x += ph * sway * dir.x;
@@ -2096,24 +2108,25 @@ struct BlitOut {
   if (F.under > 0.5) {
     let lit0 = cloudShade(in.xz0, 0.0);
     let I = normalize(in.world - F.camPos);
-    let R = refract(I, -N, 1.333);
-    let haze = waterHaze(I.y);
-    // Outside the window of sky the surface is a mirror of what lies under it: the lit
-    // bottom where the mirrored ray reaches it soon, open water where it has far to go.
+    // Snell window (Abyssal): soft open edge, sun glitter in the refracted disc.
+    let ci = sat(dot(I, -N));
+    let kWin = 1.0 - 1.769 * (1.0 - ci * ci);
+    let win = smoothstep(0.0, 0.22, kWin);
+    let rr = refract(I, -N, 1.333);
+    let sd = max(dot(normalize(rr + vec3<f32>(1e-5)), F.sunDir), 0.0);
+    let fr = pow(1.0 - sqrt(max(kWin, 0.0)), 5.0);
+    let sky = skyColor(normalize(rr)) * vec3<f32>(0.85, 0.95, 1.05)
+      * (0.85 + 0.35 * lit0)
+      + F.sunCol * (pow(sd, 48.0) * 0.9 + pow(sd, 280.0) * 6.0) * (1.0 - fr);
     let down = reflect(I, -N);
     let deep = max(-bed, 0.2);
     let reachB = deep / max(-down.y, 0.05);
-    let sandC = vec3<f32>(0.40, 0.58, 0.52) * F.day.rgb * mix(0.5, 1.0, lit0) * exp(-deep * vec3<f32>(0.3, 0.07, 0.05));
-    var col = mix(waterHaze(down.y), sandC, exp(-reachB * 0.09) * 0.7);
-    // The window has a soft edge: near the critical angle the surface is part mirror, part glass.
-    let ci = dot(I, N);
-    let open = 1.0 - 1.777 * (1.0 - ci * ci);
-    if (open > 0.0) {
-      col = mix(col, skyColor(normalize(R)) * vec3<f32>(0.8, 0.95, 1.0), smoothstep(0.0, 0.3, open));
-    }
-    col = mix(haze, col, exp(-distS * mix(0.028, 0.06, sat(F.camDamp))));
-    col = mix(col, vec3<f32>(0.75, 0.78, 0.76) * F.day.rgb, foam * 0.35);
-    return vec4<f32>(tonemap(airOver(col, in.clip.xy) * 1.3), 1.0);
+    let sandC = vec3<f32>(0.40, 0.58, 0.52) * F.day.rgb * mix(0.5, 1.0, lit0) * exp(W_KD * (-deep));
+    let refl = waterFogIn(in.world, down, min(reachB, 60.0)) * 1.05;
+    var col = mix(mix(refl, sandC, exp(-reachB * 0.09) * 0.65), sky, win);
+    col = applyFog(col, in.world);
+    col = mix(col, vec3<f32>(0.75, 0.78, 0.76) * F.day.rgb, foam * 0.28);
+    return vec4<f32>(tonemap(airOver(col, in.clip.xy) * 1.25), 1.0);
   }
 
   let frag = in.clip;
