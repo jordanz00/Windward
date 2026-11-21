@@ -336,19 +336,22 @@ function makePalm(seed, lod) {
   // width, droop and fold, not from blowing past the index limit.
   const nf = 18 + ((rnd() * 7 + age * 4) | 0), nd = 1 + ((rnd() * 3 + age) | 0);
   const nseg = [18, 8, 4][lod], lseg = [4, 3, 2][lod];
+  // Whole-crown bias: real palms lean and pack fronds toward the light, not a perfect spiral.
+  const crownBias = (rnd() - 0.5) * 0.55;
+  const crownGap = 0.12 + rnd() * 0.2;
   for (let j = 0; j < nf + nd; j++) {
     const dead = j >= nf;
     // 0 has just opened at the top of the crown. 1 is about to fall.
     const age = dead ? 1.1 : (j + rnd() * 0.85) / nf;
     // Irregular azimuth / elevation: real crowns are not a perfect spiral of feathers.
-    const az0 = j * 2.39996 + (rnd() - 0.5) * 1.15 + Math.sin(j * 1.7) * 0.25;
-    const el0 = dead ? -1.25 - rnd() * 0.3 : 1.05 - Math.pow(age, 1.08) * 1.95 + (rnd() - 0.5) * 0.38;
+    const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 1.35 + Math.sin(j * 1.7 + seed) * 0.35;
+    const el0 = dead ? -1.25 - rnd() * 0.3 : 1.05 - Math.pow(age, 1.08) * 1.95 + (rnd() - 0.5) * 0.42 + crownBias * 0.15;
     const L = dead ? 2.5 + rnd() : 3.9 + 1.85 * Math.sin(Math.min(1, age * 1.2 + 0.08) * Math.PI) + rnd() * 0.55;
     // Outer half droops harder; some fronds are more wind-swept than others.
     const droop = dead ? 0.15 : 0.85 + age * 1.0 + rnd() * 0.45;
-    const curl = (rnd() - 0.5) * 1.1, twist = (rnd() - 0.5) * 2.6 * (0.25 + age);
+    const curl = (rnd() - 0.5) * 1.25 + crownBias * 0.35, twist = (rnd() - 0.5) * 2.8 * (0.25 + age);
     const tipSway = 0.16 + rnd() * 0.22;
-    const widthK = 0.022 + rnd() * 0.008, lenK = 0.9 + rnd() * 0.38, hang0 = rnd() * 0.4;
+    const widthK = 0.02 + rnd() * 0.012, lenK = 0.85 + rnd() * 0.48, hang0 = rnd() * 0.45;
     // Leaflets draw from their own stream, so every level builds the same fronds.
     const fr = seeded(seed * 131 + j * 977 + 5);
     // The rachis starts in the crown and bends over under its own weight, twisting as it goes.
@@ -394,14 +397,16 @@ function makePalm(seed, lod) {
       0.085 + young * 0.085 + old * 0.11, 0.185 + young * 0.085 + old * 0.02, 0.045 + young * 0.015 + old * 0.015];
     for (let side = -1; side <= 1; side += 2) {
       for (let i = 0; i < per; i++) {
+        // Skip a few leaflets so the silhouette has sky gaps, not a solid fan.
+        if (!dead && fr() < crownGap * (0.35 + age)) continue;
         // Paired leaflets with irregular spacing and slight stagger along the rachis.
         const u = (i + 0.35 + (fr() - 0.5) * 0.85 + (side < 0 ? 0.08 : 0)) / per, t = 0.12 + u * 0.88;
         const f = Math.min(nseg - 1e-4, t * nseg), k0 = f | 0, A = pts[k0];
         const T = A.T;
         // Longest near 1/3 along; tip leaflets taper and leave sky gaps in the silhouette.
         const len = (dead ? 0.48 : lenK) * Math.pow(Math.sin(Math.PI * (0.06 + 0.92 * Math.pow(u, 0.55))), 0.72) * (1 - 0.32 * u) * (0.75 + fr() * 0.45);
-        const phi = 1.05 - u * 0.55 + (fr() - 0.5) * 0.45 + side * 0.08;
-        const lu = lift + (fr() - 0.5) * 0.45 + (side < 0 ? -0.05 : 0.05);
+        const phi = 1.05 - u * 0.55 + (fr() - 0.5) * 0.55 + side * 0.1;
+        const lu = lift + (fr() - 0.5) * 0.55 + (side < 0 ? -0.05 : 0.05);
         const cp = Math.cos(phi), sp = Math.sin(phi) * side;
         const d = unit([T[0] * cp + A.S[0] * sp + A.U[0] * lu, T[1] * cp + A.S[1] * sp + A.U[1] * lu, T[2] * cp + A.S[2] * sp + A.U[2] * lu]);
         const hg = hang * (0.75 + fr() * 0.5);
@@ -425,9 +430,9 @@ function makePalm(seed, lod) {
             const tip = m.v(q[0], q[1], q[2], n[0], n[1], n[2], cr, cg, cb, sw, LEAF, 0, 1);
             m.tri(pl, tip, pr);
           } else {
-            // Shallow V cross-section + slight twist: different lighting on each half of the blade.
-            const fold = 0.7 + 0.25 * s;
-            const twistN = (fr() - 0.5) * 0.15;
+            // Folded leaflet: stronger midrib V toward the tip, slight twist per blade.
+            const fold = 0.85 + 0.35 * s + (fr() - 0.5) * 0.2;
+            const twistN = (fr() - 0.5) * 0.22;
             const ax = a[0] + n[0] * twistN, ay = a[1] + n[1] * twistN, az = a[2] + n[2] * twistN;
             const l = m.v(q[0] + ax * w, q[1] + ay * w, q[2] + az * w, n[0] + ax * fold, n[1] + ay * fold, n[2] + az * fold, cr, cg, cb, sw, LEAF, 1, s);
             const r = m.v(q[0] - ax * w, q[1] - ay * w, q[2] - az * w, n[0] - ax * fold, n[1] - ay * fold, n[2] - az * fold, cr * 0.92, cg * 0.95, cb, sw, LEAF, -1, s);

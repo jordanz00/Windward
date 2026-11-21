@@ -227,10 +227,11 @@ fn sampleField(xz: vec2<f32>) -> vec2<f32> {
 }
 
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
-  // Linear HDR in, filmic curve out. Glitter, shafts and sunlit cloud rims may exceed 1.
+  // Linear HDR in, filmic curve out. Soft shoulder keeps glitter and cloud rims from clipping hard.
   let x = max(c, vec3<f32>(0.0)) * F.exposure;
   let y = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
-  return pow(clamp(y, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
+  let soft = y / (1.0 + max(y - 0.92, vec3<f32>(0.0)) * 0.35);
+  return pow(clamp(soft, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
 }
 
 // ---- Sky. One panorama holds the air and the clouds. It is baked a strip at a time
@@ -315,20 +316,21 @@ fn cloudCover(p: vec2<f32>) -> f32 {
   // Low-frequency domain warp — coherent masses, not boiling noise.
   let warp = (vec2<f32>(n2(pd * 0.22 + vec2<f32>(3.1, 0.0)), n2(pd * 0.22 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.8;
   let q = pd + warp;
-  // Scattered cumulus: separate cells with blue sky between them.
-  let cell = n2(q * 1.05) * 0.68 + n2(q * 2.35 + vec2<f32>(4.0, 9.0)) * 0.32;
-  let billow = n2(q * 4.4 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 7.8 + vec2<f32>(8.0, 2.0)) * 0.45;
-  let cumu = cell * (0.55 + 0.45 * billow) * (0.72 + 0.4 * n2(pd * 0.06 + vec2<f32>(5.0, 2.0)));
+  // Scattered cumulus: distinct cells with clear blue between them (not a noise carpet).
+  let cell = n2(q * 0.95) * 0.62 + n2(q * 2.1 + vec2<f32>(4.0, 9.0)) * 0.38;
+  let billow = n2(q * 3.8 + vec2<f32>(1.2, 5.5)) * 0.58 + n2(q * 6.6 + vec2<f32>(8.0, 2.0)) * 0.42;
+  let gap = smoothstep(0.28, 0.62, cell);
+  let cumu = cell * gap * (0.5 + 0.5 * billow) * (0.7 + 0.42 * n2(pd * 0.055 + vec2<f32>(5.0, 2.0)));
   // Towering cumulus: larger footprints, irregular cauliflower tops.
-  let tw = n2(q * 0.48 + vec2<f32>(11.0, 3.0)) * 0.7 + n2(q * 1.7 + vec2<f32>(2.0, 8.0)) * 0.3;
-  let tower = tw * (0.5 + 0.5 * n2(q * 3.2 + vec2<f32>(6.0, 1.0)));
+  let tw = n2(q * 0.42 + vec2<f32>(11.0, 3.0)) * 0.68 + n2(q * 1.55 + vec2<f32>(2.0, 8.0)) * 0.32;
+  let tower = tw * smoothstep(0.22, 0.58, tw) * (0.48 + 0.52 * n2(q * 2.9 + vec2<f32>(6.0, 1.0)));
   // Cirrus: thin elongated streaks at a rotated scale.
   let r = vec2<f32>(q.x * 0.42 + q.y * 0.11, -q.x * 0.08 + q.y * 0.95);
   let cirrus = n2(r * 1.9) * 0.55 + n2(r * 4.8 + vec2<f32>(3.0, 7.0)) * 0.3 + n2(r * 11.0) * 0.15;
   // Stratocumulus: soft layered field with broken openings.
   let strato = n2(q * 0.62) * 0.5 + n2(q * 1.55 + vec2<f32>(4.0, 2.0)) * 0.35 + n2(q * 3.8) * 0.15;
   let c = cumu * m.x + tower * m.y + cirrus * m.z + strato * m.w;
-  let thr = 0.68 - 0.38 * sat(F.mood.y) - 0.32 * smoothstep(0.45, 0.95, F.mood.y);
+  let thr = 0.7 - 0.4 * sat(F.mood.y) - 0.3 * smoothstep(0.45, 0.95, F.mood.y);
   return (c - thr) / max(1.0 - thr, 0.08);
 }
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
@@ -348,12 +350,13 @@ fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   var d = base * wispy * sat(amt * mix(3.8, 5.2, m.y));
   if (fine > 0.5) {
     let w = p + vec3<f32>(cloudDrift().x, 0.0, cloudDrift().y);
-    let large = n3(w * 2.2);
-    let mid = n3(w * 6.2 + vec3<f32>(4.0, 1.0, 7.0));
-    let fineN = n3(w * 15.0 + vec3<f32>(2.0, 9.0, 5.0));
-    let b = large * 0.45 + mid * 0.38 + fineN * 0.17;
+    // Prefer mid scales over boiling fine noise — keeps silhouettes stable frame to frame.
+    let large = n3(w * 2.0);
+    let mid = n3(w * 5.4 + vec3<f32>(4.0, 1.0, 7.0));
+    let fineN = n3(w * 11.0 + vec3<f32>(2.0, 9.0, 5.0));
+    let b = large * 0.5 + mid * 0.38 + fineN * 0.12;
     // Cellular breakup of edges; towers erode more on top.
-    let erode = sat(0.5 + (b - 0.5) * 3.4) * (0.14 + 0.9 * hh * hh * (0.6 + 0.8 * m.y));
+    let erode = sat(0.5 + (b - 0.5) * 3.1) * (0.14 + 0.9 * hh * hh * (0.6 + 0.8 * m.y));
     d -= erode * (1.0 - 0.35 * m.z);
   } else {
     d -= 0.18 + 0.26 * hh;
@@ -431,8 +434,8 @@ struct SkyBake { @location(0) c: vec4<f32> }
       let sunT = exp(-ls * 12.0);
       // Sun-facing rims warm; thin edges silver-lined when backlit; interiors cooler.
       let phase = 0.7 + 0.65 * pow(sat(mu), 3.5);
-      let silver = pow(sat(mu), 8.0) * sunT * (1.0 - d * 0.65) * (0.55 + 0.9 * gold);
-      let L = sunL * (sunT * 0.95 * phase + 0.1 * exp(-ls * 1.3) + silver * 1.4)
+      let silver = pow(sat(mu), 7.0) * sunT * (1.0 - d * 0.55) * (0.6 + 1.0 * gold);
+      let L = sunL * (sunT * 0.95 * phase + 0.12 * exp(-ls * 1.3) + silver * 1.65)
         + skyL * (0.22 + 0.55 * hK + 0.28 * (1.0 - hK))
         + moonL * (0.45 + 0.55 * hK);
       let al = 1.0 - exp(-d * ds * 34.0);
@@ -557,24 +560,26 @@ fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 }
 
 fn caustic(xz: vec2<f32>) -> f32 {
-  // Surface waves refract sunlight onto the seabed. Two scales: slow large cells and
-  // faster fine interference. Bend follows a cheap multi-frequency wave field so the
-  // pattern moves with the sea without sampling FFT textures in the geo pass.
+  // Surface waves refract sunlight onto the seabed. Bend follows the shared wind/swell
+  // heading (F.ctrl.w) so caustics move with the sea without sampling FFT in the geo pass.
   let depth = max(-sampleField(xz).x, 0.12);
   if (depth < 0.02 || F.sunDir.y < 0.04) { return 0.0; }
   let sy = max(F.sunDir.y, 0.18);
   let surf = xz - F.sunDir.xz * (depth / sy);
   let t = F.time;
-  // Approximate wave slopes from advected noise (same clock as the swell, not a wallpaper).
+  let dir = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+  let along = vec2<f32>(surf.x * dir.x + surf.y * dir.y, -surf.x * dir.y + surf.y * dir.x);
+  let sea = max(F.mood.w, 0.35);
+  // Multi-frequency slopes advected along the swell — not a fixed wallpaper.
   let b1 = vec2<f32>(
-    n2(surf * 0.48 + vec2<f32>(t * 0.08, 1.2)),
-    n2(surf * 0.48 + vec2<f32>(4.1, t * 0.07))
+    n2(along * 0.42 + vec2<f32>(t * 0.09 * sea, 1.2)),
+    n2(along * 0.42 + vec2<f32>(4.1, t * 0.07 * sea))
   ) - 0.5;
   let b2 = vec2<f32>(
-    n2(surf * 1.65 + vec2<f32>(t * 0.22, 2.4)),
-    n2(surf * 1.65 + vec2<f32>(3.3, t * 0.19))
+    n2(along * 1.55 + vec2<f32>(t * 0.24 * sea, 2.4)),
+    n2(along * 1.55 + vec2<f32>(3.3, t * 0.18 * sea))
   ) - 0.5;
-  let bend = b1 * 1.7 + b2 * 0.95;
+  let bend = (b1 * 1.7 + b2 * 0.95) * (0.75 + 0.45 * sea);
   let focus = sat(length(bend) * 2.0);
   let cell = mix(1.35, 0.42, sat(depth / 6.0));
   let p1 = (surf + bend * depth * 0.55) * cell * 0.55;
@@ -586,7 +591,6 @@ fn caustic(xz: vec2<f32>) -> f32 {
   let net = l1 * l1 * (0.5 + 0.55 * focus) + l2 * l2 * 0.42;
   let lit = cloudShade(xz, 0.0);
   let day = smoothstep(0.02, 0.12, F.sunTrue.y);
-  // Bright on shallow sand, faint in the deep; never a hard projected grid.
   let shallow = smoothstep(0.02, 0.35, depth) * exp(-depth * 0.26);
   return net * shallow * lit * day * 0.68;
 }
@@ -1111,9 +1115,9 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.55, 0.15))), 0.12 * (1.0 - in.uv.y));
     let grit = 0.88 + 0.1 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.05 * sin(in.uv.y * 29.0);
     alb *= grit;
-    leaf = select(1.35, 0.85, upper);
-    // Narrow specular lobe only near the midrib; broad faces stay matte.
-    gloss = select(0.03, 0.14 + 0.1 * rib, upper);
+    // More transmission, less wax — leaflets read as thin film, not painted plastic.
+    leaf = select(1.45, 0.78, upper);
+    gloss = select(0.02, 0.11 + 0.08 * rib, upper);
     if (in.world.y < -0.1) { gloss *= 0.15; leaf *= 0.45; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
@@ -1585,9 +1589,10 @@ fn chopField(xz: vec2<f32>, pix: f32) -> vec2<f32> {
 fn waveWeights(dist: f32, foot: f32, footLong: f32, scale: f32) -> vec4<f32> {
   let open = mix(0.45, 1.0, scale);
   let swell = seaFade(dist);
-  let shape = smoothstep(520.0, 85.0, dist) * (1.0 - smoothstep(6.0, 42.0, footLong)) * open;
-  let chop = (1.0 - smoothstep(0.25, 1.85, foot)) * smoothstep(380.0, 55.0, dist) * open;
-  let cap = mix(0.04, 0.28, smoothstep(55.0, 7.0, dist)) * (1.0 - smoothstep(0.12, 0.85, foot)) * open;
+  // Wider soft cutoffs — hard scale drops read as triangle facets at grazing angles.
+  let shape = smoothstep(560.0, 70.0, dist) * (1.0 - smoothstep(5.0, 48.0, footLong)) * open;
+  let chop = (1.0 - smoothstep(0.2, 2.1, foot)) * smoothstep(420.0, 48.0, dist) * open;
+  let cap = mix(0.03, 0.26, smoothstep(60.0, 6.0, dist)) * (1.0 - smoothstep(0.1, 0.95, foot)) * open;
   return vec4<f32>(swell, shape, chop, cap);
 }
 // Cheap continuous height for FD normals — FFT height only. Gerstner already has
@@ -2005,12 +2010,14 @@ struct BlitOut {
     + vec3<f32>(-ocn.y * ww.y + rip.y * ww.y - chop.x + cap.x * ww.w, 0.0,
                 -ocn.z * ww.y + rip.z * ww.y - chop.y + cap.y * ww.w));
   // Finite-difference refine on FFT height — continuous across triangle edges.
-  let eN = max(mix(0.18, 0.7, sat(foot * 0.7)), pix * 2.0);
+  let grazeN = sat(elev / max(distS * 0.32, 1.0));
+  let eN = max(mix(0.16, 0.85, sat(foot * 0.65)), pix * 2.2);
   let h0 = seaEta(in.xz0, ww);
   let hx = seaEta(in.xz0 + vec2<f32>(eN, 0.0), ww);
   let hz = seaEta(in.xz0 + vec2<f32>(0.0, eN), ww);
   let Nfd = normalize(vec3<f32>((h0 - hx) / eN, 1.0, (h0 - hz) / eN));
-  let fdK = (0.3 + 0.45 * sat(foot * 1.1)) * sat(ww.y + ww.z);
+  // Prefer FD normals when the mesh footprint is large; ease off when looking flat-on.
+  let fdK = (0.28 + 0.52 * sat(foot * 1.15)) * sat(ww.y + ww.z) * mix(0.55, 1.0, grazeN);
   N = normalize(mix(N, Nfd, fdK));
   if (F.wx.x > 0.01 && pix < 0.05) {
     let rr = rainRings(in.xz0) * (1.0 - smoothstep(0.02, 0.05, pix));
