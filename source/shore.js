@@ -88,6 +88,8 @@ fn ocean(xz: vec2<f32>) -> vec3<f32> {
     eta += As * s;
     vel += dir * Q * As * s * omega;
   }
+  let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
+  eta += oceanSample(r * (220.0 / 151.0)) * 0.36;
   return vec3<f32>(eta, vel);
 }
 fn at(ix: i32, iz: i32) -> vec4<f32> {

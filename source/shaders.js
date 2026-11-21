@@ -338,7 +338,7 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
   if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
   var col = albedo * light;
   let back = sat(dot(-n, F.sunDir));
-  col += albedo * vec3<f32>(0.55, 0.95, 0.28) * back * sh * leaf * 1.15;
+  col += albedo * vec3<f32>(0.72, 1.08, 0.34) * back * sh * leaf * 1.45;
   if (world.y > -0.15 && world.y < 1.1) {
     let V = normalize(F.camPos - world);
     let H = normalize(V + F.sunDir);
@@ -493,11 +493,13 @@ struct MeshV {
 }
 @vertex fn vsMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec3<f32>, @location(3) sway: f32) -> MeshV {
   var w = p;
-  let phase = F.time * (0.85 + 0.35 * fract(p.x * 0.17)) + p.x * 0.11 + p.z * 0.07;
-  let gust = sin(phase) * 0.7 + sin(phase * 2.17 + 1.3) * 0.3;
-  w.x += gust * sway * 0.9;
-  w.z += gust * sway * 0.35;
-  w.y -= abs(gust) * sway * sway * 0.22;
+  // One wind for the whole island, with a faster flutter that differs by tree.
+  let field = sin(F.time * 0.31 + p.x * 0.012 + p.z * 0.009);
+  let phase = F.time * (1.15 + 0.45 * fract(p.x * 0.013 + p.z * 0.017)) + p.z * 0.05;
+  let gust = field * 0.55 + sin(phase) * 0.35 + sin(phase * 2.3 + 0.7) * 0.12;
+  w.x += gust * sway * 1.15;
+  w.z += gust * sway * 0.22;
+  w.y -= abs(gust) * sway * sway * 0.28;
   var o: MeshV;
   o.world = w;
   o.nrm = n;
@@ -513,11 +515,12 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
 }
 @vertex fn vsShadowMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec3<f32>, @location(3) sway: f32) -> ShadowV {
   var w = p;
-  let phase = F.time * (0.85 + 0.35 * fract(p.x * 0.17)) + p.x * 0.11 + p.z * 0.07;
-  let gust = sin(phase) * 0.7 + sin(phase * 2.17 + 1.3) * 0.3;
-  w.x += gust * sway * 0.9;
-  w.z += gust * sway * 0.35;
-  w.y -= abs(gust) * sway * sway * 0.22;
+  let field = sin(F.time * 0.31 + p.x * 0.012 + p.z * 0.009);
+  let phase = F.time * (1.15 + 0.45 * fract(p.x * 0.013 + p.z * 0.017)) + p.z * 0.05;
+  let gust = field * 0.55 + sin(phase) * 0.35 + sin(phase * 2.3 + 0.7) * 0.12;
+  w.x += gust * sway * 1.15;
+  w.z += gust * sway * 0.22;
+  w.y -= abs(gust) * sway * sway * 0.28;
   var o: ShadowV;
   o.clip = F.shadowVP * vec4<f32>(w, 1.0);
   return o;
@@ -552,7 +555,8 @@ struct GrassV {
   let ground = sampleField(vec2<f32>(inst.x, inst.y)).x;
   var w = vec3<f32>(inst.x + x, ground + lp.y, inst.y + z);
   let sway = uv.y * (0.25 + weed * 0.45);
-  let ph = sin(F.time * (1.5 + weed) + inst.x * 0.2 + inst.y * 0.17);
+  let field = sin(F.time * 0.31 + inst.x * 0.012 + inst.y * 0.009);
+  let ph = field * 0.65 + sin(F.time * (1.6 + weed) + inst.x * 0.2 + inst.y * 0.17) * 0.45;
   w.x += ph * sway;
   w.z += ph * sway * 0.35;
   var o: GrassV;
@@ -583,8 +587,10 @@ struct BirdV {
 }
 @vertex fn vsBird(@location(0) p: vec3<f32>, @location(1) wing: f32, @location(2) inst: vec4<f32>) -> BirdV {
   var lp = p;
-  let flap = sin(F.time * 6.2 + inst.x * 0.7) * wing;
+  let glide = sat(sin(F.time * 0.21 + inst.z * 0.15));
+  let flap = sin(F.time * (3.4 + abs(inst.y) * 0.02) + inst.x) * wing * mix(0.15, 1.0, glide);
   lp.y += abs(lp.x) * flap;
+  lp.z -= abs(wing) * 0.04 * (1.0 - glide);
   let s = sin(inst.w); let c = cos(inst.w);
   let x = lp.x * c - lp.z * s;
   let z = lp.x * s + lp.z * c;
@@ -711,12 +717,15 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     let feel = 1.0 - smoothstep(len * 0.08, len * 0.45, D);
     var As = w.z * ampK * scale * fade * (1.0 + feel * 0.85);
     let Q = min(steepQ(i) + feel * 0.45, 1.05);
+    if (i == 0) { As *= 0.4 + 0.6 * sin(dot(dir, xz) * 0.062 - F.time * 0.045); }
+    if (i == 1) { As *= 0.5 + 0.5 * sin(dot(dir, xz) * 0.09 + 1.3); }
+    if (i >= 6) { As *= 0.65 + 0.35 * sin(dot(dir, xz) * 0.041 + F.time * 0.03); }
     let steep = k * As * Q;
     if (steep > 0.72) { As *= 0.72 / steep; }
     let collapse = 1.0 - smoothstep(0.4, 2.4, D);
     As *= 1.0 - collapse * 0.38;
     // The spectral field owns the mid and short waves. These layers were the repeating ripples.
-    if (i >= 3) { As *= 0.22; }
+    if (i >= 3 && i < 6) { As *= 0.22; }
     var omega = sqrt(G * k) * spdK;
     if (i == 1) { omega = wP * (k / kP) * spdK; }
     let phase = k * dot(dir, xz) - omega * F.time;
@@ -836,6 +845,17 @@ fn oceanSample(tex: texture_2d<f32>, xz: vec2<f32>, size: f32) -> vec3<f32> {
   let d = textureLoad(tex, vec2<i32>(x1, y1), 0);
   return mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
 }
+// The same evolving spectrum, read on a second incommensurate scale, so a
+// 220 m tile does not repeat as a wallpaper. Both samples move with one clock.
+fn shapeField(xz: vec2<f32>) -> vec3<f32> {
+  let a = oceanSample(shapeTex, xz, 220.0);
+  // A second scale only near the camera. Far away it would tile across the view.
+  let dist = length(xz - F.camPos.xz);
+  let close = smoothstep(220.0, 50.0, dist);
+  let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
+  let b = oceanSample(shapeTex, r, 151.0);
+  return a + b * 0.28 * close;
+}
 fn warp(t: f32) -> f32 {
   // Dense under the camera. The outer ring is allowed to be coarse because those
   // triangles are not asked to hold a wave.
@@ -855,7 +875,7 @@ fn warp(t: f32) -> f32 {
   w.y += ripAt(xz).x * geom;
   // The spectral tile adds the wind sea. Its height fades before the mesh gets coarse.
   let near = smoothstep(460.0, 70.0, dist);
-  w.y += oceanSample(shapeTex, xz, 220.0).x * near * mix(0.25, 1.0, field.y);
+  w.y += shapeField(xz).x * near * mix(0.25, 1.0, field.y);
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -871,7 +891,7 @@ fn warp(t: f32) -> f32 {
   let sh = shoreFetch(xz);
   let field = sampleField(xz);
   let s = seaAt(xz, field.y, max(-field.x, 0.2));
-  var y = s.disp.y + oceanSample(shapeTex, xz, 220.0).x * smoothstep(460.0, 70.0, length(xz - F.camPos.xz));
+  var y = s.disp.y + shapeField(xz).x * smoothstep(460.0, 70.0, length(xz - F.camPos.xz));
   if (sh.inside > 0.5) {
     // Stay on the sand even where the sheet is dry, so a triangle never stretches
     // from the water up across the sky. Dry fragments are discarded later.
@@ -912,7 +932,7 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let distS = length(in.world - F.camPos);
   let rip = ripAt(in.xz0);
   let cap = capillary(in.xz0, distS);
-  let ocn = oceanSample(shapeTex, in.xz0, 220.0);
+  let ocn = shapeField(in.xz0);
   let gl = oceanSample(glintTex, in.xz0, 4.0);
   let pix = max(distS * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
   let open = mix(0.4, 1.0, scale);

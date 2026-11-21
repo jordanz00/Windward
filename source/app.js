@@ -1,5 +1,5 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 0,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 5,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
   med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
   high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
@@ -11,8 +11,8 @@ const WAVES = [
   [0.996, -0.09, 0.045, 33, 0.14],
   [0.86, 0.42, 0.018, 17, 0.08],
   [0.72, -0.62, 0.012, 11, 0.06],
-  [0.22, 0.97, 0.02, 52, 0.08],
-  [-0.38, 0.92, 0.01, 29, 0.05]
+  [0.22, 0.97, 0.16, 52, 0.22],
+  [-0.38, 0.92, 0.09, 29, 0.16]
 ];
 
 const SUN = (function () {
@@ -269,29 +269,31 @@ function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway) {
 }
 
 function makePalm(seed) {
-  const rnd = seeded(seed);
+  const rnd = seeded(seed || 1);
   const m = new Mesh();
-  const sides = 10, seg = 18;
-  const leanX = (rnd() - 0.5) * 0.28;
-  const leanZ = (rnd() - 0.5) * 0.22;
-  const height = 0.9 + rnd() * 0.22;
+  const sides = 8, seg = 16;
+  const height = 0.94 + rnd() * 0.18;
+  const bend = (rnd() - 0.32) * 0.5;
+  const bendZ = (rnd() - 0.5) * 0.26;
+  const twist = rnd() * 6.28;
   const rings = [];
   for (let i = 0; i <= seg; i++) {
     const t = i / seg;
-    const y = height * t;
-    const ox = leanX * t * t;
-    const oz = leanZ * t * t;
-    const groove = (i % 2) ? 0.96 : 1.03;
-    const flare = t < 0.12 ? 1.45 - t * 3.2 : 1;
-    const r = (0.084 * (1 - t * 0.6) + 0.022) * groove * flare;
-    const scar = (i % 2) ? 0.78 : 1.0;
+    const y = height * (t * 0.9 + t * t * 0.1);
+    const ox = Math.sin(t * 2.2) * bend * t;
+    const oz = bendZ * t * t;
+    const flare = t < 0.08 ? 1.65 - t * 6 : 1;
+    const collar = (t > 0.58 && (i & 1)) ? 1.2 : 1;
+    const r = (0.072 * (1 - t * 0.52) + 0.018) * flare * collar;
+    const scar = collar > 1 ? 0.7 : 1;
     const row = [];
     for (let k = 0; k < sides; k++) {
-      const a = k / sides * Math.PI * 2 + t * 0.55;
-      const bump = 1 + 0.05 * Math.sin(k * 3.1 + i * 0.7);
+      const a = k / sides * Math.PI * 2 + twist + t * 0.35;
       const nx = Math.cos(a), nz = Math.sin(a);
-      const streak = 0.85 + 0.15 * Math.sin(k * 2 + seed);
-      row.push(m.v(ox + nx * r * bump, y, oz + nz * r * bump, nx, 0.12, nz, 0.46 * scar * streak, 0.34 * scar, 0.22 * scar, t * t * 0.06));
+      const rib = 1 + 0.045 * Math.sin(k * 2.0 + i * 0.6);
+      const streak = 0.76 + 0.24 * (0.5 + 0.5 * Math.sin(k * 1.7 + seed));
+      const bark = 0.36 * scar * streak;
+      row.push(m.v(ox + nx * r * rib, y, oz + nz * r * rib, nx, 0.14, nz, bark, bark * 0.7, bark * 0.4, t * t * 0.045));
     }
     rings.push(row);
   }
@@ -301,54 +303,96 @@ function makePalm(seed) {
       m.tri(a, c, b); m.tri(b, c, d);
     }
   }
-  const crownX = leanX, crownY = height, crownZ = leanZ;
-  function frond(ang, len, rise, droop, leafLen, col, pairs, sway0) {
+  const crownX = Math.sin(2.2) * bend, crownY = height, crownZ = bendZ;
+  const gap = rnd() * Math.PI * 2;
+  function frond(ang, len, lift, droop, leaf, green, sway0, dead) {
     const dx = Math.cos(ang), dz = Math.sin(ang);
     const sx = -dz, sz = dx;
-    const steps = 8;
+    const steps = dead ? 7 : 12;
     const pts = [];
     for (let s = 0; s <= steps; s++) {
       const t = s / steps;
-      const rad = 0.03 + t * len;
-      const y = crownY + Math.sin(t * Math.PI * rise) * 0.46 - t * t * droop;
-      pts.push([crownX + dx * rad, y, crownZ + dz * rad, t]);
+      const arch = Math.sin(t * Math.PI * lift) * (0.22 + len * 0.12) - t * t * droop;
+      pts.push([crownX + dx * t * len, crownY + arch, crownZ + dz * t * len, t]);
     }
+    const rach = dead ? [0.4, 0.3, 0.14] : [0.22, 0.28, 0.1];
     for (let s = 0; s < steps; s++) {
       const a = pts[s], b = pts[s + 1];
-      const w = 0.012 * (1 - a[3] * 0.5);
-      const sway = sway0 * (0.15 + a[3]);
-      const bark = [0.28, 0.32, 0.12];
-      const aL = m.v(a[0] + sx * w, a[1], a[2] + sz * w, dx, 0.8, dz, bark[0], bark[1], bark[2], sway);
-      const aR = m.v(a[0] - sx * w, a[1], a[2] - sz * w, dx, 0.8, dz, bark[0] * 0.8, bark[1] * 0.85, bark[2], sway);
-      const bL = m.v(b[0] + sx * w, b[1], b[2] + sz * w, dx, 0.8, dz, bark[0], bark[1], bark[2], sway + 0.05);
-      const bR = m.v(b[0] - sx * w, b[1], b[2] - sz * w, dx, 0.8, dz, bark[0] * 0.8, bark[1] * 0.85, bark[2], sway + 0.05);
+      const w = 0.01 * (1 - a[3] * 0.55);
+      const sway = sway0 * (0.06 + a[3] * a[3]);
+      const aL = m.v(a[0] + sx * w, a[1], a[2] + sz * w, dx, 0.7, dz, rach[0], rach[1], rach[2], sway);
+      const aR = m.v(a[0] - sx * w, a[1], a[2] - sz * w, dx, 0.7, dz, rach[0] * 0.8, rach[1] * 0.85, rach[2], sway);
+      const bL = m.v(b[0] + sx * w, b[1], b[2] + sz * w, dx, 0.7, dz, rach[0], rach[1], rach[2], sway + 0.04);
+      const bR = m.v(b[0] - sx * w, b[1], b[2] - sz * w, dx, 0.7, dz, rach[0] * 0.8, rach[1] * 0.85, rach[2], sway + 0.04);
       m.tri(aL, bL, aR); m.tri(aR, bL, bR);
     }
-    for (let s = 1; s <= steps; s++) {
+    for (let s = 1; s < steps; s++) {
       const p = pts[s];
-      const along = Math.sin(Math.min(p[3] * 1.15, 1) * Math.PI);
-      const ll = leafLen * (0.35 + along * 0.75);
+      const bell = Math.sin(Math.min(p[3] * 1.05, 1) * Math.PI);
+      const ll = leaf * (0.22 + bell * 0.9) * (dead ? 0.45 : 1);
       if (ll < 0.02) continue;
       for (let side = -1; side <= 1; side += 2) {
-        const spread = 0.55 + p[3] * 0.35;
-        const dirx = dx * 0.35 + sx * side * spread;
-        const dirz = dz * 0.35 + sz * side * spread;
-        const diry = 0.05 - droop * 0.12;
-        const tone = [col[0] * (0.85 + rnd() * 0.3), col[1] * (0.82 + rnd() * 0.28), col[2]];
-        addLeaflet(m, p[0], p[1], p[2], dirx, diry, dirz, ll, 0.042 + along * 0.028, tone, sway0 * (0.35 + p[3]));
+        const bias = side < 0 ? 0.78 + rnd() * 0.2 : 0.95 + rnd() * 0.12;
+        const spread = 0.78 + p[3] * 0.2;
+        const dirx = dx * (0.18 - p[3] * 0.08) + sx * side * spread;
+        const dirz = dz * (0.18 - p[3] * 0.08) + sz * side * spread;
+        const diry = 0.06 - droop * (0.2 + p[3] * 0.7);
+        const tone = dead
+          ? [0.38 + rnd() * 0.08, 0.28, 0.12]
+          : [green[0] * (0.72 + rnd() * 0.4), green[1] * (0.78 + rnd() * 0.28), green[2] * (0.65 + rnd() * 0.4)];
+        addLeaflet(m, p[0], p[1], p[2], dirx, diry, dirz, ll * bias, (dead ? 0.02 : 0.028) + bell * 0.016, tone, sway0 * (0.4 + p[3]));
       }
     }
   }
-  const living = 11 + ((seed >>> 3) % 3);
+  const living = 9 + (seed % 4);
   for (let f = 0; f < living; f++) {
-    const ang = f / living * Math.PI * 2 + rnd() * 0.2;
-    frond(ang, 0.7 + rnd() * 0.16, 0.62 + rnd() * 0.12, 0.1 + rnd() * 0.08, 0.32 + rnd() * 0.06, [0.12, 0.42, 0.09], 8, 0.4 + rnd() * 0.12);
+    const ang = f * 2.399963 + rnd() * 0.12;
+    const around = Math.abs(Math.atan2(Math.sin(ang - gap), Math.cos(ang - gap)));
+    if (around < 0.42 && rnd() < 0.75) continue;
+    const age = rnd();
+    frond(ang, 0.82 + rnd() * 0.26, 0.5 + rnd() * 0.22, 0.28 + age * 0.38, 0.24 + rnd() * 0.07, [0.09, 0.36, 0.07], 0.32 + rnd() * 0.22, false);
   }
-  const young = 4 + (seed % 3);
-  for (let f = 0; f < young; f++) {
-    frond(f / young * Math.PI * 2 + 0.4, 0.32 + rnd() * 0.1, 0.95, 0.04, 0.16, [0.2, 0.5, 0.12], 6, 0.22);
+  frond(rnd() * 6.28, 0.26, 1.2, 0.02, 0.11, [0.2, 0.48, 0.13], 0.1, false);
+  frond(gap, 0.48, 0.15, 0.8, 0.09, [0.4, 0.3, 0.14], 0.18, true);
+  return m;
+}
+
+function makeFern(seed) {
+  const rnd = seeded(seed || 2);
+  const m = new Mesh();
+  const n = 6 + (seed % 3);
+  for (let i = 0; i < n; i++) {
+    const ang = i / n * Math.PI * 2 + rnd() * 0.5;
+    const dx = Math.cos(ang), dz = Math.sin(ang);
+    const sx = -dz, sz = dx;
+    const len = 0.42 + rnd() * 0.22;
+    const steps = 7;
+    for (let s = 1; s < steps; s++) {
+      const t = s / steps;
+      const y = Math.sin(t * 1.4) * 0.16 - t * t * 0.05;
+      const x = dx * t * len, z = dz * t * len;
+      const bell = Math.sin(t * Math.PI);
+      const col = [0.08 + rnd() * 0.04, 0.32 + rnd() * 0.1, 0.08];
+      for (let side = -1; side <= 1; side += 2) {
+        addLeaflet(m, x, y, z, dx * 0.2 + sx * side, 0.15 - t * 0.2, dz * 0.2 + sz * side, 0.08 + bell * 0.1, 0.012, col, 0.45 + t);
+      }
+    }
   }
-  frond(0.7, 0.34, 0.35, 0.16, 0.1, [0.42, 0.34, 0.16], 4, 0.2);
+  return m;
+}
+
+function makeCanopy(seed) {
+  const rnd = seeded(seed || 5);
+  const m = new Mesh();
+  const trunk = cylinder(7, 8, 0.1, 0.045, 0.72, [0.3, 0.2, 0.12], 0.04);
+  appendMesh(m, trunk, 0, 0, 0, rnd() * 3, 1, null, 1);
+  const leaves = 8 + (seed % 4);
+  for (let i = 0; i < leaves; i++) {
+    const ang = i * 2.399 + rnd() * 0.2;
+    const reach = 0.32 + rnd() * 0.28;
+    const col = [0.07 + rnd() * 0.05, 0.26 + rnd() * 0.12, 0.05 + rnd() * 0.03];
+    addLeaflet(m, Math.cos(ang) * 0.06, 0.7, Math.sin(ang) * 0.06, Math.cos(ang), 0.15 + rnd() * 0.35, Math.sin(ang), reach, 0.1 + rnd() * 0.04, col, 0.26);
+  }
   return m;
 }
 
@@ -486,14 +530,23 @@ function grassGeom() {
 function birdGeom() {
   const pos = [], wing = [], idx = [];
   const add = (x, y, z, w) => { pos.push(x, y, z); wing.push(w); return pos.length / 3 - 1; };
-  // body
-  const a = add(0, 0, 0.28, 0), b = add(0, 0.04, -0.22, 0), c = add(0, 0.07, 0.0, 0), d = add(0, -0.03, 0.0, 0);
-  idx.push(a, c, b, a, b, d);
-  // wings
-  const l0 = add(-0.05, 0.02, 0.05, -1), l1 = add(-0.62, 0.0, 0.12, -1), l2 = add(-0.58, 0.0, -0.08, -1), l3 = add(-0.05, 0.02, -0.08, -1);
-  idx.push(l0, l1, l2, l0, l2, l3);
-  const r0 = add(0.05, 0.02, 0.05, 1), r1 = add(0.62, 0.0, 0.12, 1), r2 = add(0.58, 0.0, -0.08, 1), r3 = add(0.05, 0.02, -0.08, 1);
-  idx.push(r0, r2, r1, r0, r3, r2);
+  const nose = add(0, 0.012, 0.32, 0);
+  const head = add(0, 0.05, 0.2, 0);
+  const back = add(0, 0.04, -0.04, 0);
+  const belly = add(0, -0.032, 0.04, 0);
+  const tail = add(0, 0.005, -0.36, 0);
+  const tailL = add(-0.055, 0.0, -0.28, 0);
+  const tailR = add(0.055, 0.0, -0.28, 0);
+  const beak = add(0, 0.02, 0.44, 0);
+  idx.push(nose, head, belly, head, back, belly, back, tail, belly, tailL, tail, back, tailR, back, tail, nose, beak, head);
+  const li0 = add(-0.04, 0.03, 0.08, -1), li1 = add(-0.3, 0.02, 0.1, -1), li2 = add(-0.26, 0.012, -0.05, -1), li3 = add(-0.04, 0.02, -0.05, -1);
+  idx.push(li0, li1, li2, li0, li2, li3);
+  const lo0 = add(-0.26, 0.02, 0.07, -2), lo1 = add(-0.58, 0.0, 0.03, -2), lo2 = add(-0.52, 0.0, -0.07, -2), lo3 = add(-0.24, 0.012, -0.04, -2);
+  idx.push(lo0, lo1, lo2, lo0, lo2, lo3);
+  const ri0 = add(0.04, 0.03, 0.08, 1), ri1 = add(0.3, 0.02, 0.1, 1), ri2 = add(0.26, 0.012, -0.05, 1), ri3 = add(0.04, 0.02, -0.05, 1);
+  idx.push(ri0, ri2, ri1, ri0, ri3, ri2);
+  const ro0 = add(0.26, 0.02, 0.07, 2), ro1 = add(0.58, 0.0, 0.03, 2), ro2 = add(0.52, 0.0, -0.07, 2), ro3 = add(0.24, 0.012, -0.04, 2);
+  idx.push(ro0, ro2, ro1, ro0, ro3, ro2);
   return { pos: new Float32Array(pos), wing: new Float32Array(wing), idx: new Uint16Array(idx) };
 }
 
@@ -930,7 +983,8 @@ function makeAudio() {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
   const ac = new AC();
-  const dur = ac.sampleRate * 2;
+  const seconds = 28;
+  const dur = ac.sampleRate * seconds;
   const buf = ac.createBuffer(1, dur, ac.sampleRate);
   const data = buf.getChannelData(0);
   let s = 123456789;
@@ -938,22 +992,93 @@ function makeAudio() {
     s = (Math.imul(s, 1664525) + 1013904223) | 0;
     data[i] = ((s >>> 0) / 4294967296) * 2 - 1;
   }
-  const master = ac.createGain(); master.gain.value = 0.9; master.connect(ac.destination);
-  function loop(filterType, freq, q) {
-    const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
-    const f = ac.createBiquadFilter(); f.type = filterType; f.frequency.value = freq; f.Q.value = q;
+  const fade = (ac.sampleRate * 0.6) | 0;
+  for (let i = 0; i < fade; i++) {
+    const u = i / fade;
+    data[dur - fade + i] = data[dur - fade + i] * (1 - u) + data[i] * u;
+  }
+  const burst = ac.createBuffer(1, (ac.sampleRate * 1.6) | 0, ac.sampleRate);
+  burst.getChannelData(0).set(data.subarray(0, burst.length));
+  const master = ac.createGain();
+  master.gain.value = 0.85;
+  const under = ac.createBiquadFilter();
+  under.type = 'lowpass'; under.frequency.value = 16000; under.Q.value = 0.2;
+  master.connect(under); under.connect(ac.destination);
+  function bed(type, freq, q) {
+    const src = ac.createBufferSource();
+    src.buffer = buf; src.loop = true;
+    const f = ac.createBiquadFilter();
+    f.type = type; f.frequency.value = freq; f.Q.value = q;
     const g = ac.createGain(); g.gain.value = 0;
-    src.connect(f); f.connect(g); g.connect(master); src.start();
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(0, Math.random() * 20);
     return { gain: g, filter: f };
   }
-  const surf = loop('lowpass', 640, 0.6);
-  const wind = loop('bandpass', 420, 0.35);
-  const under = ac.createBiquadFilter();
-  under.type = 'lowpass'; under.frequency.value = 18000; under.Q.value = 0.2;
-  // rewire master through the muffler
-  master.disconnect();
-  master.connect(under); under.connect(ac.destination);
-  return { ac: ac, master: master, under: under, surf: surf.gain, wind: wind.gain };
+  const surf = bed('lowpass', 480, 0.55);
+  const hiss = bed('highpass', 2200, 0.45);
+  const wind = bed('bandpass', 260, 0.35);
+  const insects = bed('highpass', 3400, 0.7);
+  const lfo = ac.createOscillator();
+  lfo.frequency.value = 0.047;
+  const lfoG = ac.createGain(); lfoG.gain.value = 160;
+  lfo.connect(lfoG); lfoG.connect(surf.filter.frequency); lfo.start();
+  const lfo2 = ac.createOscillator();
+  lfo2.frequency.value = 0.013;
+  const lfo2G = ac.createGain(); lfo2G.gain.value = 90;
+  lfo2.connect(lfo2G); lfo2G.connect(wind.filter.frequency); lfo2.start();
+  const api = {
+    ac: ac, master: master, under: under,
+    surf: surf.gain, hiss: hiss.gain, wind: wind.gain, insects: insects.gain,
+    shoreAmt: 0.4, alive: true
+  };
+  function chirp(kind) {
+    if (!api.alive || muted) return;
+    const t = ac.currentTime;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    const p = ac.createStereoPanner();
+    p.pan.value = Math.random() * 1.6 - 0.8;
+    const f0 = kind === 1 ? 700 + Math.random() * 400 : 1600 + Math.random() * 1600;
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(180, f0 * (0.55 + Math.random() * 0.8)), t + 0.09 + Math.random() * 0.08);
+    const peak = kind === 1 ? 0.03 : 0.045;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16 + Math.random() * 0.22);
+    o.connect(g); g.connect(p); p.connect(master);
+    o.start(t); o.stop(t + 0.55);
+  }
+  function crash() {
+    if (!api.alive || muted) return;
+    const t = ac.currentTime;
+    const src = ac.createBufferSource(); src.buffer = burst;
+    const f = ac.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.setValueAtTime(1400, t);
+    f.frequency.exponentialRampToValueAtTime(280, t + 0.8);
+    const g = ac.createGain();
+    const loud = 0.04 + api.shoreAmt * 0.1;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(loud, t + 0.05 + Math.random() * 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55 + Math.random() * 0.7);
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 1.5);
+  }
+  function later(fn, lo, hi) {
+    const wait = (lo + Math.random() * (hi - lo)) * 1000;
+    setTimeout(() => {
+      if (!api.alive) return;
+      fn();
+      later(fn, lo, hi);
+    }, wait);
+  }
+  later(() => {
+    const kind = Math.random() < 0.3 ? 1 : 0;
+    chirp(kind);
+    if (Math.random() < 0.4) setTimeout(() => chirp(kind), 160 + Math.random() * 420);
+  }, 2.2, 8.5);
+  later(crash, 4.0, 12.0);
+  return api;
 }
 
 const K = Object.create(null);
@@ -1169,7 +1294,9 @@ async function main() {
     const staticMesh = new Mesh();
     const rock = makeRock(4);
     const stackRock = makeRock(11);
-    let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0;
+    let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
+    const fernBudget = Math.max(10, (q.broad * 0.55) | 0);
+    const canopyBudget = Math.max(4, (q.broad * 0.28) | 0);
     const clearR = 9;
     const sideX = -sdz, sideZ = sdx;
     const rowOx = shore ? shore.x : beach.x;
@@ -1192,7 +1319,7 @@ async function main() {
       appendMesh(staticMesh, makePalm((x * 13 + z * 7) | 0), x, h, z, rnd() * 6.28, 7.4 + rnd() * 2.8, tint, 0.88 + rnd() * 0.28);
       palms++;
     }
-    for (let i = 0; i < (q.palms + q.broad) * 16 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget); i++) {
+    for (let i = 0; i < (q.palms + q.broad) * 20 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget || ferns < fernBudget || canopies < canopyBudget); i++) {
       const x = (rnd() - 0.5) * 460;
       const z = (rnd() - 0.5) * 400;
       const h = fieldSample(world, x, z);
@@ -1200,14 +1327,20 @@ async function main() {
       if (Math.hypot(x - beach.x, z - beach.z) < clearR) continue;
       const clump = vnoise(x * 0.012, z * 0.012);
       const tint = [0.86 + rnd() * 0.22, 0.9 + rnd() * 0.18, 0.84 + rnd() * 0.2];
-      if (palms < q.palms && h > 0.6 && h < 6.5 && s < 0.34 && clump > 0.46) {
-        appendMesh(staticMesh, makePalm((x * 19.1 + z * 3.7) | 0), x, h, z, rnd() * 6.28, 6.8 + rnd() * 3.6, tint, 0.86 + rnd() * 0.3);
+      if (palms < q.palms && h > 0.6 && h < 5.5 && s < 0.32 && clump > 0.42) {
+        appendMesh(staticMesh, makePalm((x * 19.1 + z * 3.7) | 0), x, h, z, rnd() * 6.28, 6.6 + rnd() * 3.4, tint, 0.86 + rnd() * 0.3);
         palms++;
-      } else if (shrubs < shrubBudget && h > 0.45 && h < 2.8 && s < 0.4 && clump > 0.4) {
-        appendMesh(staticMesh, makeShrub((x * 5 + z) | 0), x, h, z, rnd() * 6.28, 2.2 + rnd() * 1.6, tint, 0.7 + rnd() * 0.5);
+      } else if (shrubs < shrubBudget && h > 0.35 && h < 2.4 && s < 0.36 && clump > 0.36) {
+        appendMesh(staticMesh, makeShrub((x * 5 + z) | 0), x, h, z, rnd() * 6.28, 1.8 + rnd() * 1.5, tint, 0.7 + rnd() * 0.5);
         shrubs++;
-      } else if (broads < q.broad && h > 3.5 && h < 22 && s < 0.4 && clump > 0.48) {
-        appendMesh(staticMesh, makeBroad((x * 8.2 + z * 4.4) | 0), x, h, z, rnd() * 6.28, 6.5 + rnd() * 3.2, tint, 0.85 + rnd() * 0.3);
+      } else if (canopies < canopyBudget && h > 7 && h < 24 && s < 0.3 && clump > 0.5) {
+        appendMesh(staticMesh, makeCanopy((x * 4.1 + z * 2.2) | 0), x, h, z, rnd() * 6.28, 5.2 + rnd() * 2.4, tint, 0.9 + rnd() * 0.25);
+        canopies++;
+      } else if (ferns < fernBudget && h > 1.4 && h < 12 && s < 0.34 && clump > 0.58) {
+        appendMesh(staticMesh, makeFern((x * 6.3 + z) | 0), x, h, z, rnd() * 6.28, 1.3 + rnd() * 0.9, tint, 0.6 + rnd() * 0.4);
+        ferns++;
+      } else if (broads < q.broad && h > 3.2 && h < 18 && s < 0.38 && clump > 0.46) {
+        appendMesh(staticMesh, makeBroad((x * 8.2 + z * 4.4) | 0), x, h, z, rnd() * 6.28, 5.8 + rnd() * 2.8, tint, 0.85 + rnd() * 0.3);
         broads++;
       }
     }
@@ -1245,7 +1378,10 @@ async function main() {
       const z = (rnd() - 0.5) * 400;
       const h = fieldSample(world, x, z);
       const s = fieldSlope(world, x, z);
-      if (grassList.length < q.grass && h > 1.5 && h < 28 && s < 0.48 && vnoise(x * 0.03, z * 0.03) > 0.38) {
+      const fromBeach = Math.hypot(x - beach.x, z - beach.z);
+      if (grassList.length < 70 && h > 0.28 && h < 1.15 && s < 0.18 && fromBeach > 16 && fromBeach < 70) {
+        grassList.push(x, z, rnd() * 6.28, 0.22 + rnd() * 0.2);
+      } else if (grassList.length < q.grass && h > 1.5 && h < 28 && s < 0.48 && vnoise(x * 0.03, z * 0.03) > 0.38) {
         grassList.push(x, z, rnd() * 6.28, 0.45 + rnd() * 0.55);
       } else if (weedList.length < q.weed && h < -0.35 && h > -3.2 && s < 0.5 && x > 20) {
         weedList.push(x, z, rnd() * 6.28, -(0.7 + rnd() * 0.8));
@@ -1259,10 +1395,12 @@ async function main() {
     const birdMeta = new Float32Array(Math.max(q.birds, 1) * 4);
     const birdData = new Float32Array(Math.max(q.birds, 1) * 4);
     for (let i = 0; i < q.birds; i++) {
-      birdMeta[i * 4] = 40 + rnd() * 150;
-      birdMeta[i * 4 + 1] = 0.08 + rnd() * 0.12;
-      birdMeta[i * 4 + 2] = rnd() * 6.28;
-      birdMeta[i * 4 + 3] = 32 + rnd() * 26;
+      const ang = rnd() * 6.28;
+      const rad = 25 + rnd() * 110;
+      birdMeta[i * 4] = Math.cos(ang) * rad;
+      birdMeta[i * 4 + 1] = Math.sin(ang) * rad * 0.8;
+      birdMeta[i * 4 + 2] = ang + 1.4 + rnd() * 0.6;
+      birdMeta[i * 4 + 3] = 14 + rnd() * 36;
     }
 
     setStatus('Tuning the swell', 0.78);
@@ -1908,12 +2046,23 @@ async function main() {
 
       if (q.birds) {
         for (let i = 0; i < q.birds; i++) {
-          const rad = birdMeta[i * 4], sp = birdMeta[i * 4 + 1], ph = birdMeta[i * 4 + 2], yb = birdMeta[i * 4 + 3];
-          const a = time * sp + ph;
-          birdData[i * 4] = Math.cos(a) * rad + 10;
-          birdData[i * 4 + 1] = yb + Math.sin(a * 2) * 3.5;
-          birdData[i * 4 + 2] = Math.sin(a) * rad * 0.82;
-          birdData[i * 4 + 3] = a + 1.5708;
+          let x = birdMeta[i * 4], z = birdMeta[i * 4 + 1], hd = birdMeta[i * 4 + 2];
+          const sp = 7 + (i % 5) * 1.6;
+          const dist = Math.hypot(x, z) || 1;
+          const home = Math.atan2(-z, -x);
+          let turn = home - hd;
+          while (turn > Math.PI) turn -= Math.PI * 2;
+          while (turn < -Math.PI) turn += Math.PI * 2;
+          hd += (dist > 150 ? turn * 0.45 : Math.sin(time * 0.19 + i * 1.7) * 0.28) * dt;
+          x += Math.cos(hd) * sp * dt;
+          z += Math.sin(hd) * sp * dt;
+          const ground = fieldSample(world, x, z);
+          const y = Math.max(birdMeta[i * 4 + 3] + Math.sin(time * 0.35 + i) * 3.5, ground + 9);
+          birdMeta[i * 4] = x; birdMeta[i * 4 + 1] = z; birdMeta[i * 4 + 2] = hd;
+          birdData[i * 4] = x;
+          birdData[i * 4 + 1] = y;
+          birdData[i * 4 + 2] = z;
+          birdData[i * 4 + 3] = hd;
         }
         device.queue.writeBuffer(birdInstB, 0, birdData);
       }
@@ -2047,8 +2196,13 @@ async function main() {
       if (audio && mode > 0) {
         const alt = Math.max(camY, 0);
         const shore = Math.exp(-Math.abs(camY) * 0.08) * (0.35 + 0.65 * fieldDamp(world, camX, camZ));
-        audio.surf.gain.value = (muted ? 0 : 0.22) * shore * (under ? 0.25 : 1);
-        audio.wind.gain.value = (muted ? 0 : 0.07) * (0.25 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1);
+        const land = fieldSample(world, camX, camZ);
+        const nearBreak = Math.exp(-Math.max(land, 0) * 0.35) * (land < 3 ? 1 : 0.35);
+        audio.shoreAmt = nearBreak;
+        audio.surf.gain.value = (muted ? 0 : 0.16) * shore * (under ? 0.25 : 1);
+        audio.hiss.gain.value = (muted ? 0 : 0.045) * nearBreak * (under ? 0.1 : 1);
+        audio.wind.gain.value = (muted ? 0 : 0.05) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.3 : 0.8);
+        audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1);
         audio.under.frequency.value = under ? 380 : 16000;
       }
       if (showHint > 0) {

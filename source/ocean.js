@@ -207,7 +207,15 @@ function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed) {
       const lambda = Math.PI * 2 / k;
       if (lambda < band[0] || lambda > band[1]) { h0[o] = 0; h0[o + 1] = 0; continue; }
       const kd = (kx * wdx + kz * wdz) / k;
-      const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * kd * kd;
+      // A wind sea with a wide spread, plus a narrower swell from another heading.
+      // cos^2 alone lines every crest up with the wind.
+      const spread = (c, s) => Math.pow(Math.max(0, 0.5 * (1 + c)), s);
+      const sdx = wdx * 0.41 - wdz * 0.91;
+      const sdz = wdx * 0.91 + wdz * 0.41;
+      const swell = (kx * sdx + kz * sdz) / k;
+      const longW = Math.max(0, Math.min(1, (lambda - 12) / 30));
+      const dir = spread(kd, 2) * 0.8 + spread(swell, 6) * (0.35 + longW * 0.4);
+      const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * dir;
       const amp = Math.sqrt(Math.max(phillips, 0) * 0.5);
       h0[o] = oceanGauss(rnd) * amp;
       h0[o + 1] = oceanGauss(rnd) * amp;
