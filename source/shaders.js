@@ -335,10 +335,9 @@ fn sunShadow(p: vec3<f32>) -> f32 {
   return mix(shadowAt(p), s * 0.2, inside);
 }
 
-fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
+// leaf is 1 for foliage, which wraps the light and passes it when backlit.
+fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32) -> vec3<f32> {
   let n = normalize(nrm);
-  // Green materials are leaves. They wrap the light and pass it when backlit.
-  let leaf = sat((albedo.g - max(albedo.r, albedo.b)) * 4.0);
   let ndl = max(dot(n, F.sunDir), 0.0);
   let lit = mix(ndl, sat(ndl * 0.45 + 0.55), leaf);
   let sh = sunShadow(world) * cloudShade(world.xz, world.y);
@@ -514,7 +513,7 @@ struct GeoV {
     let footT = distT * F.tanHalf * 2.0 / max(F.res.y, 1.0) / max(abs(F.camPos.y - in.world.y) / max(distT, 0.1), 0.08);
     washFoam = foamCover(in.world.xz, sh.foam * smoothstep(0.06, 0.0, sh.h) * 0.8, footT);
   }
-  var col = shade(in.world, n, alb);
+  var col = shade(in.world, n, alb, 0.0);
   // Wet sand is a mirror at a low angle. Dry sand never is.
   let Vt = normalize(F.camPos - in.world);
   let gloss = max(smoothstep(0.26, 0.02, in.world.y) * step(-0.02, in.world.y), washWet) * (1.0 - slope * 3.0);
@@ -539,26 +538,44 @@ struct MeshV {
   @location(0) world: vec3<f32>,
   @location(1) nrm: vec3<f32>,
   @location(2) col: vec3<f32>,
-  @location(3) shell: f32,
+  @location(3) kind: f32,
+  @location(4) uv: vec2<f32>,
 }
-@vertex fn vsMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec3<f32>, @location(3) swayIn: f32) -> MeshV {
-  var w = p;
-  // A sway of 10 or more marks a leaf mass. The rest is the sway.
-  let shell = step(9.0, swayIn);
-  let sway = swayIn - shell * 10.0;
-  // One wind for the whole island, with a faster flutter that differs by tree.
-  let field = sin(F.time * 0.31 + p.x * 0.012 + p.z * 0.009);
-  let phase = F.time * (1.15 + 0.45 * fract(p.x * 0.013 + p.z * 0.017)) + p.z * 0.05;
+struct MeshIn {
+  @location(0) p: vec3<f32>,
+  @location(1) n: vec3<f32>,
+  @location(2) c: vec3<f32>,
+  @location(3) sway: f32,
+  @location(4) kind: f32,
+  @location(5) uv: vec2<f32>,
+  // Instance: position and yaw, scale and vertical stretch, tint.
+  @location(6) i0: vec4<f32>,
+  @location(7) i1: vec4<f32>,
+  @location(8) i2: vec4<f32>,
+}
+fn spinY(v: vec3<f32>, a: f32) -> vec3<f32> {
+  let s = sin(a); let c = cos(a);
+  return vec3<f32>(v.x * c - v.z * s, v.y, v.x * s + v.z * c);
+}
+fn meshPlace(in: MeshIn) -> vec3<f32> {
+  var w = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
+  // One wind for the whole island, with a faster flutter that differs along each plant.
+  let field = sin(F.time * 0.31 + w.x * 0.012 + w.z * 0.009);
+  let phase = F.time * (1.15 + 0.45 * fract(w.x * 0.013 + w.z * 0.017)) + w.z * 0.05;
   let gust = field * 0.55 + sin(phase) * 0.35 + sin(phase * 2.3 + 0.7) * 0.12;
-  w.x += gust * sway * 1.15;
-  w.z += gust * sway * 0.22;
-  w.y -= abs(gust) * sway * sway * 0.28;
+  w.x += gust * in.sway * 1.15;
+  w.z += gust * in.sway * 0.22;
+  w.y -= abs(gust) * in.sway * in.sway * 0.28;
+  return w;
+}
+@vertex fn vsMesh(in: MeshIn) -> MeshV {
   var o: MeshV;
-  o.world = w;
-  o.nrm = n;
-  o.col = c;
-  o.shell = shell;
-  o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  o.world = meshPlace(in);
+  o.nrm = spinY(normalize(in.n / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
+  o.col = in.c * in.i2.rgb;
+  o.kind = in.kind;
+  o.uv = in.uv;
+  o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
   return o;
 }
 struct ShadowV { @builtin(position) clip: vec4<f32> }
@@ -567,24 +584,18 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
   o.clip = F.shadowVP * vec4<f32>(p, 1.0);
   return o;
 }
-@vertex fn vsShadowMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec3<f32>, @location(3) swayIn: f32) -> ShadowV {
-  var w = p;
-  let sway = swayIn - step(9.0, swayIn) * 10.0;
-  let field = sin(F.time * 0.31 + p.x * 0.012 + p.z * 0.009);
-  let phase = F.time * (1.15 + 0.45 * fract(p.x * 0.013 + p.z * 0.017)) + p.z * 0.05;
-  let gust = field * 0.55 + sin(phase) * 0.35 + sin(phase * 2.3 + 0.7) * 0.12;
-  w.x += gust * sway * 1.15;
-  w.z += gust * sway * 0.22;
-  w.y -= abs(gust) * sway * sway * 0.28;
+@vertex fn vsShadowMesh(in: MeshIn) -> ShadowV {
   var o: ShadowV;
-  o.clip = F.shadowVP * vec4<f32>(w, 1.0);
+  o.clip = F.shadowVP * vec4<f32>(meshPlace(in), 1.0);
   return o;
 }
 @fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
   var n = normalize(in.nrm);
   var alb = in.col;
-  if (in.shell > 0.5) {
+  let crown = in.kind > 2.5 && in.kind < 3.5;
+  let leafy = select(0.0, 1.0, in.kind > 1.5 && in.kind < 2.5);
+  if (crown) {
     // A leaf mass. Its outline is leaves and gaps, not the edge of a smooth lump,
     // and its surface is clumps catching the light at different angles.
     let Vv = normalize(F.camPos - in.world);
@@ -600,9 +611,8 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
     n = normalize(n + tilt * 1.1);
   } else if (dot(n, F.camPos - in.world) < 0.0) { n = -n; }
   // Leaves are a dull, dark green. The saturated value is what reads as plastic.
-  let leafy = sat((alb.g - max(alb.r, alb.b)) * 4.0) * (1.0 - in.shell);
   alb = mix(alb, mix(vec3<f32>(dot(alb, vec3<f32>(0.3, 0.6, 0.1))), alb, 0.72) * 0.62, leafy);
-  var col = shade(in.world, n, alb);
+  var col = shade(in.world, n, alb, select(leafy, 0.3, crown));
   let ground = sampleField(in.world.xz).x;
   let above = in.world.y - ground;
   if (above > 0.02 && above < 1.8) {
@@ -649,7 +659,7 @@ struct GrassV {
   if (in.kind > 0.5) { col = mix(vec3<f32>(0.04, 0.16, 0.09), vec3<f32>(0.18, 0.34, 0.16), in.uv.y); }
   let rib = smoothstep(0.08, 0.0, abs(in.uv.x - 0.5));
   col *= 0.82 + 0.22 * n2(in.world.xz * 1.6) - rib * 0.12;
-  return vec4<f32>(shade(in.world, in.nrm, col), 1.0);
+  return vec4<f32>(shade(in.world, in.nrm, col, 1.0), 1.0);
 }
 
 struct BirdV {
@@ -676,7 +686,7 @@ struct BirdV {
   return o;
 }
 @fragment fn fsBird(in: BirdV) -> @location(0) vec4<f32> {
-  return vec4<f32>(shade(in.world, in.nrm, in.col), 1.0);
+  return vec4<f32>(shade(in.world, in.nrm, in.col, 0.0), 1.0);
 }
 
 fn steepQ(i: i32) -> f32 {

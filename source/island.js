@@ -205,25 +205,23 @@ function buildWorld(res, span) {
 
 function buildWorldAsync(res, span, progress) {
   const data = new Float32Array(res * res * 2);
-  const slice = 24;
-  let p = Promise.resolve();
-  for (let j = 0; j < res; j += slice) {
-    const j0 = j, j1 = Math.min(res, j + slice);
-    p = p.then(function () {
-      fillHeights(data, res, span, j0, j1);
-      if (progress) progress(j1 / res * 0.75);
-      return new Promise(function (r) { setTimeout(r, 0); });
-    });
-  }
-  for (let j = 0; j < res; j += slice) {
-    const j0 = j, j1 = Math.min(res, j + slice);
-    p = p.then(function () {
-      fillDamp(data, res, span, j0, j1);
-      if (progress) progress(0.75 + j1 / res * 0.25);
-      return new Promise(function (r) { setTimeout(r, 0); });
-    });
-  }
-  return p.then(function () { return makeWorld(res, span, data); });
+  // Yield by the clock, not by the row. A timer per slice costs more than the slice.
+  const tick = () => new Promise(function (r) { setTimeout(r, 0); });
+  return (async function () {
+    let last = performance.now();
+    for (let pass = 0; pass < 2; pass++) {
+      for (let j = 0; j < res; j += 8) {
+        const j1 = Math.min(res, j + 8);
+        if (pass === 0) fillHeights(data, res, span, j, j1); else fillDamp(data, res, span, j, j1);
+        if (performance.now() - last > 48) {
+          if (progress) progress(pass ? 0.75 + j1 / res * 0.25 : j1 / res * 0.75);
+          await tick();
+          last = performance.now();
+        }
+      }
+    }
+    return makeWorld(res, span, data);
+  })();
 }
 
 function fieldSample(world, x, z) {
