@@ -2123,7 +2123,7 @@ async function main() {
       const seedEnc = device.createCommandEncoder();
       shoreSim.seed(seedEnc);
       device.queue.submit([seedEnc.finish()]);
-      const steps = 70;
+      const steps = 110;
       const hdt = 0.04;
       let t = t0 - steps * hdt;
       for (let i = 0; i < steps; i++) {

@@ -100,20 +100,50 @@ fn bedAt(ix: i32, iz: i32) -> vec2<f32> {
   let z = clamp(iz, 0, i32(NZ) - 1);
   return textureLoad(bedTex, vec2<i32>(x, z), 0).xy;
 }
-fn sampleS(xz: vec2<f32>) -> vec4<f32> {
-  let d = xz - U.origin;
-  let fi = dot(d, U.along) / U.dx - 0.5;
-  let fj = dot(d, U.sea) / U.dx - 0.5;
-  let x0 = clamp(i32(floor(fi)), 0, i32(NX) - 1);
-  let z0 = clamp(i32(floor(fj)), 0, i32(NZ) - 1);
-  let x1 = min(x0 + 1, i32(NX) - 1);
-  let z1 = min(z0 + 1, i32(NZ) - 1);
-  let f = fract(vec2<f32>(fi, fj));
-  let a = textureLoad(srcS, vec2<i32>(x0, z0), 0);
-  let b = textureLoad(srcS, vec2<i32>(x1, z0), 0);
-  let c = textureLoad(srcS, vec2<i32>(x0, z1), 0);
-  let dS = textureLoad(srcS, vec2<i32>(x1, z1), 0);
-  return mix(mix(a, b, f.x), mix(c, dS, f.x), f.y);
+fn stars(hL: f32, bL: f32, hR: f32, bR: f32) -> vec2<f32> {
+  let bstar = max(bL, bR);
+  return vec2<f32>(max(hL + bL - bstar, 0.0), max(hR + bR - bstar, 0.0));
+}
+fn physFlux(h: f32, un: f32, ut: f32) -> vec3<f32> {
+  let hu = h * un;
+  return vec3<f32>(hu, hu * un + 0.5 * 9.81 * h * h, hu * ut);
+}
+fn hllFlux(hL: f32, unL: f32, utL: f32, hR: f32, unR: f32, utR: f32) -> vec3<f32> {
+  let g = 9.81;
+  let eps = 1e-4;
+  let cL = sqrt(g * max(hL, 0.0));
+  let cR = sqrt(g * max(hR, 0.0));
+  var sL = 0.0;
+  var sR = 0.0;
+  if (hL > eps && hR > eps) {
+    sL = min(unL - cL, unR - cR);
+    sR = max(unL + cL, unR + cR);
+  } else if (hL > eps) {
+    sL = unL - cL;
+    sR = unL + 2.0 * cL;
+  } else if (hR > eps) {
+    sL = unR - 2.0 * cR;
+    sR = unR + cR;
+  } else {
+    return vec3<f32>(0.0);
+  }
+  let fL = physFlux(hL, unL, utL);
+  let fR = physFlux(hR, unR, utR);
+  if (sL >= 0.0) { return fL; }
+  if (sR <= 0.0) { return fR; }
+  let UL = vec3<f32>(hL, hL * unL, hL * utL);
+  let UR = vec3<f32>(hR, hR * unR, hR * utR);
+  return (sR * fL - sL * fR + sL * sR * (UR - UL)) / max(sR - sL, 1e-5);
+}
+fn faceFlux(hL: f32, bL: f32, vL: vec2<f32>, hR: f32, bR: f32, vR: vec2<f32>, nrm: vec2<f32>, tan: vec2<f32>) -> vec3<f32> {
+  let hs = stars(hL, bL, hR, bR);
+  var unL = dot(vL, nrm);
+  var utL = dot(vL, tan);
+  var unR = dot(vR, nrm);
+  var utR = dot(vR, tan);
+  if (hs.x < 1e-4) { unL = 0.0; utL = 0.0; }
+  if (hs.y < 1e-4) { unR = 0.0; utR = 0.0; }
+  return hllFlux(hs.x, unL, utL, hs.y, unR, utR);
 }
 
 @compute @workgroup_size(8, 8)
@@ -135,26 +165,21 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let z = id.y;
   if (x >= NX || z >= NZ) { return; }
   let ip = vec2<i32>(i32(x), i32(z));
-  let bed = textureLoad(bedTex, ip, 0);
-  let b = bed.x;
-  let drive = bed.y;
-  let xz = cellPos(x, z);
-  let sea = ocean(xz);
-
-  if (drive > 0.82 || b > 2.4) {
-    var h0 = 0.0;
-    var vel0 = vec2<f32>(0.0);
-    if (b < 1.5) {
-      h0 = max(sea.x - b, 0.0);
-      vel0 = sea.yz;
-    }
-    let prevF = textureLoad(srcS, ip, 0).w * 0.92;
-    textureStore(dstS, ip, vec4<f32>(h0, vel0, prevF));
-    textureStore(dstW, ip, vec4<f32>(select(0.0, 1.0, h0 > 0.02 || b < 0.0), b, 0.0, 0.0));
+  let b = textureLoad(bedTex, ip, 0).x;
+  let wet0 = textureLoad(srcW, ip, 0);
+  if (b > 2.2) {
+    textureStore(dstS, ip, vec4<f32>(0.0));
+    textureStore(dstW, ip, vec4<f32>(0.0, b, wet0.z * exp(-U.dt * 0.08), 0.0));
     return;
   }
 
   let c = textureLoad(srcS, ip, 0);
+  var h = max(c.x, 0.0);
+  var vel = c.yz;
+  var foam = max(c.w, 0.0);
+  if (h < 0.002) { vel = vec2<f32>(0.0); foam = 0.0; }
+  let A = U.along;
+  let S = U.sea;
   let l = at(ip.x - 1, ip.y);
   let r = at(ip.x + 1, ip.y);
   let dwn = at(ip.x, ip.y - 1);
@@ -163,98 +188,145 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let br = bedAt(ip.x + 1, ip.y).x;
   let bd = bedAt(ip.x, ip.y - 1).x;
   let bu = bedAt(ip.x, ip.y + 1).x;
-  let gx = ((br + r.x) - (bl + l.x)) / (2.0 * U.dx);
-  let gz = ((bu + up.x) - (bd + dwn.x)) / (2.0 * U.dx);
-  let slope = clamp(vec2<f32>(gx, gz), vec2<f32>(-0.85), vec2<f32>(0.85));
-  let steep = length(vec2<f32>(gx, gz));
+  let g2 = 0.5 * 9.81;
+  let invDx = 1.0 / U.dx;
+  let dt = U.dt;
 
-  var vel = c.yz;
-  // A dry cell has no velocity of its own, so it would never sample the water
-  // arriving from offshore. Borrow the deepest neighbor's velocity first.
-  if (c.x < 0.025) {
-    var donor = c.x;
-    var donorV = vel;
-    if (l.x > donor) { donor = l.x; donorV = l.yz; }
-    if (r.x > donor) { donor = r.x; donorV = r.yz; }
-    if (dwn.x > donor) { donor = dwn.x; donorV = dwn.yz; }
-    if (up.x > donor) { donor = up.x; donorV = up.yz; }
-    if (donor > 0.03) { vel = donorV; }
+  // Closed wall outside the grid. The seaward band is replaced by the coupling below.
+  var fR = vec3<f32>(0.0, g2 * h * h, 0.0);
+  var fL = fR;
+  var fU = fR;
+  var fD = fR;
+  var sRx = h;
+  var sLy = h;
+  var sUx = h;
+  var sDy = h;
+  if (x + 1u < NX) {
+    fR = faceFlux(h, b, vel, max(r.x, 0.0), br, r.yz, A, S);
+    sRx = stars(h, b, max(r.x, 0.0), br).x;
   }
-  let back = xz - vel * U.dt;
-  let adv = sampleS(back);
-  var h = max(adv.x, 0.0);
-  vel = mix(vel, adv.yz, smoothstep(0.0, 0.04, adv.x));
-  var foam = adv.w;
-
-  let gworld = U.along * slope.x + U.sea * slope.y;
-  vel -= gworld * 9.81 * U.dt;
-
-  let vl = vec2<f32>(dot(l.yz, U.along), dot(l.yz, U.sea));
-  let vr = vec2<f32>(dot(r.yz, U.along), dot(r.yz, U.sea));
-  let vd = vec2<f32>(dot(dwn.yz, U.along), dot(dwn.yz, U.sea));
-  let vu = vec2<f32>(dot(up.yz, U.along), dot(up.yz, U.sea));
-  let div = (vr.x - vl.x + vu.y - vd.y) / (2.0 * U.dx);
-  h = max(h - h * clamp(div, -6.0, 6.0) * U.dt, 0.0);
-
-  let shallow = smoothstep(1.5, 0.08, max(-b, 0.0));
-  let brk = smoothstep(0.10, 0.38, steep) * shallow * smoothstep(0.008, 0.05, h);
-  let spd = length(vel);
-  let rush = smoothstep(0.35, 1.3, spd) * smoothstep(-0.08, 0.12, b) * smoothstep(0.004, 0.035, h);
-  foam = min(foam + brk * 1.8 * U.dt, 1.0);
-  // The lip of the sheet foams. The body of the wash is allowed to thin and clear.
-  let lip = smoothstep(0.01, 0.035, h) * smoothstep(0.14, 0.045, h) * smoothstep(0.35, 1.2, spd);
-  foam = min(foam + (lip * 0.9 + rush * 0.35) * U.dt, 1.0);
-  // A breaking crest is nudged toward a bore. Added as a target speed, not an
-  // acceleration, so it cannot flood the beach a little more every step.
-  let wob = hash21s(xz * 0.37) - 0.5;
-  let bore = -U.sea * 2.3 + U.along * wob * 0.9;
-  let push = brk * smoothstep(0.55, -0.05, b);
-  vel = mix(vel, bore, push * 0.45);
-  if (b > -0.02) { h = min(h, mix(0.16, 0.05, smoothstep(0.05, 0.55, b))); }
-  if (b > 0.02 && c.x < 0.02) { h = min(h, 0.045); }
-  let melt = mix(0.25, 0.7, smoothstep(-0.02, 0.2, b) * (1.0 - brk));
-  foam *= exp(-U.dt * melt);
-  vel *= exp(-brk * 0.45 * U.dt);
-  if (b > 0.62) {
-    vel *= exp(-3.0 * U.dt);
-    h *= exp(-1.5 * U.dt);
+  if (x > 0u) {
+    fL = faceFlux(max(l.x, 0.0), bl, l.yz, h, b, vel, A, S);
+    sLy = stars(max(l.x, 0.0), bl, h, b).y;
+  }
+  if (z + 1u < NZ) {
+    fU = faceFlux(h, b, vel, max(up.x, 0.0), bu, up.yz, S, A);
+    sUx = stars(h, b, max(up.x, 0.0), bu).x;
+  }
+  if (z > 0u) {
+    fD = faceFlux(max(dwn.x, 0.0), bd, dwn.yz, h, b, vel, S, A);
+    sDy = stars(max(dwn.x, 0.0), bd, h, b).y;
   }
 
-  var drag = 0.08;
-  if (b > -0.02) { drag += 0.14; }
-  vel *= exp(-drag * U.dt);
-  vel *= exp(-min(foam, 1.0) * 0.8 * U.dt);
+  var hN = h - dt * invDx * (fR.x - fL.x + fU.x - fD.x);
+  hN = clamp(hN, 0.0, 3.2);
+  let srcA = g2 * (sRx * sRx - sLy * sLy);
+  let srcS = g2 * (sUx * sUx - sDy * sDy);
+  var pA = h * dot(vel, A) + dt * invDx * (-(fR.y - fL.y) - (fU.z - fD.z) + srcA);
+  var pS = h * dot(vel, S) + dt * invDx * (-(fU.y - fD.y) - (fR.z - fL.z) + srcS);
+
+  // Foam travels with the volume flux. Upwind, so a dry cell can receive it.
+  let ffR = select(fR.x * r.w, fR.x * foam, fR.x >= 0.0);
+  let ffL = select(fL.x * foam, fL.x * l.w, fL.x >= 0.0);
+  let ffU = select(fU.x * up.w, fU.x * foam, fU.x >= 0.0);
+  let ffD = select(fD.x * foam, fD.x * dwn.w, fD.x >= 0.0);
+  var hf = h * foam - dt * invDx * (ffR - ffL + ffU - ffD);
+  hf = max(hf, 0.0);
+
+  let denom = hN * hN + 0.0004;
+  vel = A * (pA * hN / denom) + S * (pS * hN / denom);
+  if (hN < 0.003) { vel = vec2<f32>(0.0); }
+
+  let uAr = dot(r.yz, A);
+  let uAl = dot(l.yz, A);
+  let uSu = dot(up.yz, S);
+  let uSd = dot(dwn.yz, S);
+  let div = (uAr - uAl + uSu - uSd) * invDx * 0.5;
+  let shear = (dot(up.yz, A) - dot(dwn.yz, A) + uAr - uAl) * invDx * 0.5;
+  let etaC = hN + b;
+  let etaL = max(l.x, 0.0) + bl;
+  let etaR = max(r.x, 0.0) + br;
+  let etaD = max(dwn.x, 0.0) + bd;
+  let etaU = max(up.x, 0.0) + bu;
+  let steep = length(vec2<f32>(etaR - etaL, etaU - etaD)) * invDx * 0.5;
+  let celer = sqrt(9.81 * max(hN, 0.02));
+  let sp = length(vel);
+  let Fr = sp / celer;
+  let shallow = smoothstep(1.8, 0.2, max(-b, 0.0));
+  var brk = smoothstep(0.04, 0.2, steep) * smoothstep(0.65, 1.25, Fr) * shallow;
+  brk = max(brk, smoothstep(0.35, 1.4, -div) * shallow * smoothstep(0.02, 0.1, hN));
+  // Dissipate supercritical momentum. The bore speed is the local wave speed, not a constant.
+  vel *= exp(-brk * 1.6 * dt);
+
+  let Cf = 0.01 + select(0.0, 0.028, b > -0.02);
   let sp2 = length(vel);
-  if (sp2 > 4.2) { vel *= 4.2 / sp2; }
-
-  if (h < 0.007 && b > -0.04) {
-    h = 0.0;
-    vel = vec2<f32>(0.0);
+  if (sp2 > 0.02 && hN > 0.004) {
+    vel *= 1.0 / (1.0 + dt * Cf * sp2 / max(hN, 0.025));
   }
-  h = min(h, 2.8);
-
-  if (drive > 0.02) {
-    let etaT = max(sea.x - b, 0.0);
-    h = mix(h, etaT, drive);
-    vel = mix(vel, sea.yz, drive);
+  if (length(vel) > 8.0) { vel *= 8.0 / length(vel); }
+  // A bore that has climbed onto the sand collapses into a sheet. The surplus
+  // becomes foam. Clamping after the momentum update does not speed the water up.
+  var spill = 0.0;
+  if (b > -0.03 && hN > 0.16) {
+    spill = hN - 0.16;
+    hN = 0.16;
   }
-  if (x < 5u || x + 5u >= NX) {
-    let fade = select(f32(x) / 5.0, f32(NX - 1u - x) / 5.0, x + 5u >= NX);
-    h *= fade;
+
+  var foamN = 0.0;
+  if (hN > 0.006) { foamN = clamp(hf / hN, 0.0, 1.25); }
+  let lost = sp * (1.0 - exp(-brk * 1.6 * dt));
+  // Alongshore peaks of the front get the foam, so the break is not one straight line.
+  let front = abs(etaU - etaD);
+  let lU = at(ip.x - 1, ip.y + 1);
+  let lD = at(ip.x - 1, ip.y - 1);
+  let rU = at(ip.x + 1, ip.y + 1);
+  let rD = at(ip.x + 1, ip.y - 1);
+  let frontL = abs(max(lU.x, 0.0) + bedAt(ip.x - 1, ip.y + 1).x - max(lD.x, 0.0) - bedAt(ip.x - 1, ip.y - 1).x);
+  let frontR = abs(max(rU.x, 0.0) + bedAt(ip.x + 1, ip.y + 1).x - max(rD.x, 0.0) - bedAt(ip.x + 1, ip.y - 1).x);
+  let peak = max(front - 0.5 * (frontL + frontR), 0.0) * invDx;
+  // A straight crest produces almost no foam. Local peaks and converging
+  // flow do, so the break comes apart along the beach instead of as one band.
+  let peakGate = smoothstep(0.004, 0.045, peak);
+  let conv = smoothstep(0.08, 0.7, -div);
+  foamN += brk * (0.035 + 0.9 * max(peakGate, conv * 0.65)) * (0.12 + lost * 0.6) * dt * 8.0;
+  let dilute = smoothstep(0.26, 0.045, foamN);
+  // Expansion and shear tear dilute foam apart. Dense patches last longer.
+  foamN *= exp(-dt * (0.2 + 3.4 * max(div, 0.0) + 1.15 * abs(shear) + dilute * 1.15));
+  // A uniform collapse stays a clear sheet. Only the locally stronger
+  // parts of the front throw foam, so the wash is not one white band.
+  foamN = clamp(foamN + spill * (0.12 + 1.7 * peakGate), 0.0, 1.25);
+
+  var ground = wet0.z;
+  if (hN < 0.025 && b > -0.04 && foamN > 0.04) {
+    ground = max(ground, foamN * 0.85);
+    foamN *= 0.45;
+  }
+  ground *= exp(-dt * 0.07);
+  if (hN > 0.08) { ground *= exp(-dt * 0.4); }
+
+  // Coupling is a band of grid rows at the seaward side, not a contour of the bed.
+  let off = f32(z) / max(U.nz - 1.0, 1.0);
+  let w = smoothstep(0.5, 0.9, off);
+  if (w > 0.001 && b < 1.0) {
+    let sea = ocean(cellPos(x, z));
+    let hO = max(sea.x - b, 0.0);
+    hN = mix(hN, hO, w);
+    vel = mix(vel, sea.yz, w);
+    foamN *= mix(1.0, 0.9, w);
+  }
+  if (x < 6u || x + 6u >= NX) {
+    let fade = select(f32(x) / 6.0, f32(NX - 1u - x) / 6.0, x + 6u >= NX);
+    hN *= fade;
     vel *= fade;
-    foam *= fade;
-  }
-  if (z < 3u) {
-    h *= f32(z) / 3.0;
-    vel *= f32(z) / 3.0;
+    foamN *= fade;
   }
 
-  var wet = textureLoad(srcW, ip, 0).x;
-  wet = max(wet * exp(-U.dt * 0.1), smoothstep(0.0, 0.028, h));
+  var wet = wet0.x;
+  wet = max(wet * exp(-dt * 0.08), smoothstep(0.0, 0.03, hN));
   if (b < 0.0) { wet = 1.0; }
 
-  textureStore(dstS, ip, vec4<f32>(h, vel, foam));
-  textureStore(dstW, ip, vec4<f32>(wet, b, 0.0, 0.0));
+  textureStore(dstS, ip, vec4<f32>(hN, vel, foamN));
+  textureStore(dstW, ip, vec4<f32>(wet, b, ground, 0.0));
 }
 
 @compute @workgroup_size(8, 8)
@@ -283,9 +355,12 @@ async function createShore(device, world, anchor, shapeView) {
       const z = originZ + alongZ * (i + 0.5) * dx + seaZ * (j + 0.5) * dx;
       let h = fieldSample(world, x, z);
       const band = smooth01(1.15, 0.2, h) * smooth01(-1.1, -0.2, h);
-      const ridge = (vnoise(x * 0.47, z * 0.47) - 0.5) * 0.08;
-      const grain = (vnoise(x * 1.8 + 4.0, z * 1.8) - 0.5) * 0.025;
-      h += (ridge + grain) * band;
+      // Cusps and ridges live only in the sim bed. The drawn beach stays smooth,
+      // so the run-up fingers without painting contour lines on the sand.
+      const cusp = (vnoise(x * 0.13, z * 0.13 + 3.0) - 0.5) * 0.36;
+      const ridge = (vnoise(x * 0.55, z * 0.55) - 0.5) * 0.1;
+      const grain = (vnoise(x * 1.9 + 4.0, z * 1.9) - 0.5) * 0.045;
+      h += (cusp + ridge + grain) * band;
       // Deeper than the surf zone, the cell is the ocean. The solver owns the wash.
       let drive = 0;
       if (h < -0.7) drive = 1;
@@ -313,8 +388,8 @@ async function createShore(device, world, anchor, shapeView) {
   const makeTex = () => device.createTexture({ size: [nx, nz], format: 'rgba16float', usage: simUsage });
   const state = [makeTex(), makeTex()];
   const wet = [makeTex(), makeTex()];
-  const showS = device.createTexture({ size: [nx, nz], format: 'rgba16float', usage: simUsage });
-  const showW = device.createTexture({ size: [nx, nz], format: 'rgba16float', usage: simUsage });
+  const showS = makeTex();
+  const showW = makeTex();
 
   const module = device.createShaderModule({ code: shoreWgsl() });
   const info = await module.getCompilationInfo();
@@ -396,10 +471,11 @@ async function createShore(device, world, anchor, shapeView) {
     ping = 1;
   }
   function encode(enc, time, dt) {
-    const sub = 2;
-    const hdt = Math.max(0.004, Math.min(dt, 0.05)) / sub;
-    for (let s = 0; s < sub; s++) {
-      writeWaves(time, hdt);
+    // CFL at dx 0.32 m and a ~8 m/s bore is about 0.016 s. Stay under it.
+    const n = Math.max(1, Math.min(5, Math.ceil(dt / 0.012)));
+    const stepDt = dt / n;
+    for (let s = 0; s < n; s++) {
+      writeWaves(time - dt + stepDt * (s + 1), stepDt);
       dispatch(enc, pipes.step, stepBG[ping]);
       ping = 1 - ping;
     }
