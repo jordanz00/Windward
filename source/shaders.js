@@ -513,15 +513,30 @@ fn waterFill(depth: f32) -> vec3<f32> {
 // What replaces the lost light is the sky in that direction, so the haze is bright toward
 // the sun and takes the colour of the hour. dy is how far the ray climbs.
 fn airKeep(dist: f32, dy: f32) -> vec3<f32> {
-  let s = dy / 150.0;
-  var lay = exp(-max(F.camPos.y, 0.0) / 150.0);
+  // Near stays crisp; distant contrast fades into humid blue air.
+  let s = dy / 160.0;
+  var lay = exp(-max(F.camPos.y, 0.0) / 160.0);
   if (abs(s) > 1e-3) { lay *= (1.0 - exp(-s)) / s; }
-  let veil = (0.00042 + 0.0012 * F.wx.w * F.wx.w + 0.003 * F.wx.x) * min(lay, 4.0);
-  return exp(-dist * (vec3<f32>(0.46, 1.08, 2.65) * 1e-4 + veil));
+  let gold = sat(F.day.w);
+  let night = sat(F.sunTrue.w);
+  let humid = sat(F.wx.w);
+  let mist = sat(F.wx.z);
+  // Humidity + mist thicken the veil; rain greys it; night softens scattering.
+  let veil = (0.00038 + 0.0016 * humid * humid + 0.0011 * mist + 0.0028 * F.wx.x
+    + 0.00035 * gold) * min(lay, 4.0) * mix(1.0, 0.45, night);
+  // Rayleigh-ish: blue drops first. Warm a little toward the horizon at golden hour.
+  let ray = vec3<f32>(0.42, 1.05, 2.75) * 1e-4 * mix(1.0, 0.82, gold);
+  // Protect the first ~25 m so palms and shoreline stay sharp.
+  let near = smoothstep(18.0, 55.0, dist);
+  return exp(-dist * (ray + veil) * near);
 }
 fn airMix(col: vec3<f32>, dir: vec3<f32>, dist: f32) -> vec3<f32> {
   let keep = airKeep(dist, dir.y * dist);
-  return col * keep + hazeColor(dir) * (1.0 - keep);
+  var haze = hazeColor(dir);
+  let gold = sat(F.day.w);
+  // Horizon haze warms at golden hour without orange-washing the whole frame.
+  haze = mix(haze, haze * vec3<f32>(1.18, 0.95, 0.78) + vec3<f32>(0.04, 0.015, 0.0), gold * sat(1.0 - dir.y * 2.5) * 0.55);
+  return col * keep + haze * (1.0 - keep);
 }
 fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
   let d = world - F.camPos;
@@ -559,11 +574,12 @@ fn caustic(xz: vec2<f32>) -> f32 {
   let e2 = laceCell(p2, t * 1.55);
   let l1 = 1.0 - smoothstep(0.0, 0.1, e1);
   let l2 = 1.0 - smoothstep(0.0, 0.12, e2);
-  let net = l1 * l1 * (0.55 + 0.55 * focus) + l2 * l2 * 0.45;
-  // Cloud shadows dim the seabed and the caustic together.
+  let net = l1 * l1 * (0.5 + 0.55 * focus) + l2 * l2 * 0.42;
   let lit = cloudShade(xz, 0.0);
   let day = smoothstep(0.02, 0.12, F.sunTrue.y);
-  return net * exp(-depth * 0.28) * smoothstep(0.02, 0.28, depth) * lit * day * 0.72;
+  // Bright on shallow sand, faint in the deep; never a hard projected grid.
+  let shallow = smoothstep(0.02, 0.35, depth) * exp(-depth * 0.26);
+  return net * shallow * lit * day * 0.68;
 }
 
 fn shadowAt(p: vec3<f32>) -> f32 {
@@ -1704,8 +1720,10 @@ const DROP_SPRAY: u32 = 60000u;
     // A mote is a point of forward-scattered sunlight or nothing.
     let mu = dot(normalize(w - F.camPos), F.sunDir);
     let lit = sunVis(w) * cloudShade(w.xz, w.y) * step(max(sampleField(w.xz).x, 0.0), w.y);
-    light = F.sunCol * lit * (0.25 + 5.0 * pow(0.5 + 0.5 * mu, 8.0));
-    a = min(1.0, (r * r) / (rad * rad)) * 0.9 * smoothstep(0.02, 0.2, dot(light, vec3<f32>(0.33)));
+    light = F.sunCol * lit * (0.2 + 5.5 * pow(0.5 + 0.5 * mu, 8.0))
+      * mix(vec3<f32>(1.0), vec3<f32>(1.2, 0.95, 0.75), sat(F.day.w));
+    a = min(1.0, (r * r) / (rad * rad)) * (0.7 + 0.45 * sat(F.wx.w))
+      * smoothstep(0.02, 0.2, dot(light, vec3<f32>(0.33)));
     o.form = 1.0;
     o.dist = d;
   } else {
@@ -1725,18 +1743,27 @@ const DROP_SPRAY: u32 = 60000u;
       let sh = shoreFetch(home);
       if (sh.inside > 0.5) { force = max(force, sat(sh.foam * 1.3) * smoothstep(0.4, 1.6, length(sh.vel))); top = max(top, sh.eta); }
     }
-    let life = fract(F.time * (0.55 + 0.3 * hh.x) + hh.y * 9.0);
-    let blow = clamp(F.wind.z / 5.0, 0.35, 2.4);
-    // Spray off small surf stays low: thrown up a metre or so, then falling as it drifts.
-    let rise = (0.15 + 0.85 * pow(life, 0.55)) * (0.6 + 0.4 * blow) - 0.75 * life * life;
-    let w = vec3<f32>(home.x, max(top, 0.0) + rise, home.y) + vec3<f32>(F.wind.x, 0.0, F.wind.y) * F.wind.z * 0.45 * life * 1.6;
-    let rad = (0.25 + 0.85 * life) * (0.7 + 0.6 * hh.x);
-    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.02, force);
+    let life = fract(F.time * (0.48 + 0.35 * hh.x) + hh.y * 9.0);
+    let blow = clamp(F.wind.z / 5.0, 0.3, 2.6);
+    let humid = sat(F.wx.w);
+    let gold = sat(F.day.w);
+    // Low throw: rises then falls while drifting downwind — irregular height per puff.
+    let rise = (0.12 + 0.9 * pow(life, 0.5) * (0.7 + 0.5 * hh.y)) * (0.55 + 0.45 * blow) - 0.85 * life * life;
+    let w = vec3<f32>(home.x, max(top, 0.0) + rise, home.y)
+      + vec3<f32>(F.wind.x, 0.0, F.wind.y) * F.wind.z * 0.5 * life * 1.7
+      + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * 0.04, 0.0);
+    let rad = (0.22 + 0.95 * life) * (0.65 + 0.7 * hh.x) * (0.85 + 0.25 * humid);
+    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.015, force);
     let mu = dot(normalize(w - F.camPos), F.sunDir);
-    // Thin spray is greyer than foam with the sun behind the eye and brighter against it.
-    light = F.amb.rgb * 0.7 + F.sunCol * sunVis(w) * cloudShade(w.xz, 0.0) * (0.2 + 1.6 * pow(0.5 + 0.5 * mu, 5.0));
+    // Backlit spray glows at golden hour; otherwise a soft grey veil.
+    let back = pow(sat(mu), 4.0);
+    light = F.amb.rgb * 0.55
+      + F.sunCol * sunVis(w) * cloudShade(w.xz, 0.0)
+        * (0.15 + 1.35 * back + 2.2 * back * gold)
+        * mix(vec3<f32>(1.0), vec3<f32>(1.3, 0.95, 0.7), gold);
     o.dist = length(w - F.camPos);
-    a = force * sin(life * 3.14159) * 0.24 * blow * smoothstep(1.5, 7.0, o.dist);
+    a = force * sin(life * 3.14159) * (0.18 + 0.14 * humid) * blow
+      * smoothstep(1.2, 8.0, o.dist) * smoothstep(55.0, 12.0, o.dist);
     o.form = 2.0;
   }
   o.col = vec4<f32>(airMix(light, normalize(pos - F.camPos), o.dist), a * (1.0 - F.under));
@@ -1793,14 +1820,18 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   let yb = y1 - g;
   let q = (p.xz - F.windOff.zw * 0.5) * 0.017;
   let n = n2(q) * 0.62 + n2(q * 3.3 + vec2<f32>(5.0, 1.0)) * 0.38;
-  // Mist is a layer a few metres deep that lies in banks and thins up the slopes.
-  var d = F.wx.z * 0.03 * smoothstep(0.25, 0.75, n) * (1.0 - smoothstep(14.0, 55.0, g)) * airLayer(2.0 + 9.0 * n, ya, yb, seg);
-  // Damp air is everywhere near the ground, thickest under the forest where nothing stirs it.
+  // Mist banks in hollows; thicker on humid mornings (wx.z + humidity).
+  let mistAmt = sat(F.wx.z + F.wx.w * 0.35);
+  var d = mistAmt * 0.034 * smoothstep(0.22, 0.78, n) * (1.0 - smoothstep(12.0, 52.0, g)) * airLayer(2.0 + 10.0 * n, ya, yb, seg);
+  // Damp air near the ground, thickest under forest.
   let wood = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(p.xz));
-  d += F.wx.w * F.wx.w * (0.0006 + 0.003 * wood) * airLayer(22.0, ya, yb, seg);
-  // Spray is thrown up where the swell breaks, more in a blow, and hangs low over the surf.
+  d += F.wx.w * F.wx.w * (0.0007 + 0.0032 * wood) * airLayer(24.0, ya, yb, seg);
+  // Low ocean mist over warm humid water — not a fog wall.
+  let sea = smoothstep(-1.8, -0.05, fld.x) * smoothstep(0.9, -0.2, fld.x);
+  d += sea * F.wx.w * 0.0011 * (0.45 + 0.55 * n) * airLayer(4.5, ya, yb, seg) * (1.0 - sat(F.sunTrue.w));
+  // Spray optical depth over energetic surf.
   let surf = smoothstep(-2.6, -0.4, fld.x) * smoothstep(1.4, 0.1, fld.x) * fld.y;
-  d += surf * surf * 0.0004 * F.wind.z * (0.4 + n) * airLayer(3.5, ya, yb, seg);
+  d += surf * surf * 0.00055 * F.wind.z * (0.4 + n) * airLayer(3.8, ya, yb, seg);
   // Rain hangs in grey curtains under the heavier cells.
   d += F.wx.x * 0.0022 * smoothstep(0.3, 0.75, n2(p.xz * 0.0016 + F.windOff.xy * 1.6)) * step(p.y, 900.0) * seg;
   return d;
@@ -1853,8 +1884,9 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
     let cP = cloudShade(p.xz, p.y);
     // Beams where the ray crosses a lit/shadow boundary in the cloud field.
     let gap = sat((cP - cloud0) * 4.8) + sat((cloud0 - cP) * 2.8) * 0.45;
-    let shaft = lit * (cP * 0.4 + gap * 2.2) * (0.35 + 1.65 * nearSun);
-    let sunShaft = F.sunCol * mix(vec3<f32>(1.0), vec3<f32>(1.25, 0.92, 0.65), gold) * shaft * ph * dayK;
+    let humid = sat(F.wx.w);
+    let shaft = lit * (cP * 0.35 + gap * 2.35) * (0.3 + 1.7 * nearSun) * (0.55 + 0.9 * humid);
+    let sunShaft = F.sunCol * mix(vec3<f32>(1.0), vec3<f32>(1.28, 0.92, 0.62), gold) * shaft * ph * dayK;
     L += T * a * (sunShaft + amb);
     T *= 1.0 - a;
   }

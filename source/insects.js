@@ -358,19 +358,30 @@ BugLife.prototype.pick = function (list, cx, cz, r, far) {
 };
 // Steer toward a point: accelerate to a speed that falls as it nears, and go.
 BugLife.prototype.fly = function (a, tx, ty, tz, vmax, acc, dt) {
-  const dx = tx - a.x, dy = ty - a.y, dz = tz - a.z, d = Math.hypot(dx, dy, dz) || 1e-6, sp = Math.min(vmax, d * 6);
+  // Smooth approach: accelerate toward the goal, ease off near it, bank into turns.
+  const dx = tx - a.x, dy = ty - a.y, dz = tz - a.z, d = Math.hypot(dx, dy, dz) || 1e-6;
+  const sp = Math.min(vmax, d * (d < 0.8 ? 3.2 : 5.5));
   let ax = dx / d * sp - a.vx, ay = dy / d * sp - a.vy, az = dz / d * sp - a.vz;
   const al = Math.hypot(ax, ay, az) || 1e-6, k = Math.min(1, acc * dt / al);
   a.vx += ax * k; a.vy += ay * k; a.vz += az * k;
+  // Soft drag so dashes settle instead of oscillating.
+  const drag = Math.exp(-dt * (d < 0.35 ? 3.5 : 0.8));
+  a.vx *= drag; a.vy *= drag; a.vz *= drag;
   a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt;
   const h = Math.hypot(a.vx, a.vz);
-  if (h > 0.15) { const t = angTo(a.yaw, Math.atan2(a.vz, a.vx)); a.yaw += t * Math.min(1, dt * 10); a.roll = Math.max(-0.7, Math.min(0.7, t * 1.5)); a.pitch = Math.atan2(a.vy, h + 0.5) * 0.6; }
+  if (h > 0.12) {
+    const t = angTo(a.yaw, Math.atan2(a.vz, a.vx));
+    a.yaw += t * Math.min(1, dt * 8);
+    a.roll = Math.max(-0.65, Math.min(0.65, a.roll * 0.85 + t * 1.2));
+    a.pitch = Math.atan2(a.vy, h + 0.45) * 0.55;
+  }
   return d;
 };
 // The gust at a place, the same cells the plants bend to.
 BugLife.prototype.blow = function (a, k, dt) {
   const g = envWindAt(a.x, a.z) * k * dt;
   a.x += env.wx0 * g; a.z += env.wz0 * g;
+  a.y += Math.sin(this.time * 2.1 + a.seed * 17) * g * 0.08;
 };
 BugLife.prototype.newHome = function (a, cx, cz) {
   const B = BUGS[a.sp], S = this.sites[B.site], rnd = this.rnd;
@@ -412,10 +423,19 @@ BugLife.prototype.newHome = function (a, cx, cz) {
 BugLife.prototype.levels = function () {
   const sy = env.sun[1], day = smooth01(0.0, 0.25, sy), low = smooth01(0.5, 0.18, sy) * smooth01(-0.1, 0.0, sy);
   const dark = smooth01(0.08, -0.06, sy), dry = 1 - Math.min(1, env.v[1] * 3), calm = 1 - smooth01(7, 12, env.speed), bright = 1 - 0.6 * env.cover;
+  // Morning ramp: insects wake gradually after first light.
+  const morn = smooth01(5.8, 8.5, env.hour) * (1 - smooth01(10, 12, env.hour));
   const L = this.lvl;
-  L[0] = dry * Math.max(day * (0.4 + 0.6 * bright), 0.5 * low); L[1] = day * dry * calm * bright; L[2] = day * dry * calm * bright; L[3] = day * dry * calm * (0.5 + 0.5 * bright);
-  L[4] = Math.max(low * 0.6, dark) * dry * calm; L[5] = Math.max(low, 0.25 * day) * dry * calm; L[6] = Math.max(low, dark * 0.7, env.humid * 0.3) * calm * dry;
-  L[7] = 0.5 + 0.5 * dry; L[8] = 1 - env.v[1] * 0.85; L[9] = dark * dry * calm;
+  L[0] = dry * Math.max(day * (0.35 + 0.65 * bright), 0.55 * low) * (0.55 + 0.45 * morn + 0.45 * day);
+  L[1] = day * dry * calm * bright * (0.5 + 0.5 * morn + 0.5 * day);
+  L[2] = day * dry * calm * bright * (0.45 + 0.55 * day);
+  L[3] = day * dry * calm * (0.45 + 0.55 * bright) * (0.4 + 0.6 * day);
+  // Moths at dusk/night; gnats in humid low light; fireflies only in real dark.
+  L[4] = Math.max(low * 0.75, dark) * dry * calm;
+  L[5] = Math.max(low, 0.2 * day) * dry * calm * (0.6 + 0.4 * env.humid);
+  L[6] = Math.max(low, dark * 0.7, env.humid * 0.35) * calm * dry;
+  L[7] = 0.5 + 0.5 * dry; L[8] = 1 - env.v[1] * 0.85;
+  L[9] = dark * dry * calm * (0.7 + 0.3 * (1 - env.cover));
 };
 BugLife.prototype.update = function (dt, time, cx, cy, cz) {
   this.time = time; this.cx = cx; this.cy = cy; this.cz = cz;
@@ -441,40 +461,49 @@ BugLife.prototype.update = function (dt, time, cx, cy, cz) {
     if (a.scare && a.amp > 0) { const k = (0.7 - d) * 6 * dt / Math.max(d, 0.05); a.x += (a.x - cx) * k; a.z += (a.z - cz) * k; }
   }
 };
-// Dragonfly: hover, snap round, dart to another point over the water, sometimes settle.
+// Dragonfly: hover over shallows, snap round, dart along a patrol; damselflies stay closer and slower.
 BugLife.prototype.dragonfly = function (a, dt, B) {
   const rnd = this.rnd, slim = B.id === 'damselfly';
   a.t -= dt;
   if (a.st === 0) {
-    const e = Math.exp(-dt * 14);
+    const e = Math.exp(-dt * (slim ? 10 : 12));
     a.vx *= e; a.vy *= e; a.vz *= e;
-    a.x += a.vx * dt; a.z += a.vz * dt; a.y += a.vy * dt + Math.sin(this.time * 9 + a.seed * 50) * 0.02 * dt;
+    // Hover bob: irregular altitude, not a metronome.
+    const bob = Math.sin(this.time * (6.5 + a.seed * 4) + a.seed * 40) * (slim ? 0.012 : 0.028)
+      + Math.sin(this.time * 2.1 + a.seed * 11) * 0.01;
+    a.x += a.vx * dt; a.z += a.vz * dt; a.y += a.vy * dt + bob * dt * 8;
     a.pitch *= e; a.roll *= e;
-    if (a.k > 0) { const s = Math.min(a.k, dt * 9); a.yaw += s * a.dir; a.k -= s; }
-    else if (rnd() < dt * 0.9) { a.k = 0.5 + rnd() * 1.4; a.dir = rnd() < 0.5 ? -1 : 1; }
-    this.blow(a, 0.03, dt);
+    if (a.k > 0) { const s = Math.min(a.k, dt * 8); a.yaw += s * a.dir; a.k -= s; }
+    else if (rnd() < dt * (slim ? 0.55 : 0.85)) { a.k = 0.4 + rnd() * (slim ? 0.9 : 1.6); a.dir = rnd() < 0.5 ? -1 : 1; }
+    this.blow(a, slim ? 0.02 : 0.04, dt);
     if (a.t < 0) {
-      if (rnd() < (slim ? 0.6 : 0.2) || env.cover > 0.7) { a.st = 2; a.t = 6; }
+      if (rnd() < (slim ? 0.55 : 0.18) || env.cover > 0.75) { a.st = 2; a.t = 5 + rnd() * 4; }
       else {
-        a.st = 1; a.t = 5;
-        for (let k = 0; k < 5; k++) {
-          const r = slim ? 0.5 + rnd() * 1.5 : 1.5 + rnd() * 6, q = rnd() * 6.28;
+        a.st = 1; a.t = slim ? 3 + rnd() * 3 : 4 + rnd() * 4;
+        for (let k = 0; k < 6; k++) {
+          const r = slim ? 0.4 + rnd() * 1.4 : 1.2 + rnd() * 7, q = rnd() * 6.28;
           a.tx = a.hx + Math.cos(q) * r; a.tz = a.hz + Math.sin(q) * r;
-          if (fieldSample(this.world, a.tx, a.tz) < -0.03) break;
+          if (fieldSample(this.world, a.tx, a.tz) < -0.02) break;
           a.tx = a.hx; a.tz = a.hz;
         }
-        a.ty = (slim ? 0.12 : 0.3) + rnd() * (slim ? 0.3 : 1.0);
+        a.ty = (slim ? 0.1 : 0.25) + rnd() * (slim ? 0.35 : 1.15);
       }
     }
   } else if (a.st === 1) {
-    if (this.fly(a, a.tx, a.ty, a.tz, slim ? 1.2 : 6, slim ? 6 : 30, dt) < 0.12 || a.t < 0) { a.st = 0; a.t = 0.4 + rnd() * (slim ? 1.2 : 2.4); }
+    // Occasional mid-dash jink so patrols are not straight lines.
+    if (rnd() < dt * 1.2) { a.tx += (rnd() - 0.5) * (slim ? 0.25 : 0.8); a.tz += (rnd() - 0.5) * (slim ? 0.25 : 0.8); }
+    if (this.fly(a, a.tx, a.ty, a.tz, slim ? 1.1 : 5.5, slim ? 5 : 22, dt) < 0.14 || a.t < 0) {
+      a.st = 0; a.t = 0.5 + rnd() * (slim ? 1.4 : 2.8);
+    }
   } else if (a.st === 2) {
     const py = fieldSample(this.world, a.px, a.pz) + 0.0105 * a.sc;
-    if (this.fly(a, a.px, py, a.pz, slim ? 0.8 : 2.5, 12, dt) < 0.012 || a.t < 0) { a.st = 3; a.t = 4 + rnd() * 10; a.x = a.px; a.y = py; a.z = a.pz; a.vx = a.vy = a.vz = 0; a.pitch = 0; a.roll = 0; }
-  } else if (a.t < 0 || a.scare) { a.st = 1; a.t = 4; a.tx = a.hx; a.tz = a.hz; a.ty = 0.6; }
+    if (this.fly(a, a.px, py, a.pz, slim ? 0.7 : 2.2, 10, dt) < 0.014 || a.t < 0) {
+      a.st = 3; a.t = 3 + rnd() * 12; a.x = a.px; a.y = py; a.z = a.pz; a.vx = a.vy = a.vz = 0; a.pitch = 0; a.roll = 0;
+    }
+  } else if (a.t < 0 || a.scare) { a.st = 1; a.t = 4; a.tx = a.hx; a.tz = a.hz; a.ty = slim ? 0.35 : 0.7; }
   const up = a.st < 3;
-  a.amp = up ? 0.5 : 0; a.wing = up ? 0.05 : slim ? 0.3 : -0.16; a.sweep = up ? 0 : slim ? 1.3 : -0.22;
-  if (up) a.ph += dt * (slim ? 138 : 188);
+  a.amp = up ? (slim ? 0.42 : 0.55) : 0; a.wing = up ? 0.05 : slim ? 0.3 : -0.16; a.sweep = up ? 0 : slim ? 1.3 : -0.22;
+  if (up) a.ph += dt * (slim ? 128 : 175);
 };
 BugLife.prototype.damselfly = BugLife.prototype.dragonfly;
 // Somewhere to feed: mostly another blossom on the same shrub, sometimes one across the clearing.
@@ -489,23 +518,27 @@ BugLife.prototype.butterfly = function (a, dt) {
   const rnd = this.rnd;
   a.t -= dt;
   if (a.st === 0) {
-    const dx = a.tx - a.x, dz = a.tz - a.z, d = Math.hypot(dx, dz), sp = (1.1 + a.seed) * Math.min(1, Math.max(0.04, d * 1.2));
-    a.k = (a.k + (rnd() - 0.5) * 30 * dt) * Math.exp(-dt * 1.5);
-    a.yaw += (angTo(a.yaw, Math.atan2(dz, dx)) * (d > 3 ? 0.7 : 2.5 + 3 / (d + 0.1)) + a.k * Math.min(1, d)) * dt;
-    a.ph += dt * (58 + a.seed * 14);
-    const goal = a.ty + (d > 0.4 ? 0.3 + 0.25 * Math.sin(this.time * 0.7 + a.seed * 30) + Math.min(d, 5) * 0.12 : 0.008);
-    a.by += (goal - a.by) * Math.min(1, dt * (d > 0.4 ? 2.2 : 5));
+    const dx = a.tx - a.x, dz = a.tz - a.z, d = Math.hypot(dx, dz);
+    const sp = (0.85 + a.seed * 0.9) * Math.min(1, Math.max(0.035, d * 1.05));
+    // Erratic steering: short side-gusts, not a constant turn bias.
+    a.k = (a.k + (rnd() - 0.5) * 42 * dt) * Math.exp(-dt * 1.2);
+    if (rnd() < dt * 2.5) a.k += (rnd() - 0.5) * 8;
+    a.yaw += (angTo(a.yaw, Math.atan2(dz, dx)) * (d > 3 ? 0.55 : 2.1 + 2.5 / (d + 0.12)) + a.k * Math.min(1, d)) * dt;
+    a.ph += dt * (48 + a.seed * 18);
+    const loft = d > 0.45 ? 0.25 + 0.35 * Math.sin(this.time * 0.55 + a.seed * 28) + Math.min(d, 6) * 0.1 : 0.006;
+    const goal = a.ty + loft;
+    a.by += (goal - a.by) * Math.min(1, dt * (d > 0.45 ? 1.8 : 4.5));
     a.x += Math.cos(a.yaw) * sp * dt; a.z += Math.sin(a.yaw) * sp * dt;
-    a.y = Math.max(this.ground(a.x, a.z) + 0.05, a.by + 0.018 * Math.sin(a.ph + 1.2) * Math.min(1, d * 3));
-    this.blow(a, 0.12, dt);
-    a.pitch = 0.3 + 0.2 * Math.sin(a.ph); a.roll = Math.max(-0.5, Math.min(0.5, -a.k * 0.2));
-    a.wing = 0.35; a.amp = 0.95; a.sweep = 0;
-    if (d < 0.03 && Math.abs(a.by - a.ty) < 0.03) { a.st = 1; a.t = 3 + rnd() * 8; a.x = a.tx; a.z = a.tz; a.y = a.ty + 0.0075 * a.sc; }
-    else if (a.t < -20) { this.bloom(a, 14); a.t = 0; }
+    a.y = Math.max(this.ground(a.x, a.z) + 0.05, a.by + 0.022 * Math.sin(a.ph + 1.1) * Math.min(1, d * 2.5));
+    this.blow(a, 0.14, dt);
+    a.pitch = 0.25 + 0.28 * Math.sin(a.ph); a.roll = Math.max(-0.55, Math.min(0.55, -a.k * 0.18));
+    a.wing = 0.32; a.amp = 0.92; a.sweep = 0;
+    if (d < 0.035 && Math.abs(a.by - a.ty) < 0.035) { a.st = 1; a.t = 2.5 + rnd() * 9; a.x = a.tx; a.z = a.tz; a.y = a.ty + 0.0075 * a.sc; }
+    else if (a.t < -18) { this.bloom(a, 14); a.t = 0; }
   } else {
     a.amp = 0; a.pitch = 0.45; a.roll = 0; a.sweep = 0;
-    a.wing = 1.42 - 1.0 * Math.pow(Math.max(0, Math.sin(this.time * 0.9 + a.seed * 20)), 3);
-    if (a.t < 0 || a.scare) { this.bloom(a, rnd() < 0.6 ? 1.6 : 16); a.st = 0; a.t = 0; a.by = a.y + 0.05; }
+    a.wing = 1.42 - 1.0 * Math.pow(Math.max(0, Math.sin(this.time * 0.75 + a.seed * 20)), 3);
+    if (a.t < 0 || a.scare) { this.bloom(a, rnd() < 0.55 ? 1.8 : 18); a.st = 0; a.t = 0; a.by = a.y + 0.06; }
   }
 };
 // Bee: straight to a shrub, a moment hanging in front of a blossom, down onto it, then the
@@ -513,17 +546,20 @@ BugLife.prototype.butterfly = function (a, dt) {
 BugLife.prototype.bee = function (a, dt, B) {
   const rnd = this.rnd, moth = B.id === 'moth', S = this.sites.bloom, i = a.site, ox = S[i + 3] * 0.04, oz = S[i + 4] * 0.04;
   a.t -= dt;
-  a.ph = moth ? a.ph + dt * 230 : rnd() * 6.28;
-  a.amp = moth ? 0.7 : 0.75; a.wing = 0.1; a.sweep = moth ? 0.1 : 0.25;
+  a.ph = moth ? a.ph + dt * 210 : a.ph + dt * (90 + a.seed * 40);
+  a.amp = moth ? 0.68 : 0.72; a.wing = 0.1; a.sweep = moth ? 0.12 : 0.22;
   if (a.st === 0) {
-    const d = this.fly(a, S[i] + ox, S[i + 1] + 0.035, S[i + 2] + oz, a.k > 0 ? 0.9 : 4.5, 16, dt);
-    this.blow(a, 0.04, dt);
-    if (d < 0.05 || a.t < -9) { a.st = 1; a.t = 0.3 + rnd() * (moth ? 2.5 : 0.9); }
+    // Local foraging: approach with a small lateral weave, not a laser line.
+    const weave = Math.sin(this.time * 3.4 + a.seed * 14) * (moth ? 0.04 : 0.025);
+    const d = this.fly(a, S[i] + ox + weave * S[i + 4], S[i + 1] + 0.04 + Math.abs(weave) * 0.3, S[i + 2] + oz - weave * S[i + 3],
+      a.k > 0 ? 0.85 : (moth ? 3.2 : 4.0), moth ? 11 : 14, dt);
+    this.blow(a, moth ? 0.06 : 0.035, dt);
+    if (d < 0.055 || a.t < -9) { a.st = 1; a.t = 0.35 + rnd() * (moth ? 2.8 : 1.0); }
   } else if (a.st === 1) {
-    const w = Math.sin(this.time * 2.3 + a.seed * 9) * 0.014;
-    this.fly(a, S[i] + ox - S[i + 4] * w, S[i + 1] + 0.03 + 0.004 * Math.sin(this.time * 3.1 + a.seed), S[i + 2] + oz + S[i + 3] * w, 0.5, 9, dt);
-    a.yaw += angTo(a.yaw, Math.atan2(-S[i + 4], -S[i + 3])) * Math.min(1, dt * 12); a.pitch = 0.25; a.roll = 0;
-    if (a.t < 0) { if (moth) { this.bloom(a, rnd() < 0.75 ? 1.6 : 14); a.st = 0; a.k = 1; a.t = 0; } else { a.st = 2; a.t = 1 + rnd() * 3.5; } }
+    const w = Math.sin(this.time * 2.1 + a.seed * 9) * 0.016;
+    this.fly(a, S[i] + ox - S[i + 4] * w, S[i + 1] + 0.028 + 0.005 * Math.sin(this.time * 2.8 + a.seed), S[i + 2] + oz + S[i + 3] * w, 0.45, 8, dt);
+    a.yaw += angTo(a.yaw, Math.atan2(-S[i + 4], -S[i + 3])) * Math.min(1, dt * 10); a.pitch = 0.22; a.roll = 0;
+    if (a.t < 0) { if (moth) { this.bloom(a, rnd() < 0.7 ? 1.8 : 16); a.st = 0; a.k = 1; a.t = 0; } else { a.st = 2; a.t = 0.9 + rnd() * 3.2; } }
   } else {
     // She clings along the column, head down toward the nectar, and shuffles as she feeds.
     const fx = S[i + 3], fz = S[i + 4], hh = Math.hypot(fx, fz), fy = Math.sqrt(Math.max(0, 1 - hh * hh)), up = (0.006 * a.sc + 0.0015) / Math.max(hh, 0.2), e = Math.min(1, dt * 8);
@@ -540,20 +576,27 @@ BugLife.prototype.gnat = function (a, dt, B) {
   let cx = a.hx, cy = a.hy + 0.9, cz = a.hz, r = 0.5;
   if (!lone) {
     const s = a.sw;
-    cx = s.x + Math.sin(t * 0.21 + s.seed * 9) * 0.5; cz = s.z + Math.cos(t * 0.17 + s.seed * 5) * 0.5;
-    cy = this.ground(cx, cz) + 1.5 + 0.3 * Math.sin(t * 0.13 + s.seed * 7); r = 0.28 + 0.14 * Math.sin(t * 0.3 + s.seed * 3);
-  } else if (a.t < 0) { a.t = 2 + rnd() * 4; a.tx = a.hx + (rnd() - 0.5) * 3; a.tz = a.hz + (rnd() - 0.5) * 3; a.ty = this.ground(a.tx, a.tz) + 0.4 + rnd() * 1.1; }
+    // Irregular swarm centroid — slow drift, not a perfect circle.
+    cx = s.x + Math.sin(t * 0.19 + s.seed * 9) * 0.55 + Math.sin(t * 0.07 + s.seed) * 0.2;
+    cz = s.z + Math.cos(t * 0.15 + s.seed * 5) * 0.55 + Math.cos(t * 0.11 + s.seed * 2) * 0.18;
+    cy = this.ground(cx, cz) + 1.35 + 0.35 * Math.sin(t * 0.12 + s.seed * 7) + 0.15 * env.humid;
+    r = 0.24 + 0.16 * Math.sin(t * 0.27 + s.seed * 3);
+  } else if (a.t < 0) {
+    a.t = 2 + rnd() * 4;
+    a.tx = a.hx + (rnd() - 0.5) * 3; a.tz = a.hz + (rnd() - 0.5) * 3;
+    a.ty = this.ground(a.tx, a.tz) + 0.35 + rnd() * 1.2;
+  }
   if (lone) { a.t -= dt; cx = a.tx; cy = a.ty; cz = a.tz; }
-  const k = lone ? 1.5 : 7 / r * 0.35, push = lone ? 3 : 9;
+  const k = lone ? 1.4 : 6.2 / r * 0.35, push = lone ? 2.8 : 8;
   a.vx += ((cx - a.x) * k + (rnd() - 0.5) * push) * dt;
   a.vz += ((cz - a.z) * k + (rnd() - 0.5) * push) * dt;
-  a.vy += ((cy - a.y) * k * 1.4 + Math.sin(t * (4 + a.seed * 5) + a.seed * 60) * (lone ? 1.5 : 7)) * dt;
-  const e = Math.exp(-dt * 2.5);
+  a.vy += ((cy - a.y) * k * 1.35 + Math.sin(t * (3.6 + a.seed * 5) + a.seed * 60) * (lone ? 1.4 : 6.5)) * dt;
+  const e = Math.exp(-dt * 2.3);
   a.vx *= e; a.vy *= e; a.vz *= e;
   a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt;
-  this.blow(a, lone ? 0.1 : 0.05, dt);
-  a.yaw += angTo(a.yaw, Math.atan2(a.vz, a.vx)) * Math.min(1, dt * 8);
-  a.pitch = 0.2; a.ph = rnd() * 6.28; a.amp = 0.8; a.wing = 0.1; a.sweep = 0.3;
+  this.blow(a, lone ? 0.11 : 0.055, dt);
+  a.yaw += angTo(a.yaw, Math.atan2(a.vz, a.vx)) * Math.min(1, dt * 7);
+  a.pitch = 0.18; a.ph += dt * (lone ? 160 : 200); a.amp = 0.75; a.wing = 0.1; a.sweep = 0.28;
 };
 BugLife.prototype.mosquito = BugLife.prototype.gnat;
 // Beetle: walk, stop, turn, walk. It keeps off steep ground and out of the water.
@@ -590,21 +633,33 @@ BugLife.prototype.firefly = function (a, dt) {
   a.t -= dt; a.fl -= dt;
   if (a.st === 0) {
     a.k -= dt;
-    if (a.k < 0) { a.k = 2 + rnd() * 4; a.tx = a.hx + (rnd() - 0.5) * 7; a.tz = a.hz + (rnd() - 0.5) * 7; a.ty = this.ground(a.tx, a.tz) + 0.4 + rnd() * 1.7; }
-    this.fly(a, a.tx, a.ty, a.tz, 0.5, 1.2, dt);
-    this.blow(a, 0.06, dt);
-    a.amp = 0.7; a.ph = rnd() * 6.28; a.wing = 0.2; a.sweep = 0.3; a.pitch = 0.5;
+    if (a.k < 0) {
+      a.k = 1.8 + rnd() * 5;
+      a.tx = a.hx + (rnd() - 0.5) * 8; a.tz = a.hz + (rnd() - 0.5) * 8;
+      a.ty = this.ground(a.tx, a.tz) + 0.35 + rnd() * 2.0;
+    }
+    this.fly(a, a.tx, a.ty, a.tz, 0.45 + a.seed * 0.2, 1.0, dt);
+    this.blow(a, 0.07, dt);
+    a.amp = 0.65; a.ph += dt * 40; a.wing = 0.18; a.sweep = 0.28; a.pitch = 0.45;
     if (a.t < 0) {
-      a.t = a.per * (0.85 + 0.3 * rnd()); a.fl = 0.45; a.vy += 0.5;
-      for (let i = this.first[9]; i < this.first[10]; i++) { const o = this.agents[i]; if (o.on && o.st === 1 && o.t > 5 && rnd() < 0.5 && Math.hypot(o.x - a.x, o.z - a.z) < 6) o.t = 1.7 + rnd() * 0.5; }
+      // Irregular blink interval — not a metronome.
+      a.t = a.per * (0.7 + 0.7 * rnd()); a.fl = 0.35 + rnd() * 0.25; a.vy += 0.35 + rnd() * 0.35;
+      for (let i = this.first[9]; i < this.first[10]; i++) {
+        const o = this.agents[i];
+        if (o.on && o.st === 1 && o.t > 5 && rnd() < 0.45 && Math.hypot(o.x - a.x, o.z - a.z) < 7) o.t = 1.5 + rnd() * 0.8;
+      }
     }
   } else {
     a.amp = 0; a.sweep = 1.2; a.wing = 0.1; a.pitch = 0;
-    if (a.t < 0) { a.t = 1e9; a.fl = 0.5; }
+    if (a.t < 0) { a.t = 1e9; a.fl = 0.4 + rnd() * 0.2; }
   }
-  if (a.pin) a.fl = 0.25;
-  const x = 0.45 - a.fl;
-  a.glow = a.fl > 0 ? Math.min(1, x / 0.06) * Math.min(1, a.fl / 0.22) : 0;
+  if (a.pin) a.fl = 0.22;
+  // Soft envelope: slow rise, soft fall — not a hard LED pulse.
+  if (a.fl > 0) {
+    const rise = Math.min(1, (0.4 - a.fl) / 0.1);
+    const fall = Math.min(1, a.fl / 0.28);
+    a.glow = Math.max(0, rise * fall);
+  } else a.glow = 0;
 };
 // Pick levels of detail, cull, and write the instances grouped by mesh.
 BugLife.prototype.collect = function (out, vp, ex, ey, ez, pxw, ranges) {
@@ -746,13 +801,14 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
   var col = in.col * light;
   var a = in.glow.y;
   if (k == 5) {
-    // The lantern's glow: cold yellow-green, and only while it is lit.
+    // Soft warm pulse — a living lantern, not an LED. Fades with distance via alpha.
     let r = length(in.uv);
-    let ha = exp(-r * r * 4.0) * in.glow.x * 0.6 * sat(1.0 - r);
-    if (ha < 0.01) { discard; }
-    return vec4<f32>(tonemap(vec3<f32>(0.5, 0.95, 0.1) * (0.25 + 1.3 * exp(-r * r * 12.0)) / max(F.exposure, 1.0)), ha);
+    let ha = exp(-r * r * 3.2) * in.glow.x * 0.45 * sat(1.0 - r);
+    if (ha < 0.008) { discard; }
+    let warm = vec3<f32>(0.72, 0.95, 0.22) * (0.18 + 0.85 * exp(-r * r * 9.0));
+    return vec4<f32>(tonemap(warm / max(F.exposure, 1.0)), ha);
   } else if (k == 4) {
-    col += vec3<f32>(0.62, 1.0, 0.2) * in.glow.x * 9.0 / max(F.exposure, 1.0);
+    col += vec3<f32>(0.7, 0.95, 0.28) * in.glow.x * 5.5 / max(F.exposure, 1.0);
   } else if (k == 2) {
     // A clear wing: a film stretched on dark veins, with a thickened cell near the tip. The
     // film itself is nearly invisible until it catches the sun or the sky.
