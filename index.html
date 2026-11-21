@@ -1564,7 +1564,9 @@ return F.sunCol * (D * G * fres * ndl) / (4.0 * ndv);
 fn capillary(xz: vec2<f32>, dist: f32) -> vec2<f32> {
 let pix = max(dist * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.012);
 let chop = mix(0.22, 1.0, sat(F.ctrl.x)) * clamp(windAt(xz) / 4.5, 0.3, 2.2);
-let wind = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+let place = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+let trade = normalize(F.wind.xy + vec2<f32>(1e-5, 0.0));
+let wind = normalize(mix(place, trade, 0.55));
 var slope = vec2<f32>(0.0);
 let bands = array<vec3<f32>, 4>(
 vec3<f32>(3.1, 0.045, 0.85),
@@ -1941,12 +1943,13 @@ let sh = shoreFetch(home);
 if (sh.inside > 0.5) { force = max(force, sat(sh.foam * 1.3) * smoothstep(0.4, 1.6, length(sh.vel))); top = max(top, sh.eta); }
 }
 let life = fract(F.time * (0.48 + 0.35 * hh.x) + hh.y * 9.0);
-let blow = clamp(F.wind.z / 5.0, 0.3, 2.6);
+let local = windAt(home);
+let blow = clamp(local / 5.0, 0.25, 2.8);
 let humid = sat(F.wx.w);
 let gold = sat(F.day.w);
 let rise = (0.12 + 0.9 * pow(life, 0.5) * (0.7 + 0.5 * hh.y)) * (0.55 + 0.45 * blow) - 0.85 * life * life;
 let w = vec3<f32>(home.x, max(top, 0.0) + rise, home.y)
-+ vec3<f32>(F.wind.x, 0.0, F.wind.y) * F.wind.z * 0.5 * life * 1.7
++ vec3<f32>(F.wind.x, 0.0, F.wind.y) * local * 0.55 * life * 1.6
 + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * 0.04, 0.0);
 let rad = (0.22 + 0.95 * life) * (0.65 + 0.7 * hh.x) * (0.85 + 0.25 * humid);
 pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.015, force);
@@ -2943,7 +2946,7 @@ let ping = 0;
 function writeWaves(time, dt) {
 u[8] = time;
 u[9] = dt;
-u[10] = wp.amp;
+u[10] = wp.amp * (typeof env !== 'undefined' ? env.sea : 1);
 u[11] = wp.spd;
 u[12] = wp.dir;
 u[14] = Math.max(wp.frq, 0.2);
@@ -4460,7 +4463,7 @@ const env = {
 hour: ENV_H0, rate: 1 / 240, run: true, goal: null,
 wx: 'clear', auto: true, hold: 200,
 v: WEATHER.clear.slice(1), wet: 0, sea: 1,
-ang: 0.36, wx0: 1, wz0: 0, speed: 4.5, cloud: [0, 0], gustOff: [0, 0],
+ang: 0.36, angGoal: 0.36, wx0: 1, wz0: 0, speed: 4.5, gust: 0.35, cloud: [0, 0], gustOff: [0, 0],
 sun: [0, 1, 0], moon: [0, -1, 0], key: [0, 1, 0], keyCol: [1, 1, 1], amb: [0.34, 0.48, 0.7], disc: [1, 1, 1],
 gnd: 1, expo: 0.92, expoSmooth: null, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0,
 day: [1, 1, 1], gold: 0, airMass: 1
@@ -4559,10 +4562,18 @@ env.dew = 0.4 * dawn;
 env.mist = Math.max(v[2], 0.6 * dawn) * (1 - 0.75 * heat) * (1 - smooth01(4, 9, v[4]) * 0.8);
 env.humid = Math.min(1, v[3] + 0.3 * dawn + 0.15 * smooth01(0, -0.2, sy0));
 env.haze = Math.min(1, placeHaze + Math.max(0, env.humid - 0.25) * 0.9);
-env.ang = seaDir + 0.36 + 0.3 * Math.sin(time * 0.013) + 0.15 * Math.sin(time * 0.031 + 1);
+const angGoal = seaDir + 0.36 + 0.3 * Math.sin(time * 0.013) + 0.15 * Math.sin(time * 0.031 + 1);
+env.angGoal = angGoal;
+let dAng = angGoal - env.ang;
+while (dAng > Math.PI) dAng -= Math.PI * 2;
+while (dAng < -Math.PI) dAng += Math.PI * 2;
+env.ang += dAng * (1 - Math.exp(-dt / 8));
 env.wx0 = Math.cos(env.ang); env.wz0 = Math.sin(env.ang);
-env.speed = v[4] * (0.6 + 0.4 * Math.min(seaAmp, 1.5));
-env.sea = 0.75 + 0.25 * v[4] / 4.5;
+const nightCalm = 1 - 0.35 * smooth01(0.08, -0.1, sy0);
+const wxBoost = 0.55 + 0.45 * Math.min(seaAmp, 1.5) + 0.15 * v[1] + 0.1 * v[5];
+env.speed += (v[4] * wxBoost * nightCalm - env.speed) * (1 - Math.exp(-dt / 3.5));
+env.gust += (v[5] - env.gust) * (1 - Math.exp(-dt / 4));
+env.sea = 0.72 + 0.28 * (env.speed / 4.5);
 env.cloud[0] += env.wx0 * env.speed * 1.9e-3 * dt; env.cloud[1] += env.wz0 * env.speed * 1.9e-3 * dt;
 env.cloud[0] = ((env.cloud[0] % 48) + 48) % 48;
 env.cloud[1] = ((env.cloud[1] % 48) + 48) % 48;
@@ -4575,7 +4586,11 @@ env.expoSmooth += (target - env.expoSmooth) * (1 - Math.exp(-Math.max(dt, 1e-3) 
 env.expo = env.expoSmooth;
 }
 function envWindAt(x, z) {
-return env.speed * (0.4 + 1.4 * vnoise((x - env.gustOff[0]) * 0.018, (z - env.gustOff[1]) * 0.018) * env.v[5]);
+const px = x - env.gustOff[0], pz = z - env.gustOff[1];
+const g0 = vnoise(px * 0.018, pz * 0.018);
+const g1 = vnoise(px * 0.07 + 7, pz * 0.07 + 3);
+const g = g0 * 0.6 + g1 * 0.4;
+return env.speed * (1 + (g * g * 2.6 - 0.7) * env.gust);
 }
 function envLabel() {
 const h = env.goal != null ? env.goal : env.hour;
@@ -4601,7 +4616,7 @@ arr[56] = env.keyCol[0] * sunK; arr[57] = env.keyCol[1] * sunK; arr[58] = env.ke
 arr[o] = env.amb[0]; arr[o + 1] = env.amb[1]; arr[o + 2] = env.amb[2]; arr[o + 3] = env.gnd;
 rot(env.sun, o + 4, env.night);
 rot(env.moon, o + 8, env.night * env.moonUp);
-arr[o + 12] = env.wx0; arr[o + 13] = env.wz0; arr[o + 14] = env.speed; arr[o + 15] = env.v[5];
+arr[o + 12] = env.wx0; arr[o + 13] = env.wz0; arr[o + 14] = env.speed; arr[o + 15] = env.gust;
 arr[o + 16] = env.cloud[0]; arr[o + 17] = env.cloud[1]; arr[o + 18] = env.gustOff[0]; arr[o + 19] = env.gustOff[1];
 arr[o + 20] = env.v[1]; arr[o + 21] = Math.max(env.wet, env.dew); arr[o + 22] = env.mist; arr[o + 23] = env.humid;
 arr[o + 24] = env.disc[0] * sunK; arr[o + 25] = env.disc[1] * sunK; arr[o + 26] = env.disc[2] * sunK; arr[o + 27] = env.airMass;
@@ -4930,9 +4945,16 @@ a.pitch = Math.atan2(a.vy, h + 0.45) * 0.55;
 return d;
 };
 BugLife.prototype.blow = function (a, k, dt) {
-const g = envWindAt(a.x, a.z) * k * dt;
-a.x += env.wx0 * g; a.z += env.wz0 * g;
-a.y += Math.sin(this.time * 2.1 + a.seed * 17) * g * 0.08;
+const speed = envWindAt(a.x, a.z);
+const base = env.speed * 0.35;
+const gust = Math.max(0, speed - base);
+const push = (gust * 0.85 + speed * 0.15) * k * dt;
+a.x += env.wx0 * push; a.z += env.wz0 * push;
+a.y += Math.sin(this.time * 2.1 + a.seed * 17) * push * 0.1;
+if (a.st === 0 && k < 0.06) {
+a.vx -= env.wx0 * gust * 0.15 * dt;
+a.vz -= env.wz0 * gust * 0.15 * dt;
+}
 };
 BugLife.prototype.newHome = function (a, cx, cz) {
 const B = BUGS[a.sp], S = this.sites[B.site], rnd = this.rnd;
@@ -6674,6 +6696,22 @@ const surf = bed('lowpass', 480, 0.55);
 const hiss = bed('highpass', 2200, 0.45);
 const wind = bed('bandpass', 260, 0.35);
 const insects = bed('highpass', 3400, 0.7);
+function windBed(type, freq, q) {
+const src = ac.createBufferSource();
+src.buffer = buf; src.loop = true;
+const f = ac.createBiquadFilter();
+f.type = type; f.frequency.value = freq; f.Q.value = q;
+const g = ac.createGain(); g.gain.value = 0;
+const p = ac.createStereoPanner(); p.pan.value = 0;
+src.connect(f); f.connect(g); g.connect(p); p.connect(master);
+src.start(0, Math.random() * 20);
+return { gain: g, filter: f, pan: p };
+}
+const airFar = windBed('lowpass', 180, 0.4);
+const airCoast = windBed('bandpass', 520, 0.55);
+const airPalm = windBed('bandpass', 1400, 0.7);
+const airCanopy = windBed('bandpass', 900, 0.5);
+const airGrass = windBed('highpass', 3200, 0.45);
 const lfo = ac.createOscillator();
 lfo.frequency.value = 0.047;
 const lfoG = ac.createGain(); lfoG.gain.value = 160;
@@ -6682,10 +6720,19 @@ const lfo2 = ac.createOscillator();
 lfo2.frequency.value = 0.013;
 const lfo2G = ac.createGain(); lfo2G.gain.value = 90;
 lfo2.connect(lfo2G); lfo2G.connect(wind.filter.frequency); lfo2.start();
+const panLfo = ac.createOscillator(); panLfo.frequency.value = 0.021;
+const panAmt = ac.createGain(); panAmt.gain.value = 0.4;
+panLfo.connect(panAmt); panAmt.connect(airCoast.pan.pan); panLfo.start();
+const panLfo2 = ac.createOscillator(); panLfo2.frequency.value = 0.017;
+const panAmt2 = ac.createGain(); panAmt2.gain.value = 0.28;
+panLfo2.connect(panAmt2); panAmt2.connect(airPalm.pan.pan); panLfo2.start();
 const api = {
 ac: ac, master: master, under: under,
 surf: surf.gain, hiss: hiss.gain, wind: wind.gain, insects: insects.gain,
-shoreAmt: 0.4, alive: true, hush: 1, birds: 1
+airFar: airFar.gain, airCoast: airCoast.gain, airPalm: airPalm.gain,
+airCanopy: airCanopy.gain, airGrass: airGrass.gain,
+airCoastF: airCoast.filter, airPalmF: airPalm.filter, airCanopyF: airCanopy.filter,
+shoreAmt: 0.4, alive: true, hush: 1, birds: 1, _gustPeak: 0
 };
 const rasp = (band, q, beatHz, depth, to) => {
 const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
@@ -6739,18 +6786,35 @@ let wetness = 0, woods = 0;
 api.air = (s) => {
 const m = muted ? 0 : 1, dry = 1 - Math.min(1, s.rain * 3), up = Math.exp(-Math.max(s.alt, 0) * 0.04) * (s.under ? 0 : 1);
 const near = (d, r) => (d == null ? 0 : Math.pow(Math.max(0, 1 - d / r), 2));
-const ease = (p, v) => { p.value += (v - p.value) * 0.15; };
-cicadas.gain.value = m * 0.05 * s.heat * dry * (0.25 + 0.75 * s.wood) * up * api.hush;
-crickets.gain.value = m * 0.045 * s.dark * dry * (0.4 + 0.6 * s.wood) * up;
+const ease = (p, v) => { p.value += (v - p.value) * 0.12; };
+const g2 = Math.min(3, (s.gust * s.gust) / 25);
+const breeze = Math.min(1, s.gust / 6);
+const blow = Math.min(1, s.gust / 11);
+cicadas.gain.value = m * 0.05 * s.heat * dry * (0.25 + 0.75 * s.wood) * up * api.hush * (1 - 0.4 * blow);
+crickets.gain.value = m * 0.045 * s.dark * dry * (0.4 + 0.6 * s.wood) * up * (1 - 0.5 * blow);
 chorus.gain.value = m * 0.03 * Math.max(s.dark, s.low * 0.5) * dry * up;
 rain.gain.value = m * 0.1 * s.rain * (s.under ? 0.15 : 1);
 patter.gain.value = m * 0.09 * s.rain * s.rain * (s.under ? 0.3 : 1);
-rustle.gain.value = m * 0.03 * Math.min(2, s.gust * s.gust / 30) * (0.3 + 0.7 * s.wood) * up;
+rustle.gain.value = m * 0.028 * g2 * (0.25 + 0.75 * s.wood) * up;
+ease(airFar.gain, m * 0.035 * (0.2 + 0.8 * breeze) * up);
+ease(airCoast.gain, m * 0.055 * blow * (0.35 + 0.65 * (s.shore || 0)) * up);
+ease(airPalm.gain, m * 0.04 * g2 * (0.2 + 0.8 * (s.palm || 0)) * up);
+ease(airCanopy.gain, m * 0.045 * g2 * (0.15 + 0.85 * s.wood) * up);
+ease(airGrass.gain, m * 0.022 * breeze * (1 - 0.6 * s.wood) * (1 - (s.shore || 0) * 0.3) * up);
+if (s.gust > api._gustPeak + 1.8 && s.gust > 7) {
+api._gustPeak = s.gust;
+const t = ac.currentTime;
+airCoastF.frequency.cancelScheduledValues(t);
+airCoastF.frequency.setValueAtTime(airCoastF.frequency.value, t);
+airCoastF.frequency.exponentialRampToValueAtTime(900, t + 0.15);
+airCoastF.frequency.exponentialRampToValueAtTime(520, t + 1.4);
+}
+api._gustPeak += (s.gust - api._gustPeak) * 0.04;
 ease(bee.g, m * 0.05 * near(s.heard.bee, 1.2)); bee.f.value = 205 + 18 * Math.sin(ac.currentTime * 11);
 ease(mosq.g, m * 0.02 * near(s.heard.mosquito, 1));
 ease(dfly, m * 0.07 * near(s.heard.dragonfly, 1.2));
 api.hush += (1 - api.hush) * 0.004;
-api.birds = (1 - s.dark) * dry * (0.5 + s.dawn);
+api.birds = (1 - s.dark) * dry * (0.5 + s.dawn) * (1 - 0.35 * blow);
 wetness = s.rain; woods = s.wood;
 };
 const drip = () => {
@@ -7686,7 +7750,8 @@ arr[68] = up[0]; arr[69] = up[1]; arr[70] = up[2]; arr[71] = clipBelow;
 arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;
 arr[79] = q.clouds;
 arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0;
-arr[128] = wp.amp * env.sea; arr[129] = wp.spd; arr[130] = wp.frq; arr[131] = wp.dir;
+arr[128] = wp.amp * env.sea; arr[129] = wp.spd; arr[130] = wp.frq;
+arr[131] = lerpAng(wp.dir, env.ang, 0.35);
 arr[132] = wp.rough; arr[133] = wp.refl; arr[134] = wp.refr; arr[135] = wp.alpha;
 arr[136] = wp.sun; arr[137] = wp.sky; arr[138] = wp.layers; arr[139] = wp.paused;
 arr[140] = wp.deep[0]; arr[141] = wp.deep[1]; arr[142] = wp.deep[2]; arr[143] = wp.depthK;
@@ -8148,12 +8213,14 @@ audio.surf.gain.value = (muted ? 0 : 0.16) * shore * (under ? 0.25 : 1);
 audio.hiss.gain.value = (muted ? 0 : 0.045) * nearBreak * (under ? 0.1 : 1);
 const gust = envWindAt(camX, camZ);
 const sy = env.sun[1], dark = smooth01(0.1, -0.08, sy);
-audio.wind.gain.value = (muted ? 0 : 0.05) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.3 : 0.8) * (0.35 + 0.65 * gust * gust / 20);
-audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2));
+const wood = land > 1.2 ? Math.max(0, Math.min(1, forestMask(camX, camZ, land, fieldSlope(world, camX, camZ)) * 1.5)) : 0;
+const palmZone = Math.max(0, Math.min(1, (1.2 - Math.abs(land - 1.4)) / 1.2)) * (1 - wood * 0.5);
+audio.wind.gain.value = (muted ? 0 : 0.04) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.2 : 0.85) * (0.3 + 0.7 * gust * gust / 22);
+audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2)) * (1 - 0.35 * Math.min(1, gust / 10));
 audio.air({
 heat: smooth01(0.15, 0.6, sy) * (1 - 0.7 * env.cover), dark: dark, low: smooth01(0.4, 0.1, sy) * (1 - dark),
 dawn: smooth01(5, 6, env.hour) * (1 - smooth01(7.5, 9, env.hour)), rain: env.v[1], gust: gust,
-wood: land > 1.2 ? Math.max(0, Math.min(1, forestMask(camX, camZ, land, fieldSlope(world, camX, camZ)) * 1.5)) : 0,
+wood: wood, shore: nearBreak, palm: palmZone,
 alt: camY - Math.max(land, 0) - 1.7, under: under, heard: bugLife.heard
 });
 audio.under.frequency.value = under ? 380 : 16000;

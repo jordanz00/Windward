@@ -26,7 +26,7 @@ const env = {
   hour: ENV_H0, rate: 1 / 240, run: true, goal: null,
   wx: 'clear', auto: true, hold: 200,
   v: WEATHER.clear.slice(1), wet: 0, sea: 1,
-  ang: 0.36, wx0: 1, wz0: 0, speed: 4.5, cloud: [0, 0], gustOff: [0, 0],
+  ang: 0.36, angGoal: 0.36, wx0: 1, wz0: 0, speed: 4.5, gust: 0.35, cloud: [0, 0], gustOff: [0, 0],
   sun: [0, 1, 0], moon: [0, -1, 0], key: [0, 1, 0], keyCol: [1, 1, 1], amb: [0.34, 0.48, 0.7], disc: [1, 1, 1],
   gnd: 1, expo: 0.92, expoSmooth: null, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0,
   day: [1, 1, 1], gold: 0, airMass: 1
@@ -141,11 +141,20 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   env.mist = Math.max(v[2], 0.6 * dawn) * (1 - 0.75 * heat) * (1 - smooth01(4, 9, v[4]) * 0.8);
   env.humid = Math.min(1, v[3] + 0.3 * dawn + 0.15 * smooth01(0, -0.2, sy0));
   env.haze = Math.min(1, placeHaze + Math.max(0, env.humid - 0.25) * 0.9);
-  // The wind blows the way the sea runs, backing and veering a little as it goes.
-  env.ang = seaDir + 0.36 + 0.3 * Math.sin(time * 0.013) + 0.15 * Math.sin(time * 0.031 + 1);
+  // Trade wind follows the sea, with slow backing/veering — never snaps between frames.
+  const angGoal = seaDir + 0.36 + 0.3 * Math.sin(time * 0.013) + 0.15 * Math.sin(time * 0.031 + 1);
+  env.angGoal = angGoal;
+  let dAng = angGoal - env.ang;
+  while (dAng > Math.PI) dAng -= Math.PI * 2;
+  while (dAng < -Math.PI) dAng += Math.PI * 2;
+  env.ang += dAng * (1 - Math.exp(-dt / 8));
   env.wx0 = Math.cos(env.ang); env.wz0 = Math.sin(env.ang);
-  env.speed = v[4] * (0.6 + 0.4 * Math.min(seaAmp, 1.5));
-  env.sea = 0.75 + 0.25 * v[4] / 4.5;
+  // Night and still weather ease the trades; showers and gusts lift them.
+  const nightCalm = 1 - 0.35 * smooth01(0.08, -0.1, sy0);
+  const wxBoost = 0.55 + 0.45 * Math.min(seaAmp, 1.5) + 0.15 * v[1] + 0.1 * v[5];
+  env.speed += (v[4] * wxBoost * nightCalm - env.speed) * (1 - Math.exp(-dt / 3.5));
+  env.gust += (v[5] - env.gust) * (1 - Math.exp(-dt / 4));
+  env.sea = 0.72 + 0.28 * (env.speed / 4.5);
   // Cloud rides faster air than the ground feels. Gust cells travel slower than the wind in them.
   env.cloud[0] += env.wx0 * env.speed * 1.9e-3 * dt; env.cloud[1] += env.wz0 * env.speed * 1.9e-3 * dt;
   // Wrap so cloud noise stays in a stable coordinate domain overnight and across long sessions.
@@ -160,10 +169,14 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   env.expoSmooth += (target - env.expoSmooth) * (1 - Math.exp(-Math.max(dt, 1e-3) / tauE));
   env.expo = env.expoSmooth;
 }
-// The wind at a place in m/s, gusts and all: the same travelling cells the shader bends the
-// plants by. Insects are carried by it, birds drift on it, and the sound of it is this number.
+// The wind at a place in m/s. Matches the GPU windAt gust cells so plants, insects, spray
+// and audio all feel the same travelling weather.
 function envWindAt(x, z) {
-  return env.speed * (0.4 + 1.4 * vnoise((x - env.gustOff[0]) * 0.018, (z - env.gustOff[1]) * 0.018) * env.v[5]);
+  const px = x - env.gustOff[0], pz = z - env.gustOff[1];
+  const g0 = vnoise(px * 0.018, pz * 0.018);
+  const g1 = vnoise(px * 0.07 + 7, pz * 0.07 + 3);
+  const g = g0 * 0.6 + g1 * 0.4;
+  return env.speed * (1 + (g * g * 2.6 - 0.7) * env.gust);
 }
 function envLabel() {
   const h = env.goal != null ? env.goal : env.hour;
@@ -191,7 +204,7 @@ function envWrite(arr, o, sunAng, sunK) {
   arr[o] = env.amb[0]; arr[o + 1] = env.amb[1]; arr[o + 2] = env.amb[2]; arr[o + 3] = env.gnd;
   rot(env.sun, o + 4, env.night);
   rot(env.moon, o + 8, env.night * env.moonUp);
-  arr[o + 12] = env.wx0; arr[o + 13] = env.wz0; arr[o + 14] = env.speed; arr[o + 15] = env.v[5];
+  arr[o + 12] = env.wx0; arr[o + 13] = env.wz0; arr[o + 14] = env.speed; arr[o + 15] = env.gust;
   arr[o + 16] = env.cloud[0]; arr[o + 17] = env.cloud[1]; arr[o + 18] = env.gustOff[0]; arr[o + 19] = env.gustOff[1];
   arr[o + 20] = env.v[1]; arr[o + 21] = Math.max(env.wet, env.dew); arr[o + 22] = env.mist; arr[o + 23] = env.humid;
   arr[o + 24] = env.disc[0] * sunK; arr[o + 25] = env.disc[1] * sunK; arr[o + 26] = env.disc[2] * sunK; arr[o + 27] = env.airMass;

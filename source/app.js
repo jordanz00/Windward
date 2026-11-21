@@ -1401,6 +1401,23 @@ function makeAudio() {
   const hiss = bed('highpass', 2200, 0.45);
   const wind = bed('bandpass', 260, 0.35);
   const insects = bed('highpass', 3400, 0.7);
+  // Layered wind ambience — same shared gust as plants/ocean, filtered noise only.
+  function windBed(type, freq, q) {
+    const src = ac.createBufferSource();
+    src.buffer = buf; src.loop = true;
+    const f = ac.createBiquadFilter();
+    f.type = type; f.frequency.value = freq; f.Q.value = q;
+    const g = ac.createGain(); g.gain.value = 0;
+    const p = ac.createStereoPanner(); p.pan.value = 0;
+    src.connect(f); f.connect(g); g.connect(p); p.connect(master);
+    src.start(0, Math.random() * 20);
+    return { gain: g, filter: f, pan: p };
+  }
+  const airFar = windBed('lowpass', 180, 0.4);
+  const airCoast = windBed('bandpass', 520, 0.55);
+  const airPalm = windBed('bandpass', 1400, 0.7);
+  const airCanopy = windBed('bandpass', 900, 0.5);
+  const airGrass = windBed('highpass', 3200, 0.45);
   const lfo = ac.createOscillator();
   lfo.frequency.value = 0.047;
   const lfoG = ac.createGain(); lfoG.gain.value = 160;
@@ -1409,10 +1426,19 @@ function makeAudio() {
   lfo2.frequency.value = 0.013;
   const lfo2G = ac.createGain(); lfo2G.gain.value = 90;
   lfo2.connect(lfo2G); lfo2G.connect(wind.filter.frequency); lfo2.start();
+  const panLfo = ac.createOscillator(); panLfo.frequency.value = 0.021;
+  const panAmt = ac.createGain(); panAmt.gain.value = 0.4;
+  panLfo.connect(panAmt); panAmt.connect(airCoast.pan.pan); panLfo.start();
+  const panLfo2 = ac.createOscillator(); panLfo2.frequency.value = 0.017;
+  const panAmt2 = ac.createGain(); panAmt2.gain.value = 0.28;
+  panLfo2.connect(panAmt2); panAmt2.connect(airPalm.pan.pan); panLfo2.start();
   const api = {
     ac: ac, master: master, under: under,
     surf: surf.gain, hiss: hiss.gain, wind: wind.gain, insects: insects.gain,
-    shoreAmt: 0.4, alive: true, hush: 1, birds: 1
+    airFar: airFar.gain, airCoast: airCoast.gain, airPalm: airPalm.gain,
+    airCanopy: airCanopy.gain, airGrass: airGrass.gain,
+    airCoastF: airCoast.filter, airPalmF: airPalm.filter, airCanopyF: airCanopy.filter,
+    shoreAmt: 0.4, alive: true, hush: 1, birds: 1, _gustPeak: 0
   };
   // ---- What lives in the air, by ear. Nothing here is a loop: each singer keeps its own
   // time, and how many are singing follows the hour, the rain, the wind and the trees.
@@ -1472,23 +1498,42 @@ function makeAudio() {
   // Wings close to the ear: a bee's drone, a mosquito's whine, the dry rattle of a dragonfly.
   const bee = hum('sawtooth', 210), mosq = hum('triangle', 590), dfly = rasp(700, 1.2, 33, 0.9, master);
   let wetness = 0, woods = 0;
-  // s: heat, dark, low (sun), dawn, rain, gust in m/s, wood 0..1, alt, under, heard.
+  // s: heat, dark, low, dawn, rain, gust m/s, wood, shore, palm, alt, under, heard.
   api.air = (s) => {
     const m = muted ? 0 : 1, dry = 1 - Math.min(1, s.rain * 3), up = Math.exp(-Math.max(s.alt, 0) * 0.04) * (s.under ? 0 : 1);
     const near = (d, r) => (d == null ? 0 : Math.pow(Math.max(0, 1 - d / r), 2));
-    const ease = (p, v) => { p.value += (v - p.value) * 0.15; };
-    cicadas.gain.value = m * 0.05 * s.heat * dry * (0.25 + 0.75 * s.wood) * up * api.hush;
-    crickets.gain.value = m * 0.045 * s.dark * dry * (0.4 + 0.6 * s.wood) * up;
+    const ease = (p, v) => { p.value += (v - p.value) * 0.12; };
+    const g2 = Math.min(3, (s.gust * s.gust) / 25);
+    const breeze = Math.min(1, s.gust / 6);
+    const blow = Math.min(1, s.gust / 11);
+    cicadas.gain.value = m * 0.05 * s.heat * dry * (0.25 + 0.75 * s.wood) * up * api.hush * (1 - 0.4 * blow);
+    crickets.gain.value = m * 0.045 * s.dark * dry * (0.4 + 0.6 * s.wood) * up * (1 - 0.5 * blow);
     chorus.gain.value = m * 0.03 * Math.max(s.dark, s.low * 0.5) * dry * up;
     rain.gain.value = m * 0.1 * s.rain * (s.under ? 0.15 : 1);
     patter.gain.value = m * 0.09 * s.rain * s.rain * (s.under ? 0.3 : 1);
-    rustle.gain.value = m * 0.03 * Math.min(2, s.gust * s.gust / 30) * (0.3 + 0.7 * s.wood) * up;
+    rustle.gain.value = m * 0.028 * g2 * (0.25 + 0.75 * s.wood) * up;
+    // Shared-wind ambience layers.
+    ease(airFar.gain, m * 0.035 * (0.2 + 0.8 * breeze) * up);
+    ease(airCoast.gain, m * 0.055 * blow * (0.35 + 0.65 * (s.shore || 0)) * up);
+    ease(airPalm.gain, m * 0.04 * g2 * (0.2 + 0.8 * (s.palm || 0)) * up);
+    ease(airCanopy.gain, m * 0.045 * g2 * (0.15 + 0.85 * s.wood) * up);
+    ease(airGrass.gain, m * 0.022 * breeze * (1 - 0.6 * s.wood) * (1 - (s.shore || 0) * 0.3) * up);
+    // Gust whoosh: open filters briefly when a strong cell arrives.
+    if (s.gust > api._gustPeak + 1.8 && s.gust > 7) {
+      api._gustPeak = s.gust;
+      const t = ac.currentTime;
+      airCoastF.frequency.cancelScheduledValues(t);
+      airCoastF.frequency.setValueAtTime(airCoastF.frequency.value, t);
+      airCoastF.frequency.exponentialRampToValueAtTime(900, t + 0.15);
+      airCoastF.frequency.exponentialRampToValueAtTime(520, t + 1.4);
+    }
+    api._gustPeak += (s.gust - api._gustPeak) * 0.04;
     ease(bee.g, m * 0.05 * near(s.heard.bee, 1.2)); bee.f.value = 205 + 18 * Math.sin(ac.currentTime * 11);
     ease(mosq.g, m * 0.02 * near(s.heard.mosquito, 1));
     ease(dfly, m * 0.07 * near(s.heard.dragonfly, 1.2));
     // Cicadas go quiet when a bird calls close by, and take a while to start again.
     api.hush += (1 - api.hush) * 0.004;
-    api.birds = (1 - s.dark) * dry * (0.5 + s.dawn);
+    api.birds = (1 - s.dark) * dry * (0.5 + s.dawn) * (1 - 0.35 * blow);
     wetness = s.rain; woods = s.wood;
   };
   // Single drops off the leaves, heard one at a time under trees in light rain.
@@ -2517,7 +2562,9 @@ async function main() {
       arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;
       arr[79] = q.clouds;
       arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0;
-      arr[128] = wp.amp * env.sea; arr[129] = wp.spd; arr[130] = wp.frq; arr[131] = wp.dir;
+      // Gerstner + capillary heading: place swell blended toward the shared trades.
+      arr[128] = wp.amp * env.sea; arr[129] = wp.spd; arr[130] = wp.frq;
+      arr[131] = lerpAng(wp.dir, env.ang, 0.35);
       arr[132] = wp.rough; arr[133] = wp.refl; arr[134] = wp.refr; arr[135] = wp.alpha;
       arr[136] = wp.sun; arr[137] = wp.sky; arr[138] = wp.layers; arr[139] = wp.paused;
       arr[140] = wp.deep[0]; arr[141] = wp.deep[1]; arr[142] = wp.deep[2]; arr[143] = wp.depthK;
@@ -3026,15 +3073,17 @@ async function main() {
         audio.shoreAmt = nearBreak;
         audio.surf.gain.value = (muted ? 0 : 0.16) * shore * (under ? 0.25 : 1);
         audio.hiss.gain.value = (muted ? 0 : 0.045) * nearBreak * (under ? 0.1 : 1);
-        // The same gust that is bending the plants here, by ear.
+        // Same travelling gust cells that bend plants and chop the bay.
         const gust = envWindAt(camX, camZ);
         const sy = env.sun[1], dark = smooth01(0.1, -0.08, sy);
-        audio.wind.gain.value = (muted ? 0 : 0.05) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.3 : 0.8) * (0.35 + 0.65 * gust * gust / 20);
-        audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2));
+        const wood = land > 1.2 ? Math.max(0, Math.min(1, forestMask(camX, camZ, land, fieldSlope(world, camX, camZ)) * 1.5)) : 0;
+        const palmZone = Math.max(0, Math.min(1, (1.2 - Math.abs(land - 1.4)) / 1.2)) * (1 - wood * 0.5);
+        audio.wind.gain.value = (muted ? 0 : 0.04) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.2 : 0.85) * (0.3 + 0.7 * gust * gust / 22);
+        audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2)) * (1 - 0.35 * Math.min(1, gust / 10));
         audio.air({
           heat: smooth01(0.15, 0.6, sy) * (1 - 0.7 * env.cover), dark: dark, low: smooth01(0.4, 0.1, sy) * (1 - dark),
           dawn: smooth01(5, 6, env.hour) * (1 - smooth01(7.5, 9, env.hour)), rain: env.v[1], gust: gust,
-          wood: land > 1.2 ? Math.max(0, Math.min(1, forestMask(camX, camZ, land, fieldSlope(world, camX, camZ)) * 1.5)) : 0,
+          wood: wood, shore: nearBreak, palm: palmZone,
           alt: camY - Math.max(land, 0) - 1.7, under: under, heard: bugLife.heard
         });
         audio.under.frequency.value = under ? 380 : 16000;

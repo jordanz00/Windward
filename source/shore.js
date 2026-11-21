@@ -408,7 +408,8 @@ async function createShore(device, world, anchor, shapeView) {
   function writeWaves(time, dt) {
     u[8] = time;
     u[9] = dt;
-    u[10] = wp.amp;
+    // Shore breakers track weather wind strength; heading stays with the place swell.
+    u[10] = wp.amp * (typeof env !== 'undefined' ? env.sea : 1);
     u[11] = wp.spd;
     u[12] = wp.dir;
     u[14] = Math.max(wp.frq, 0.2);

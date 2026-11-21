@@ -1333,7 +1333,10 @@ fn capillary(xz: vec2<f32>, dist: f32) -> vec2<f32> {
   let pix = max(dist * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.012);
   // A gust roughens the water it crosses: the dark patches that run over a bay.
   let chop = mix(0.22, 1.0, sat(F.ctrl.x)) * clamp(windAt(xz) / 4.5, 0.3, 2.2);
-  let wind = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+  // Chop rides the shared trades, blended with the place swell heading.
+  let place = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+  let trade = normalize(F.wind.xy + vec2<f32>(1e-5, 0.0));
+  let wind = normalize(mix(place, trade, 0.55));
   var slope = vec2<f32>(0.0);
   let bands = array<vec3<f32>, 4>(
     vec3<f32>(3.1, 0.045, 0.85),
@@ -1768,13 +1771,14 @@ const DROP_SPRAY: u32 = 60000u;
       if (sh.inside > 0.5) { force = max(force, sat(sh.foam * 1.3) * smoothstep(0.4, 1.6, length(sh.vel))); top = max(top, sh.eta); }
     }
     let life = fract(F.time * (0.48 + 0.35 * hh.x) + hh.y * 9.0);
-    let blow = clamp(F.wind.z / 5.0, 0.3, 2.6);
+    let local = windAt(home);
+    let blow = clamp(local / 5.0, 0.25, 2.8);
     let humid = sat(F.wx.w);
     let gold = sat(F.day.w);
-    // Low throw: rises then falls while drifting downwind — irregular height per puff.
+    // Low throw: rises then falls while drifting on the shared trades — irregular height per puff.
     let rise = (0.12 + 0.9 * pow(life, 0.5) * (0.7 + 0.5 * hh.y)) * (0.55 + 0.45 * blow) - 0.85 * life * life;
     let w = vec3<f32>(home.x, max(top, 0.0) + rise, home.y)
-      + vec3<f32>(F.wind.x, 0.0, F.wind.y) * F.wind.z * 0.5 * life * 1.7
+      + vec3<f32>(F.wind.x, 0.0, F.wind.y) * local * 0.55 * life * 1.6
       + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * 0.04, 0.0);
     let rad = (0.22 + 0.95 * life) * (0.65 + 0.7 * hh.x) * (0.85 + 0.25 * humid);
     pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.015, force);

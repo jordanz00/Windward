@@ -377,11 +377,20 @@ BugLife.prototype.fly = function (a, tx, ty, tz, vmax, acc, dt) {
   }
   return d;
 };
-// The gust at a place, the same cells the plants bend to.
+// Shared wind: small insects drift; larger ones compensate and only get shoved by gusts.
 BugLife.prototype.blow = function (a, k, dt) {
-  const g = envWindAt(a.x, a.z) * k * dt;
-  a.x += env.wx0 * g; a.z += env.wz0 * g;
-  a.y += Math.sin(this.time * 2.1 + a.seed * 17) * g * 0.08;
+  const speed = envWindAt(a.x, a.z);
+  const base = env.speed * 0.35;
+  const gust = Math.max(0, speed - base);
+  // Hold against the mean breeze; ride the gust excess.
+  const push = (gust * 0.85 + speed * 0.15) * k * dt;
+  a.x += env.wx0 * push; a.z += env.wz0 * push;
+  a.y += Math.sin(this.time * 2.1 + a.seed * 17) * push * 0.1;
+  // Hovering species fight harder to stay put.
+  if (a.st === 0 && k < 0.06) {
+    a.vx -= env.wx0 * gust * 0.15 * dt;
+    a.vz -= env.wz0 * gust * 0.15 * dt;
+  }
 };
 BugLife.prototype.newHome = function (a, cx, cz) {
   const B = BUGS[a.sp], S = this.sites[B.site], rnd = this.rnd;
