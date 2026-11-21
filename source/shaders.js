@@ -782,6 +782,23 @@ struct GeoV {
   }
   var alb = terrainAlbedo(in.world.xz, in.world.y, n);
   alb *= 1.0 - 0.1 * trough;
+  // Close to, the ground among the trees is not a coat of paint. Fallen leaves lie on it,
+  // thick under the canopy and scattered on the open turf, and the turf itself is tufted.
+  let turfK = (1.0 - sandy) * smoothstep(1.4, 2.8, in.world.y) * (1.0 - smoothstep(0.3, 0.55, slope));
+  if (turfK > 0.01) {
+    let q = in.world.xz;
+    let woodK = smoothstep(1.9, 4.4, in.world.y) * smoothstep(-0.62, -0.12, forestNoise(q));
+    let fine = sat(1.6 - foot * 30.0);
+    let L = leafCells(q * 7.0);
+    let fallen = smoothstep(0.62, 0.48, L.x) * step(mix(0.86, 0.45, woodK), L.w);
+    let tuft = n2(q * 9.0) * 0.55 + n2(q * 33.0) * 0.45;
+    alb *= 1.0 + (tuft - 0.5) * 0.8 * turfK * fine * (1.0 - fallen);
+    let lit = mix(1.0, 0.55, woodK);
+    let dead = mix(vec3<f32>(0.1, 0.075, 0.045), vec3<f32>(0.21, 0.165, 0.095), L.z) * lit * (0.8 + 0.2 * smoothstep(0.0, 0.25, abs(L.y)));
+    // Too far to see one leaf, the litter is still there as a share of the colour.
+    alb = mix(alb, vec3<f32>(0.155, 0.12, 0.07) * lit, turfK * (1.0 - fine) * mix(0.07, 0.27, woodK));
+    alb = mix(alb, dead, fallen * turfK * fine * 0.9);
+  }
   if (bedK > 0.01) {
     // The bed is not one colour: a film of algae greys it in patches, and close to it is
     // grains, with bits of shell and broken coral among them.
@@ -1185,14 +1202,14 @@ struct BirdV {
   o.world = w;
   o.nrm = vec3<f32>(0.0, 1.0, 0.0);
   // White body, grey mantle, black wingtips.
-  o.col = mix(mix(vec3<f32>(0.9, 0.91, 0.89), vec3<f32>(0.6, 0.63, 0.67), sat(a)), vec3<f32>(0.07), smoothstep(0.4, 0.5, abs(p.x)));
+  o.col = mix(mix(vec3<f32>(0.9, 0.91, 0.89), vec3<f32>(0.6, 0.63, 0.67), sat(a)), vec3<f32>(0.1), smoothstep(0.45, 0.6, abs(p.x)));
   o.clip = F.viewProj * vec4<f32>(w, 1.0);
   return o;
 }
 @fragment fn fsBird(in: BirdV) -> @location(0) vec4<f32> {
-  // Seen from below, a bird shows its shaded underside.
+  // Seen from below, a bird shows its pale underside, lit by the sea and the sand.
   let below = step(F.camPos.y, in.world.y);
-  return vec4<f32>(shade(in.world, vec3<f32>(0.0, 1.0 - 2.0 * below, 0.0), mix(in.col, vec3<f32>(0.8, 0.81, 0.8), below * 0.6), 0.0, 0.0), 1.0);
+  return vec4<f32>(shade(in.world, vec3<f32>(0.0, 1.0, 0.0), mix(in.col, vec3<f32>(0.85, 0.86, 0.85), below * 0.7), 0.0, 0.0) * (1.0 - 0.3 * below), 1.0);
 }
 
 ${FISH_WGSL}
@@ -1512,9 +1529,10 @@ fn warp(t: f32) -> f32 {
   // The spectral tile adds the wind sea. Its height fades before the mesh gets coarse.
   let near = smoothstep(460.0, 70.0, dist);
   w.y += shapeField(xz).x * near * mix(0.25, 1.0, field.y);
-  // A trough cannot dig below the sand. Over a shoal the surface stays a film above the bed.
+  // A trough cannot dig below the sand. Over a shoal the surface stays a film above the bed,
+  // thicker where the grid is coarse, so the bed does not show between two vertices either.
   let bedW = sampleField(w.xz).x;
-  if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05, 0.0)); }
+  if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05 + dist * 0.008, 0.0)); }
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;

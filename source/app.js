@@ -414,27 +414,24 @@ function makePalm(seed, lod) {
 
 // A fern: fronds arching out of one crown, each a stalk with a row of pinnae down either
 // side, longest in the middle. The coarse level keeps fewer fronds and pinnae.
-function makeFern(seed, lod) {
+function makeFern(seed) {
   const rnd = seeded(seed || 2);
   const m = new Mesh();
-  const n = lod ? 6 + (seed % 3) : 10 + (seed % 4);
-  const steps = lod ? 7 : 15;
+  const n = 6 + (seed % 3);
   for (let i = 0; i < n; i++) {
     const ang = i / n * Math.PI * 2 + rnd() * 0.5;
     const dx = Math.cos(ang), dz = Math.sin(ang);
     const sx = -dz, sz = dx;
-    // The young fronds in the middle stand up; the old ones outside lie over.
-    const up = lod ? 1 : 0.55 + 1.1 * rnd();
-    const len = (0.42 + rnd() * 0.22) * (lod ? 1 : 1.25 - 0.3 * up);
-    const col0 = [0.07 + rnd() * 0.04, 0.27 + rnd() * 0.1, 0.07];
-    const at = (t) => [dx * t * len, (Math.sin(t * 1.4) * 0.16 - t * t * 0.05) * up * (lod ? 1 : 1.5), dz * t * len];
-    if (!lod) for (let s = 0; s < 5; s++) { const a = at(s / 5), b = at((s + 1) / 5); addLeaflet(m, a[0], a[1], a[2], b[0] - a[0], b[1] - a[1] + 0.012, b[2] - a[2], len / 4.4, 0.004, [0.13, 0.17, 0.06], 0.3 + s * 0.2); }
+    const len = 0.42 + rnd() * 0.22;
+    const steps = 7;
     for (let s = 1; s < steps; s++) {
-      const t = s / steps, p = at(t);
-      const bell = Math.pow(Math.sin(Math.min(1, t * 1.15) * Math.PI), 0.7);
-      const col = [col0[0] + rnd() * 0.02, col0[1] + rnd() * 0.05, col0[2]];
+      const t = s / steps;
+      const y = Math.sin(t * 1.4) * 0.16 - t * t * 0.05;
+      const x = dx * t * len, z = dz * t * len;
+      const bell = Math.sin(t * Math.PI);
+      const col = [0.08 + rnd() * 0.04, 0.32 + rnd() * 0.1, 0.08];
       for (let side = -1; side <= 1; side += 2) {
-        addLeaflet(m, p[0], p[1], p[2], dx * 0.3 + sx * side, 0.12 - t * 0.25, dz * 0.3 + sz * side, 0.07 + bell * 0.1, lod ? 0.012 : 0.015, col, 0.45 + t);
+        addLeaflet(m, x, y, z, dx * 0.2 + sx * side, 0.15 - t * 0.2, dz * 0.2 + sz * side, 0.08 + bell * 0.1, 0.012, col, 0.45 + t);
       }
     }
   }
@@ -709,23 +706,17 @@ function grassGeom() {
 function birdGeom() {
   const pos = [], wing = [], idx = [];
   const add = (x, y, z, w) => { pos.push(x, y, z); wing.push(w); return pos.length / 3 - 1; };
-  const nose = add(0, 0.012, 0.32, 0);
-  const head = add(0, 0.05, 0.2, 0);
-  const back = add(0, 0.04, -0.04, 0);
-  const belly = add(0, -0.032, 0.04, 0);
-  const tail = add(0, 0.005, -0.36, 0);
-  const tailL = add(-0.055, 0.0, -0.28, 0);
-  const tailR = add(0.055, 0.0, -0.28, 0);
-  const beak = add(0, 0.02, 0.44, 0);
-  idx.push(nose, head, belly, head, back, belly, back, tail, belly, tailL, tail, back, tailR, back, tail, nose, beak, head);
-  const li0 = add(-0.04, 0.03, 0.08, -1), li1 = add(-0.3, 0.02, 0.1, -1), li2 = add(-0.26, 0.012, -0.05, -1), li3 = add(-0.04, 0.02, -0.05, -1);
-  idx.push(li0, li1, li2, li0, li2, li3);
-  const lo0 = add(-0.26, 0.02, 0.07, -2), lo1 = add(-0.58, 0.0, 0.03, -2), lo2 = add(-0.52, 0.0, -0.07, -2), lo3 = add(-0.24, 0.012, -0.04, -2);
-  idx.push(lo0, lo1, lo2, lo0, lo2, lo3);
-  const ri0 = add(0.04, 0.03, 0.08, 1), ri1 = add(0.3, 0.02, 0.1, 1), ri2 = add(0.26, 0.012, -0.05, 1), ri3 = add(0.04, 0.02, -0.05, 1);
-  idx.push(ri0, ri2, ri1, ri0, ri3, ri2);
-  const ro0 = add(0.26, 0.02, 0.07, 2), ro1 = add(0.58, 0.0, 0.03, 2), ro2 = add(0.52, 0.0, -0.07, 2), ro3 = add(0.24, 0.012, -0.04, 2);
-  idx.push(ro0, ro2, ro1, ro0, ro3, ro2);
+  // A spindle of a body with a head and a fanned tail, and wings in two parts: the arm out to
+  // the wrist, then the hand swept back to a point.
+  const nose = add(0, 0.01, 0.3, 0), back = add(0, 0.045, 0.02, 0), belly = add(0, -0.04, 0.04, 0), rump = add(0, 0.005, -0.2, 0);
+  const sl = add(-0.04, 0.0, 0.05, 0), sr = add(0.04, 0.0, 0.05, 0), beak = add(0, 0.0, 0.37, 0);
+  const tl = add(-0.06, 0.0, -0.36, 0), tr = add(0.06, 0.0, -0.36, 0);
+  idx.push(nose, sl, back, nose, back, sr, nose, belly, sl, nose, sr, belly, rump, back, sl, rump, sr, back, rump, sl, belly, rump, belly, sr, rump, tl, tr, beak, sl, sr);
+  for (const sg of [-1, 1]) {
+    const a0 = add(sg * 0.04, 0.02, 0.1, sg), a1 = add(sg * 0.3, 0.02, 0.13, sg), a2 = add(sg * 0.27, 0.012, -0.03, sg), a3 = add(sg * 0.04, 0.02, -0.07, sg);
+    const h1 = add(sg * 0.62, 0.0, -0.03, sg * 2), h2 = add(sg * 0.6, 0.0, -0.055, sg * 2);
+    idx.push(a0, a1, a2, a0, a2, a3, a1, h1, h2, a1, h2, a2);
+  }
   return { pos: new Float32Array(pos), wing: new Float32Array(wing), idx: new Uint16Array(idx) };
 }
 
@@ -1979,7 +1970,7 @@ async function main() {
     };
     const shrubIds = protoSet([5, 9, 14], makeShrub, 0.5);
     const canopyIds = protoSet([6, 13], makeCanopy, 1.1);
-    const fernIds = [7, 12, 19].map((sd) => scatter.proto([makeFern(sd, 0), makeFern(sd, 1)], 0.8, [26]));
+    const fernIds = protoSet([7, 12, 19], makeFern, 0.8);
     const broadIds = protoSet([2, 15, 28], makeBroad, 0.9);
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
     const fernBudget = Math.max(10, (q.broad * 0.55) | 0);
@@ -2068,27 +2059,6 @@ async function main() {
       const tint = [0.8 + rnd() * 0.45, 0.82 + rnd() * 0.36, 0.75 + rnd() * 0.5];
       scatter.add(treeIds[(rnd() * treeIds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, 0.85 + rnd() * 0.4);
       trees++;
-    }
-    // The understorey grows in drifts: ferns where litter collects under the trees and along
-    // the edge of the scrub, low shrubs among them. Half the drifts start
-    // near the main beach, where they are seen from close by.
-    // Its own dice, so everything planted after it stays where it was.
-    const under = q.broad * 5;
-    for (let c = 0, n = 0, rnd = mulberry32(0xFE2A5); c < under * 6 && n < under; c++) {
-      const close = c % 2 === 0;
-      const cx = close ? beach.x + (rnd() - 0.5) * 150 : (rnd() - 0.5) * 450, cz = close ? beach.z + (rnd() - 0.5) * 150 : (rnd() - 0.5) * 390;
-      const ch = fieldSample(world, cx, cz);
-      if (ch < 2.6 || ch > 16) continue;
-      if (forestMask(cx, cz, ch, fieldSlope(world, cx, cz)) < 0.15 && vnoise(cx * 0.03 + 4, cz * 0.03) < 0.6) continue;
-      const k = 4 + ((rnd() * 7) | 0), rad = 1.2 + rnd() * 3.2;
-      for (let j = 0; j < k && n < under; j++) {
-        const a = rnd() * 6.28, r = rad * Math.sqrt(rnd()), x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r, h = fieldSample(world, x, z);
-        if (h < 2.4 || fieldSlope(world, x, z) > 0.4) continue;
-        const tint = [0.8 + rnd() * 0.3, 0.85 + rnd() * 0.25, 0.8 + rnd() * 0.25], u = rnd();
-        if (u < 0.78) scatter.add(fernIds[(rnd() * fernIds.length) | 0], x, h - 0.03, z, rnd() * 6.28, 1.2 + rnd() * 1.4, tint, 0.7 + rnd() * 0.5);
-        else scatter.add(shrubIds[(rnd() * shrubIds.length) | 0], x, h, z, rnd() * 6.28, 1.6 + rnd() * 1.4, tint, 0.7 + rnd() * 0.5);
-        n++;
-      }
     }
     for (let i = 0; i < q.rocks * 20 && rocks < q.rocks; i++) {
       const x = (rnd() - 0.5) * 500;
@@ -2880,7 +2850,8 @@ async function main() {
         else strips = 1;
         const bp = enc.beginRenderPass(skyPass);
         bp.setPipeline(pipes.skyBake); bp.setBindGroup(0, bgUB);
-        const mixK = fresh ? 1 : 0.3;
+        // Once settled, each bake counts for less, so the sub-texel jitter averages over more of them.
+        const mixK = fresh ? 1 : skySettle > 0 ? 0.3 : 0.12;
         bp.setBlendConstant([mixK, mixK, mixK, mixK]);
         const sw = SKYW / SKY_STRIPS;
         for (let k = 0; k < strips; k++) {
