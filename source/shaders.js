@@ -946,12 +946,13 @@ fn windAt(xz: vec2<f32>) -> f32 {
 // downwind, across the wind, then the wind speed it feels and a number of its own. It has
 // mass: it leans with the pressure and rocks slowly at its own rate. Anything sitting on the
 // plant asks the same question and so moves with it.
-fn plantLean(at: vec2<f32>, scale: f32, expo: f32) -> vec4<f32> {
+fn plantLean(at: vec2<f32>, scale: f32, expo: f32, soft: f32) -> vec4<f32> {
   let id = fract(at.x * 0.137 + at.y * 0.291);
   let v = windAt(at) * expo;
-  let push = v * v * 0.011;
-  // Big plants are slow. The scale of the instance stands in for its mass.
-  let rate = (1.5 + 0.8 * id) / sqrt(max(scale, 0.3));
+  let stiff = mix(0.55, 1.35, sat(soft));
+  let push = v * v * 0.011 * stiff;
+  // Big plants are slow. soft (i1.w) is species stiffness; scale is mass.
+  let rate = (1.35 + 0.9 * id) / (sqrt(max(scale, 0.3)) * mix(0.75, 1.25, sat(soft)));
   let rock = sin(F.time * rate + id * 40.0) * 0.45 + sin(F.time * rate * 0.37 + id * 11.0) * 0.25;
   return vec4<f32>(push * (0.75 + rock), push * 0.3 * sin(F.time * rate * 0.61 + id * 23.0), v, id);
 }
@@ -973,20 +974,25 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
     w.y -= abs(gust) * in.c.w * in.c.w * 0.28;
     return w;
   }
-  let L = plantLean(in.i0.xz, in.i1.x, in.i1.z);
+  let L = plantLean(in.i0.xz, in.i1.x, in.i1.z, in.i1.w);
   let v = L.z;
   let id = L.w;
   let k = i32(in.n.w + 0.5);
   var along = L.x;
   var across = L.y;
   if (k == 2) {
-    let ph = F.time * (2.6 + 0.55 * v) + in.p.x * 4.1 + in.p.y * 2.3 + in.p.z * 3.7 + id * 17.0;
+    let ph = F.time * (2.4 + 0.65 * v) + in.p.x * 4.1 + in.p.y * 2.3 + in.p.z * 3.7 + id * 17.0 + in.i2.w * 9.0;
     // A petal is stiffer than a leaf and only trembles.
-    let fl = (sin(ph) + 0.5 * sin(ph * 2.17 + 1.3)) * (0.012 + 0.012 * v) * select(1.0, 0.15, in.uv.y < -0.5);
+    let fl = (sin(ph) + 0.5 * sin(ph * 2.17 + 1.3)) * (0.011 + 0.014 * v) * select(1.0, 0.15, in.uv.y < -0.5);
     along += fl;
     across += fl * 0.8 * cos(ph * 0.7);
   } else if (k == 3) {
-    along += sin(F.time * 1.9 + w.x * 0.8 + w.z * 0.6 + w.y) * 0.006 * v;
+    // Crown masses: delayed, soft wiggle — not locked to leaf flutter.
+    along += sin(F.time * (1.5 + 0.4 * id) + w.x * 0.7 + w.z * 0.55 + w.y) * 0.0055 * v;
+    across += sin(F.time * (0.9 + 0.3 * id) + w.z * 0.4) * 0.003 * v;
+  } else if (k == 1) {
+    // Palm trunks barely move; frond bark (low sway verts) still ride plant lean.
+    along *= 0.35; across *= 0.35;
   }
   return w + plantShift(vec2<f32>(along, across), in.c.w);
 }
@@ -995,7 +1001,16 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   o.world = meshPlace(in);
   o.nrm = spinY(normalize(in.n.xyz / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
   // A tree's own tint is in its leaves. Its bark stays close to bark.
-  o.col = in.c.rgb * mix(in.i2.rgb, vec3<f32>(dot(in.i2.rgb, vec3<f32>(0.333))), select(0.0, 0.8, in.n.w > 8.5));
+  // i2.w biases leaf age: young yellow-green ↔ mature deep green ↔ older brown edge.
+  var tint = in.i2.rgb;
+  let age = in.i2.w;
+  if (in.n.w > 1.5 && in.n.w < 3.5) {
+    let young = sat(1.0 - age * 1.6);
+    let old = sat(age * 1.4 - 0.55);
+    tint = mix(tint, tint * vec3<f32>(1.15, 1.08, 0.7), young * 0.35);
+    tint = mix(tint, tint * vec3<f32>(0.95, 0.82, 0.55) + vec3<f32>(0.04, 0.02, 0.0), old * 0.4);
+  }
+  o.col = in.c.rgb * mix(tint, vec3<f32>(dot(tint, vec3<f32>(0.333))), select(0.0, 0.8, in.n.w > 8.5));
   o.kind = in.n.w;
   o.uv = in.uv;
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
@@ -1078,15 +1093,17 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     let upper = dot(n, Vv) > 0.0;
     if (!upper) {
       n = -n;
-      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.28, 0.58, 0.12))), 0.32) * 1.22;
+      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.28, 0.58, 0.12))), 0.35) * 1.28;
     }
     let rib = smoothstep(0.26, 0.0, abs(in.uv.x));
-    alb = mix(alb, alb * 1.28 + vec3<f32>(0.015, 0.02, 0.0), rib * 0.4);
-    let grit = 0.9 + 0.1 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.04 * sin(in.uv.y * 29.0);
+    alb = mix(alb, alb * 1.22 + vec3<f32>(0.012, 0.018, 0.0), rib * 0.45);
+    // Desaturate mature faces slightly; keep young tips warmer.
+    alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.55, 0.15))), 0.12 * (1.0 - in.uv.y));
+    let grit = 0.88 + 0.1 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.05 * sin(in.uv.y * 29.0);
     alb *= grit;
-    leaf = select(1.25, 0.9, upper);
+    leaf = select(1.35, 0.85, upper);
     // Narrow specular lobe only near the midrib; broad faces stay matte.
-    gloss = select(0.04, 0.18 + 0.12 * rib, upper);
+    gloss = select(0.03, 0.14 + 0.1 * rib, upper);
     if (in.world.y < -0.1) { gloss *= 0.15; leaf *= 0.45; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
@@ -1209,14 +1226,21 @@ struct GrassV {
 }
 @fragment fn fsGrass(in: GrassV) -> @location(0) vec4<f32> {
   let ground = sampleField(in.world.xz).x;
-  var col = mix(vec3<f32>(0.10, 0.22, 0.05), vec3<f32>(0.40, 0.46, 0.16), in.uv.y);
+  let mott = n2(in.world.xz * 0.35);
+  // Inland meadow green; coastal sand-grass warmer; forest edge darker.
+  var col = mix(vec3<f32>(0.09, 0.2, 0.045), vec3<f32>(0.36, 0.44, 0.14), in.uv.y);
+  col = mix(col, mix(vec3<f32>(0.14, 0.24, 0.06), vec3<f32>(0.42, 0.48, 0.18), in.uv.y), mott * 0.45);
   if (ground < 1.6 && ground > 0.15) {
-    col = mix(vec3<f32>(0.28, 0.32, 0.10), vec3<f32>(0.55, 0.52, 0.22), in.uv.y);
+    col = mix(vec3<f32>(0.26, 0.3, 0.09), vec3<f32>(0.52, 0.48, 0.2), in.uv.y);
+    col = mix(col, vec3<f32>(0.4, 0.38, 0.16), (1.0 - in.uv.y) * 0.25 * mott);
+  }
+  if (ground > 4.0) {
+    col = mix(col, col * vec3<f32>(0.75, 0.85, 0.7), 0.35 * smoothstep(4.0, 10.0, ground));
   }
   if (in.kind > 0.5) { col = mix(vec3<f32>(0.04, 0.16, 0.09), vec3<f32>(0.18, 0.34, 0.16), in.uv.y); }
   let rib = smoothstep(0.08, 0.0, abs(in.uv.x - 0.5));
-  col *= 0.82 + 0.22 * n2(in.world.xz * 1.6) - rib * 0.12;
-  return vec4<f32>(shade(in.world, in.nrm, col, 1.0, 0.0), 1.0);
+  col *= 0.8 + 0.24 * n2(in.world.xz * 1.6 + in.uv.y) - rib * 0.14;
+  return vec4<f32>(shade(in.world, in.nrm, col, 1.05, 0.0), 1.0);
 }
 
 struct BirdV {

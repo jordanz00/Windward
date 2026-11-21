@@ -760,7 +760,7 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
   let cp = cos(in.i1.y); let sp = sin(in.i1.y);
   v = vec3<f32>(v.x * cp - v.y * sp, v.x * sp + v.y * cp, v.z);
   var w = spinY(v, in.i0.w) * mix(1.0, in.i1.x, place) + in.i0.xyz * place;
-  if (in.i4.y > 0.0 && place > 0.5) { w += plantShift(plantLean(in.i5.xy, in.i5.z, in.i5.w).xy, in.i4.y); }
+  if (in.i4.y > 0.0 && place > 0.5) { w += plantShift(plantLean(in.i5.xy, in.i5.z, in.i5.w, 1.0).xy, in.i4.y); }
   return w;
 }
 @vertex fn vsBug(in: BugIn) -> BugV {

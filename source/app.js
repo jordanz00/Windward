@@ -267,24 +267,29 @@ function seeded(seed) {
   };
 }
 
-function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway) {
+function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway, twist) {
   const dl = Math.hypot(dirx, diry, dirz) || 1;
   dirx /= dl; diry /= dl; dirz /= dl;
   let sx = -dirz, sz = dirx;
   const sl = Math.hypot(sx, sz) || 1;
   sx /= sl; sz /= sl;
-  const tipC = [col[0] * 1.25, col[1] * 0.95, col[2] * 0.62];
+  const tw = twist || 0;
+  const tipC = [col[0] * 1.18, col[1] * 0.92, col[2] * 0.55];
   const vert = (t, side) => {
-    const w = wid * (1 - t * 0.86);
-    const droop = t * t * len * 0.22;
-    const x = ox + dirx * len * t + sx * w * side;
-    const y = oy + diry * len * t - droop;
-    const z = oz + dirz * len * t + sz * w * side;
-    const c = t > 0.62 ? tipC : col;
-    return m.v(x, y, z, dirx * 0.2 + sx * side * 0.15, 0.92, dirz * 0.2 + sz * side * 0.15, c[0], c[1], c[2], sway * (0.2 + t * t * 1.15), LEAF, side, t);
+    // Taper, slight fold, midrib bias, and a soft twist along the blade.
+    const w = wid * (1 - Math.pow(t, 1.15) * 0.9) * (0.92 + 0.08 * Math.sin(t * 9));
+    const fold = side * (0.35 + 0.25 * t) * wid * 0.45;
+    const droop = t * t * len * (0.18 + Math.abs(tw) * 0.12);
+    const twistOff = tw * t * t * len * 0.12;
+    const x = ox + dirx * len * t + sx * (w * side + twistOff) + dirx * fold * 0.15;
+    const y = oy + diry * len * t - droop + Math.abs(side) * fold * 0.35;
+    const z = oz + dirz * len * t + sz * (w * side + twistOff) + dirz * fold * 0.15;
+    const c = t > 0.68 ? tipC : col;
+    const nx = dirx * 0.15 + sx * side * 0.35, nz = dirz * 0.15 + sz * side * 0.35;
+    return m.v(x, y, z, nx, 0.85 + 0.1 * (1 - Math.abs(side)), nz, c[0], c[1], c[2], sway * (0.18 + t * t * 1.2), LEAF, side, t);
   };
   const bL = vert(0.0, 1), bR = vert(0.0, -1);
-  const mL = vert(0.42, 1), mR = vert(0.42, -1);
+  const mL = vert(0.38, 1), mR = vert(0.38, -1);
   const tip = vert(1, 0);
   m.tri(bL, mL, bR); m.tri(bR, mL, mR);
   m.tri(mL, tip, mR);
@@ -299,21 +304,28 @@ function makePalm(seed, lod) {
   const add = (a, b, k) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
   const unit = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-  const H = 6.5 + rnd() * 5.5, lean = 0.1 + rnd() * rnd() * 0.65, topSway = 0.09;
+  // Age / exposure morph: young short dense crowns, old tall sparse, coastal heavy lean.
+  const age = rnd();
+  const coastal = rnd();
+  const H = 5.2 + age * 4.8 + rnd() * 2.2;
+  const lean = 0.06 + coastal * coastal * 0.55 + rnd() * rnd() * 0.35;
+  const topSway = 0.075 + (1 - age) * 0.04;
+  const trunkFat = 0.095 + age * 0.045 + rnd() * 0.03;
   const sides = [12, 7, 4][lod], rings = [36, 12, 5][lod];
   // Trunk: out of the ground at an angle, then curving back up toward the light.
   let P = [0, -0.2, 0];
   let last = null;
+  const barkTone = [0.34 + age * 0.08, 0.30 + age * 0.05, 0.26 + age * 0.04];
   for (let i = 0; i <= rings; i++) {
     const t = i / rings, s = t * H;
     const th = lean * (1 - 0.92 * Math.pow(t, 0.75));
     const T = [Math.sin(th), Math.cos(th), 0], X = [Math.cos(th), -Math.sin(th), 0];
-    const r = 0.125 - 0.03 * t + 0.17 * Math.exp(-s / 0.45) + 0.06 * smooth01(0.92, 1, t);
+    const r = trunkFat - 0.028 * t + 0.16 * Math.exp(-s / 0.45) + 0.055 * smooth01(0.92, 1, t);
     const row = [];
     for (let k = 0; k <= sides; k++) {
       const a = k / sides * 6.2832, ca = Math.cos(a), sa = Math.sin(a);
       const nx = X[0] * ca, ny = X[1] * ca, nz = sa;
-      row.push(m.v(P[0] + nx * r, P[1] + ny * r, P[2] + nz * r, nx, ny, nz, 0.37, 0.34, 0.3, topSway * t * t, BARK, k / sides, s));
+      row.push(m.v(P[0] + nx * r, P[1] + ny * r, P[2] + nz * r, nx, ny, nz, barkTone[0], barkTone[1], barkTone[2], topSway * t * t, BARK, k / sides, s));
     }
     if (last) for (let k = 0; k < sides; k++) { m.tri(last[k], row[k], last[k + 1]); m.tri(last[k + 1], row[k], row[k + 1]); }
     last = row;
@@ -322,7 +334,7 @@ function makePalm(seed, lod) {
   const C = P;
   // Cap geometry so one palm stays under 65535 verts (packed as uint16). Density comes from
   // width, droop and fold, not from blowing past the index limit.
-  const nf = 22 + ((rnd() * 5) | 0), nd = 2 + ((rnd() * 2) | 0);
+  const nf = 18 + ((rnd() * 7 + age * 4) | 0), nd = 1 + ((rnd() * 3 + age) | 0);
   const nseg = [18, 8, 4][lod], lseg = [4, 3, 2][lod];
   for (let j = 0; j < nf + nd; j++) {
     const dead = j >= nf;
@@ -439,65 +451,108 @@ function makePalm(seed, lod) {
   return m;
 }
 
-// A fern: fronds arching out of one crown, each a stalk with a row of pinnae down either
-// side, longest in the middle. The coarse level keeps fewer fronds and pinnae.
+// Fern / tree-fern: curved rachis with paired pinnae that shrink toward the tip.
 function makeFern(seed) {
   const rnd = seeded(seed || 2);
   const m = new Mesh();
-  const n = 6 + (seed % 3);
+  const tall = (seed % 5) === 0; // occasional tree fern
+  const trunkH = tall ? 0.35 + rnd() * 0.55 : 0;
+  if (tall) {
+    const bark = cylinder(6, 5, 0.045, 0.03, trunkH, [0.22, 0.18, 0.12], 0.02);
+    appendMesh(m, bark, 0, 0, 0, rnd() * 3, 1, null, 1);
+  }
+  const n = tall ? 5 + (seed % 3) : 6 + (seed % 4);
+  const baseY = trunkH;
   for (let i = 0; i < n; i++) {
-    const ang = i / n * Math.PI * 2 + rnd() * 0.5;
+    const ang = i / n * Math.PI * 2 + rnd() * 0.7 + Math.sin(i * 1.7) * 0.2;
     const dx = Math.cos(ang), dz = Math.sin(ang);
     const sx = -dz, sz = dx;
-    const len = 0.42 + rnd() * 0.22;
-    const steps = 7;
-    for (let s = 1; s < steps; s++) {
+    const len = (tall ? 0.55 : 0.38) + rnd() * (tall ? 0.35 : 0.28);
+    const lift = tall ? 0.55 + rnd() * 0.35 : 0.35 + rnd() * 0.4;
+    const droop = 0.55 + rnd() * 0.7;
+    const steps = tall ? 9 : 8;
+    const col = [0.06 + rnd() * 0.05, 0.26 + rnd() * 0.14, 0.06 + rnd() * 0.03];
+    // Rachis as a thin arched stalk.
+    let prev = -1;
+    for (let s = 0; s <= steps; s++) {
       const t = s / steps;
-      const y = Math.sin(t * 1.4) * 0.16 - t * t * 0.05;
+      const e = lift - droop * Math.pow(t, 1.6);
       const x = dx * t * len, z = dz * t * len;
+      const y = baseY + Math.sin(Math.max(0, e)) * len * 0.22 + t * len * Math.sin(e) * 0.35 - t * t * len * 0.08;
+      const rr = 0.008 * (1 - t * 0.7);
+      const a0 = m.v(x + sx * rr, y, z + sz * rr, sx, 0.2, sz, col[0] * 0.7, col[1] * 0.7, col[2] * 0.7, 0.25 + t * 0.4, SOLID);
+      const a1 = m.v(x - sx * rr, y, z - sz * rr, -sx, 0.2, -sz, col[0] * 0.7, col[1] * 0.7, col[2] * 0.7, 0.25 + t * 0.4, SOLID);
+      if (prev >= 0) { m.tri(prev, a0, prev + 1); m.tri(prev + 1, a0, a1); }
+      prev = a0;
+      if (s === 0 || s === steps) continue;
+      // Paired pinnae, longest mid-frond, smaller toward tip and base.
       const bell = Math.sin(t * Math.PI);
-      const col = [0.08 + rnd() * 0.04, 0.32 + rnd() * 0.1, 0.08];
+      const pinLen = (0.05 + bell * (tall ? 0.14 : 0.11)) * (0.75 + rnd() * 0.5);
+      const pinW = 0.008 + bell * 0.01;
       for (let side = -1; side <= 1; side += 2) {
-        addLeaflet(m, x, y, z, dx * 0.2 + sx * side, 0.15 - t * 0.2, dz * 0.2 + sz * side, 0.08 + bell * 0.1, 0.012, col, 0.45 + t);
+        const stagger = (side < 0 ? 0.02 : 0) + (rnd() - 0.5) * 0.03;
+        addLeaflet(m, x + dx * stagger, y, z + dz * stagger,
+          dx * 0.15 + sx * side, 0.05 - t * 0.25, dz * 0.15 + sz * side,
+          pinLen, pinW, col, 0.4 + t * 0.55, (rnd() - 0.5) * 0.4);
       }
     }
   }
   return m;
 }
 
+// Small understory tree / juvenile palm-like canopy: short trunk, irregular radial leaves.
 function makeCanopy(seed) {
   const rnd = seeded(seed || 5);
   const m = new Mesh();
-  const trunk = cylinder(7, 8, 0.1, 0.045, 0.72, [0.3, 0.2, 0.12], 0.04);
+  const H = 0.55 + rnd() * 0.45;
+  const trunk = cylinder(7, 7, 0.085 + rnd() * 0.04, 0.035 + rnd() * 0.02, H, [0.28 + rnd() * 0.06, 0.18 + rnd() * 0.05, 0.11], 0.035);
   appendMesh(m, trunk, 0, 0, 0, rnd() * 3, 1, null, 1);
-  const leaves = 8 + (seed % 4);
+  const form = seed % 3;
+  const leaves = form === 0 ? 7 + (seed % 3) : form === 1 ? 10 + (seed % 4) : 6 + (seed % 3);
   for (let i = 0; i < leaves; i++) {
-    const ang = i * 2.399 + rnd() * 0.2;
-    const reach = 0.32 + rnd() * 0.28;
-    const col = [0.07 + rnd() * 0.05, 0.26 + rnd() * 0.12, 0.05 + rnd() * 0.03];
-    addLeaflet(m, Math.cos(ang) * 0.06, 0.7, Math.sin(ang) * 0.06, Math.cos(ang), 0.15 + rnd() * 0.35, Math.sin(ang), reach, 0.1 + rnd() * 0.04, col, 0.26);
+    const ang = i * 2.399 + rnd() * 0.55;
+    const reach = (form === 1 ? 0.22 : 0.3) + rnd() * (form === 2 ? 0.4 : 0.28);
+    const wid = form === 2 ? 0.14 + rnd() * 0.06 : 0.08 + rnd() * 0.05;
+    const col = [0.06 + rnd() * 0.06, 0.22 + rnd() * 0.14, 0.04 + rnd() * 0.04];
+    const up = form === 0 ? 0.55 + rnd() * 0.35 : 0.12 + rnd() * 0.4;
+    addLeaflet(m, Math.cos(ang) * 0.05, H - 0.02, Math.sin(ang) * 0.05,
+      Math.cos(ang), up, Math.sin(ang), reach, wid, col, 0.22 + rnd() * 0.12, (rnd() - 0.5) * 0.5);
   }
   return m;
 }
 
+// Broad-leaf understory: banana-like large blades or multi-fan tropical foliage.
 function makeBroad(seed) {
   const rnd = seeded(seed || 3);
   const m = new Mesh();
-  const trunk = cylinder(8, 6, 0.07, 0.035, 0.42, [0.30, 0.22, 0.13], 0.03);
+  const form = seed % 3;
+  const H = form === 0 ? 0.28 + rnd() * 0.2 : 0.38 + rnd() * 0.28;
+  const trunk = cylinder(7, 5, form === 0 ? 0.05 : 0.07, 0.03, H, [0.28, 0.2, 0.12], 0.025);
   appendMesh(m, trunk, 0, 0, 0, rnd() * 3, 1, null, 1);
-  const fans = 6 + (seed % 3);
-  for (let i = 0; i < fans; i++) {
-    const ang = i / fans * Math.PI * 2 + rnd() * 0.4;
-    const reach = 0.28 + rnd() * 0.22;
-    const x = Math.cos(ang) * reach;
-    const z = Math.sin(ang) * reach;
-    const y = 0.38 + rnd() * 0.22;
-    for (let k = 0; k < 5; k++) {
-      const a = ang + (k - 2) * 0.28;
-      const col = [0.1 + rnd() * 0.06, 0.28 + rnd() * 0.12, 0.07];
-      addLeaflet(m, x * 0.25, 0.36, z * 0.25, Math.cos(a), 0.35 + rnd() * 0.3, Math.sin(a), 0.22 + rnd() * 0.12, 0.045, col, 0.35);
+  if (form === 0) {
+    // Large single blades — banana / heliconia style.
+    const n = 4 + (seed % 3);
+    for (let i = 0; i < n; i++) {
+      const ang = i / n * Math.PI * 2 + rnd() * 0.6;
+      const col = [0.1 + rnd() * 0.05, 0.3 + rnd() * 0.1, 0.07];
+      addLeaflet(m, Math.cos(ang) * 0.04, H * 0.7, Math.sin(ang) * 0.04,
+        Math.cos(ang) * 0.4, 0.75 + rnd() * 0.4, Math.sin(ang) * 0.4,
+        0.42 + rnd() * 0.22, 0.1 + rnd() * 0.05, col, 0.4, (rnd() - 0.5) * 0.35);
     }
-    addLeaflet(m, x * 0.15, y, z * 0.15, Math.cos(ang), 0.15, Math.sin(ang), 0.16, 0.05, [0.14, 0.32, 0.08], 0.22);
+  } else {
+    const fans = 5 + (seed % 4);
+    for (let i = 0; i < fans; i++) {
+      const ang = i / fans * Math.PI * 2 + rnd() * 0.5;
+      const reach = 0.24 + rnd() * 0.26;
+      const x = Math.cos(ang) * reach * 0.35, z = Math.sin(ang) * reach * 0.35;
+      const nLeaf = form === 1 ? 5 : 3 + ((rnd() * 3) | 0);
+      for (let k = 0; k < nLeaf; k++) {
+        const a = ang + (k - (nLeaf - 1) * 0.5) * (0.22 + rnd() * 0.12);
+        const col = [0.08 + rnd() * 0.07, 0.24 + rnd() * 0.14, 0.05 + rnd() * 0.04];
+        addLeaflet(m, x, H * (0.55 + rnd() * 0.3), z, Math.cos(a), 0.25 + rnd() * 0.45, Math.sin(a),
+          0.18 + rnd() * 0.16, 0.035 + rnd() * 0.03, col, 0.3 + rnd() * 0.2, (rnd() - 0.5) * 0.45);
+      }
+    }
   }
   return m;
 }
@@ -505,14 +560,21 @@ function makeBroad(seed) {
 function makeShrub(seed) {
   const rnd = seeded(seed || 9);
   const m = new Mesh();
-  const fans = 5 + (seed % 3);
+  const dense = seed % 2 === 0;
+  const fans = dense ? 6 + (seed % 4) : 4 + (seed % 3);
   for (let i = 0; i < fans; i++) {
-    const ang = i / fans * Math.PI * 2 + rnd();
-    const y = 0.02 + rnd() * 0.06;
-    for (let k = 0; k < 4; k++) {
-      const a = ang + (k - 1.5) * 0.4;
-      const col = [0.16 + rnd() * 0.08, 0.34 + rnd() * 0.1, 0.08];
-      addLeaflet(m, Math.cos(ang) * 0.04, y, Math.sin(ang) * 0.04, Math.cos(a), 0.55 + rnd() * 0.4, Math.sin(a), 0.18 + rnd() * 0.1, 0.035, col, 0.5);
+    const ang = i / fans * Math.PI * 2 + rnd() * 0.9;
+    const y = 0.01 + rnd() * 0.08;
+    const nLeaf = dense ? 5 : 3 + ((rnd() * 3) | 0);
+    for (let k = 0; k < nLeaf; k++) {
+      const a = ang + (k - (nLeaf - 1) * 0.5) * (0.28 + rnd() * 0.2);
+      const young = rnd() < 0.25;
+      const col = young
+        ? [0.22 + rnd() * 0.1, 0.4 + rnd() * 0.1, 0.1]
+        : [0.12 + rnd() * 0.1, 0.28 + rnd() * 0.12, 0.06 + rnd() * 0.03];
+      addLeaflet(m, Math.cos(ang) * (0.03 + rnd() * 0.04), y, Math.sin(ang) * (0.03 + rnd() * 0.04),
+        Math.cos(a), 0.4 + rnd() * 0.55, Math.sin(a),
+        0.12 + rnd() * 0.14, 0.022 + rnd() * 0.025, col, 0.45 + rnd() * 0.2, (rnd() - 0.5) * 0.5);
     }
   }
   return m;
@@ -589,46 +651,89 @@ function addLimb(m, pts, r0, r1, sides, col, sway0, sway1, flare) {
     col[0], col[1], col[2], sway0 + (sway1 - sway0) * t, WOOD, ang / 6.2832, len]);
 }
 
-// A forest tree: a buttressed trunk that bows, limbs that rise and then reach out, and a
-// spreading crown of leaf masses, one at the end of each limb. The shader turns the surface
-// of each mass into leaves. Three levels of detail share the same shape.
+// Forest canopy trees with distinct silhouettes: spreading, emergent, rounded, multi-stem,
+// sparse irregular, slender coastal. Leaf masses stay CROWN for the shader leaf cells.
 function makeTree(seed, lod) {
   const sd = (seed | 0) || 1, rnd = seeded(sd * 13 + 5), m = new Mesh();
-  const th = 0.4 + rnd() * 0.22, lean = (rnd() - 0.5) * 0.14, bow = (rnd() - 0.5) * 0.07, r0 = 0.024 + rnd() * 0.011;
-  const bark = [0.21 + rnd() * 0.05, 0.17 + rnd() * 0.04, 0.125 + rnd() * 0.03];
-  const at = (t) => [lean * t * t + bow * Math.sin(t * 3.1416), th * t, bow * 0.6 * Math.sin(t * 2.2)];
-  const rings = [7, 4, 2][lod], pts = [];
-  for (let i = 0; i <= rings; i++) pts.push(at(Math.pow(i / rings, 1.6)));
-  if (lod === 2) pts.push([lean, th + 0.22, 0]);
-  const flare = 0.7 + rnd() * 0.9;
-  addLimb(m, pts, r0, r0 * 0.6, [9, 6, 4][lod], bark, 0, 0.012, lod < 2 ? flare : 0);
-  const lobes = 5 + (Math.abs(sd) % 4), spread = 0.2 + rnd() * 0.12, hue = rnd();
+  const form = Math.abs(sd) % 6;
+  // 0 spreading · 1 emergent · 2 dense round · 3 multi-stem · 4 sparse · 5 slender
+  const th = form === 1 ? 0.55 + rnd() * 0.28 : form === 5 ? 0.42 + rnd() * 0.18 : form === 2 ? 0.32 + rnd() * 0.14 : 0.38 + rnd() * 0.22;
+  const lean = form === 5 ? (rnd() - 0.5) * 0.28 : (rnd() - 0.5) * (form === 4 ? 0.2 : 0.12);
+  const bow = (rnd() - 0.5) * (form === 4 ? 0.12 : 0.07);
+  const r0 = form === 5 ? 0.016 + rnd() * 0.008 : form === 1 ? 0.028 + rnd() * 0.012 : 0.022 + rnd() * 0.012;
+  const bark = [0.18 + rnd() * 0.08, 0.14 + rnd() * 0.06, 0.1 + rnd() * 0.04];
+  const at = (t, L) => [(L || lean) * t * t + bow * Math.sin(t * 3.1416), th * t, bow * 0.6 * Math.sin(t * 2.2)];
+  const rings = [7, 4, 2][lod];
+  const buildTrunk = (L, fat, flareK) => {
+    const pts = [];
+    for (let i = 0; i <= rings; i++) pts.push(at(Math.pow(i / rings, 1.55), L));
+    if (lod === 2) pts.push([L || lean, th + 0.2, 0]);
+    addLimb(m, pts, fat, fat * 0.55, [9, 6, 4][lod], bark, 0, 0.012, lod < 2 ? flareK : 0);
+    return pts;
+  };
+  const flare = (form === 1 ? 1.0 : 0.55) + rnd() * 0.85;
+  buildTrunk(lean, r0, flare);
+  if (form === 3 && lod < 2) {
+    // Second / third stems for multi-stem tropical habit.
+    const stems = 1 + ((rnd() * 2) | 0);
+    for (let s = 0; s < stems; s++) {
+      const a = rnd() * 6.28, off = 0.04 + rnd() * 0.05;
+      const L2 = lean + Math.cos(a) * 0.08;
+      const pts = [];
+      for (let i = 0; i <= rings; i++) {
+        const t = Math.pow(i / rings, 1.5);
+        const p = at(t, L2);
+        pts.push([p[0] + Math.cos(a) * off * (1 - t), p[1] * (0.85 + rnd() * 0.1), p[2] + Math.sin(a) * off * (1 - t)]);
+      }
+      addLimb(m, pts, r0 * 0.7, r0 * 0.4, [7, 5, 3][lod], bark, 0, 0.014, lod < 2 ? flare * 0.6 : 0);
+    }
+  }
+  const lobes = form === 2 ? 7 + (Math.abs(sd) % 3)
+    : form === 1 ? 4 + (Math.abs(sd) % 2)
+    : form === 4 ? 4 + (Math.abs(sd) % 3)
+    : form === 5 ? 4 + (Math.abs(sd) % 2)
+    : 5 + (Math.abs(sd) % 4);
+  const spread = form === 2 ? 0.14 + rnd() * 0.08
+    : form === 1 ? 0.12 + rnd() * 0.1
+    : form === 5 ? 0.1 + rnd() * 0.08
+    : form === 4 ? 0.22 + rnd() * 0.16
+    : 0.18 + rnd() * 0.14;
+  const hue = rnd();
+  const green = [
+    0.04 + hue * 0.03 + (form === 4 ? 0.02 : 0),
+    0.1 + hue * 0.04 + (form === 2 ? 0.02 : 0),
+    0.025 + (1 - hue) * 0.015
+  ];
   for (let i = 0; i < lobes; i++) {
     const blob = icosphere(lod ? 1 : 2, 1, [0.1, 0.1, 0.1]), n = blob.pos.length / 3;
-    const ang = i * 2.399 + rnd() * 0.8;
-    const rr = i === 0 ? 0 : spread * (0.6 + rnd() * 0.7);
-    const size = (i === 0 ? 0.27 : 0.18) + rnd() * 0.09;
-    const cy = th + (i === 0 ? 0.17 : rnd() * 0.15) + size * 0.3;
+    const ang = form === 4 ? rnd() * 6.28 : i * 2.399 + rnd() * (form === 2 ? 0.35 : 0.9);
+    const rr = i === 0 ? (form === 2 ? spread * 0.2 : 0) : spread * (form === 4 ? 0.4 + rnd() : 0.55 + rnd() * 0.7);
+    const size = (i === 0 ? (form === 1 ? 0.2 : 0.26) : (form === 1 ? 0.14 : 0.16)) + rnd() * (form === 2 ? 0.07 : 0.1);
+    const cy = th + (i === 0 ? (form === 1 ? 0.22 : 0.15) : rnd() * (form === 1 ? 0.22 : 0.14)) + size * 0.28;
     const cx = Math.cos(ang) * rr + lean, cz = Math.sin(ang) * rr;
-    const flat = 0.5 + rnd() * 0.2;
-    if (lod < 2) {
-      const s0 = at(i === 0 ? 1 : 0.68 + rnd() * 0.3), e = [cx, cy - size * flat * 0.2, cz], q = [];
+    const flat = form === 2 ? 0.7 + rnd() * 0.15 : form === 1 ? 0.4 + rnd() * 0.15 : 0.48 + rnd() * 0.22;
+    if (lod < 2 && (i === 0 || form !== 2 || rnd() > 0.3)) {
+      const s0 = at(i === 0 ? 1 : 0.62 + rnd() * 0.35), e = [cx, cy - size * flat * 0.2, cz], q = [];
       const c = [s0[0] + (e[0] - s0[0]) * 0.25, s0[1] + (e[1] - s0[1]) * 0.8, s0[2] + (e[2] - s0[2]) * 0.25];
-      for (let k = 0; k <= 3; k++) { const t = k / 3, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), d = t * t; q.push([s0[0] * a + c[0] * b + e[0] * d, s0[1] * a + c[1] * b + e[1] * d, s0[2] * a + c[2] * b + e[2] * d]); }
-      addLimb(m, q, r0 * (i === 0 ? 0.6 : 0.36), r0 * 0.13, [5, 4][lod], bark, 0.012, 0.03, 0);
+      for (let k = 0; k <= 3; k++) {
+        const t = k / 3, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), d = t * t;
+        q.push([s0[0] * a + c[0] * b + e[0] * d, s0[1] * a + c[1] * b + e[1] * d, s0[2] * a + c[2] * b + e[2] * d]);
+      }
+      addLimb(m, q, r0 * (i === 0 ? 0.55 : 0.32), r0 * 0.12, [5, 4][lod], bark, 0.012, 0.032, 0);
     }
     for (let v = 0; v < n; v++) {
       const x = blob.pos[v * 3], y = blob.pos[v * 3 + 1], z = blob.pos[v * 3 + 2];
-      const lump = 0.72 + 0.4 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9) + 0.22 * vnoise(x * 5.3 + i * 7.7, z * 5.3 + y * 4.1 + sd);
-      const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.55 : flat), pz = z * lump * size;
+      const lump = 0.7 + 0.42 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9) + 0.24 * vnoise(x * 5.3 + i * 7.7, z * 5.3 + y * 4.1 + sd);
+      const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.5 : flat), pz = z * lump * size;
       blob.pos[v * 3] = px + cx; blob.pos[v * 3 + 1] = py + cy; blob.pos[v * 3 + 2] = pz + cz;
-      // Lit leaves on top, the shaded inside of the crown underneath.
       const up = Math.max(0, Math.min(1, y * 0.5 + 0.5));
-      const lightK = 0.35 + 0.65 * up * up;
-      blob.col[v * 3] = (0.05 + hue * 0.025) * lightK;
-      blob.col[v * 3 + 1] = (0.115 + hue * 0.03) * lightK;
-      blob.col[v * 3 + 2] = (0.03 + (1 - hue) * 0.012) * lightK;
-      blob.sway[v] = 0.03 + up * 0.035;
+      const lightK = 0.32 + 0.68 * up * up;
+      // Sparse crowns leave darker interiors; rounded ones stay denser/brighter on top.
+      const dens = form === 2 ? 1.08 : form === 4 ? 0.85 : 1;
+      blob.col[v * 3] = green[0] * lightK * dens;
+      blob.col[v * 3 + 1] = green[1] * lightK * dens;
+      blob.col[v * 3 + 2] = green[2] * lightK * dens;
+      blob.sway[v] = (form === 5 ? 0.04 : 0.028) + up * 0.038;
       blob.kind[v] = CROWN;
     }
     appendMesh(m, blob, 0, 0, 0, 0, 1, null, 1);
@@ -689,15 +794,24 @@ function makeSkiff() {
   return m;
 }
 
+// One grass clump: irregular blades of mixed height, width, lean and tip taper — not a
+// radial starburst of identical quads.
 function grassGeom() {
   const pos = [], uv = [], idx = [];
   let base = 0;
-  for (let a = 0; a < 4; a++) {
-    const ang = a * Math.PI / 4 + (a === 3 ? 0.2 : 0);
+  const blades = 7;
+  for (let a = 0; a < blades; a++) {
+    const ang = a * 2.399 + (a * 0.17) % 1.1;
     const c = Math.cos(ang), s = Math.sin(ang);
-    const lean = 0.18 + (a % 2) * 0.08;
-    const h = 0.85 + (a % 3) * 0.12;
-    const corn = [[-0.16, 0, 0, 0], [0.16, 0, 1, 0], [0.035, h, 1, 1], [-0.035, h, 0, 1]];
+    const lean = 0.08 + (a % 5) * 0.06 + (a === 2 ? 0.12 : 0);
+    const h = 0.55 + (a % 4) * 0.14 + ((a * 3) % 5) * 0.05;
+    const w0 = 0.09 + (a % 3) * 0.035;
+    const w1 = 0.012 + (a % 2) * 0.01;
+    const bend = ((a % 3) - 1) * 0.04;
+    const corn = [
+      [-w0, 0, 0, 0], [w0, 0, 1, 0],
+      [w1 + bend, h, 1, 1], [-w1 + bend, h, 0, 1]
+    ];
     for (let i = 0; i < 4; i++) {
       const px = corn[i][0], py = corn[i][1];
       pos.push(px * c + lean * py * s, py, px * s - lean * py * c);
@@ -787,9 +901,10 @@ Scatter.prototype.proto = function (lods, radius, cuts) {
   this.protos.push({ lods: lods, r: radius, cuts: cuts || [] });
   return this.protos.length - 1;
 };
-Scatter.prototype.add = function (id, x, y, z, rot, sc, tint, sy) {
+// soft: wind stiffness (i1.w); bias: leaf age/hue bias packed in tint.w (i2.w).
+Scatter.prototype.add = function (id, x, y, z, rot, sc, tint, sy, soft, bias) {
   const t = tint || [1, 1, 1];
-  this.data.push(x, y, z, rot, sc, sy || 1, 0, 0, t[0], t[1], t[2], 0);
+  this.data.push(x, y, z, rot, sc, sy || 1, 0, soft == null ? 1 : soft, t[0], t[1], t[2], bias == null ? 0.5 : bias);
   this.kind.push(id);
 };
 Scatter.prototype.finish = function () {
@@ -1887,19 +2002,19 @@ async function main() {
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
     const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [32]));
     // Close palms keep every leaflet; beyond ~22 m / ~72 m the coarser crowns carry the silhouette.
-    const palmIds = [3, 8, 21].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 9, [22, 72]));
+    const palmIds = [3, 8, 21, 34, 47, 55].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 9, [22, 72]));
     // A palm leans the way the ground falls, toward the open light over the water.
     const leanYaw = (x, z) => {
       const gx = fieldSample(world, x + 3, z) - fieldSample(world, x - 3, z), gz = fieldSample(world, x, z + 3) - fieldSample(world, x, z - 3);
       return Math.atan2(-gz, -gx) + (rnd() - 0.5) * 1.4;
     };
-    const shrubIds = protoSet([5, 9, 14], makeShrub, 0.5);
-    const canopyIds = protoSet([6, 13], makeCanopy, 1.1);
-    const fernIds = protoSet([7, 12, 19], makeFern, 0.8);
-    const broadIds = protoSet([2, 15, 28], makeBroad, 0.9);
+    const shrubIds = protoSet([5, 9, 14, 22, 27], makeShrub, 0.5);
+    const canopyIds = protoSet([6, 13, 18, 25], makeCanopy, 1.1);
+    const fernIds = protoSet([7, 12, 19, 24, 30, 33], makeFern, 0.85);
+    const broadIds = protoSet([2, 15, 28, 36, 41], makeBroad, 0.95);
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
-    const fernBudget = Math.max(10, (q.broad * 0.55) | 0);
-    const canopyBudget = Math.max(4, (q.broad * 0.28) | 0);
+    const fernBudget = Math.max(14, (q.broad * 0.7) | 0);
+    const canopyBudget = Math.max(5, (q.broad * 0.32) | 0);
     const clearR = 9;
     const sideX = -sdz, sideZ = sdx;
     const rowOx = shore ? shore.x : beach.x;
@@ -1908,46 +2023,56 @@ async function main() {
     const rowInZ = shore ? -shore.fz : -sdz;
     const rowSideX = shore ? -shore.fz : sideX;
     const rowSideZ = shore ? shore.fx : sideZ;
-    const shrubBudget = Math.max(8, (q.broad * 0.45) | 0);
+    const shrubBudget = Math.max(10, (q.broad * 0.55) | 0);
+    // Habitat helpers: moist hollows, forest shade, coastal exposure.
+    const moistAt = (x, z, h) => smooth01(0.2, 2.2, h) * (1 - smooth01(0.2, 0.7, fieldSlope(world, x, z))) * (0.45 + 0.55 * vnoise(x * 0.02 + 3, z * 0.02));
+    const plantSoft = () => 0.65 + rnd() * 0.7;
+    const plantBias = () => rnd();
     for (let i = 0; i < 9 && palms < q.palms; i++) {
       const along = shore
-        ? (Math.sign(i - 4.5) * (3.8 + Math.abs(i - 4) * 4.0))
-        : (i - 4) * (7.5 + (i % 3));
-      const back = shore ? (1.2 + (i % 3) * 1.1) : (7 + (i % 3) * 3.5);
+        ? (Math.sign(i - 4.5) * (3.8 + Math.abs(i - 4) * 4.0 + (i % 2) * 1.2))
+        : (i - 4) * (7.5 + (i % 3)) + (rnd() - 0.5) * 2.5;
+      const back = shore ? (1.2 + (i % 3) * 1.1 + rnd() * 0.8) : (7 + (i % 3) * 3.5 + rnd() * 1.5);
       const x = rowOx + rowInX * back + rowSideX * along;
       const z = rowOz + rowInZ * back + rowSideZ * along;
       const h = fieldSample(world, x, z);
       if (h < 0.4 || h > 4.5) continue;
-      const tint = [0.9 + rnd() * 0.16, 0.92 + rnd() * 0.14, 0.84 + rnd() * 0.16];
-      const psc = 0.85 + rnd() * 0.3;
-      scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.92 + rnd() * 0.2);
+      const tint = [0.88 + rnd() * 0.2, 0.9 + rnd() * 0.16, 0.8 + rnd() * 0.2];
+      const psc = 0.75 + rnd() * 0.45;
+      scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.88 + rnd() * 0.28, 1.1 + rnd() * 0.35, plantBias());
       walkHits.push(x, z, 0.4 * psc);
       palms++;
     }
-    for (let i = 0; i < (q.palms + q.broad) * 20 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget || ferns < fernBudget || canopies < canopyBudget); i++) {
+    for (let i = 0; i < (q.palms + q.broad) * 24 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget || ferns < fernBudget || canopies < canopyBudget); i++) {
       const x = (rnd() - 0.5) * 460;
       const z = (rnd() - 0.5) * 400;
       const h = fieldSample(world, x, z);
       const s = fieldSlope(world, x, z);
       if (Math.hypot(x - beach.x, z - beach.z) < clearR) continue;
       const clump = vnoise(x * 0.012, z * 0.012);
-      const tint = [0.86 + rnd() * 0.22, 0.9 + rnd() * 0.18, 0.84 + rnd() * 0.2];
-      if (palms < q.palms && h > 0.6 && h < 5.5 && s < 0.32 && clump > 0.42) {
-        const psc = 0.8 + rnd() * 0.4;
-        scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.9 + rnd() * 0.25);
+      const clump2 = vnoise(x * 0.035 + 8, z * 0.035);
+      const fm = forestMask(x, z, h, s);
+      const moist = moistAt(x, z, h);
+      const tint = [0.82 + rnd() * 0.28, 0.86 + rnd() * 0.22, 0.78 + rnd() * 0.26];
+      // Coastal palms: wind-exposed, irregular gaps on sand.
+      if (palms < q.palms && h > 0.55 && h < 5.8 && s < 0.34 && clump > 0.38 && (h < 2.2 || clump2 > 0.35)) {
+        const psc = 0.7 + rnd() * 0.55;
+        scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.85 + rnd() * 0.35, 1.05 + rnd() * 0.4, plantBias());
         walkHits.push(x, z, 0.4 * psc);
         palms++;
-      } else if (shrubs < shrubBudget && h > 0.35 && h < 2.4 && s < 0.36 && clump > 0.36) {
-        scatter.add(pick(shrubIds, x, z), x, h, z, rnd() * 6.28, 1.8 + rnd() * 1.5, tint, 0.7 + rnd() * 0.5);
+      } else if (shrubs < shrubBudget && h > 0.3 && h < 2.8 && s < 0.4 && clump > 0.3 && (h < 1.6 || clump2 > 0.4)) {
+        // Beach interior shrubs in irregular clusters.
+        scatter.add(pick(shrubIds, x, z), x, h, z, rnd() * 6.28, 1.5 + rnd() * 1.9, tint, 0.65 + rnd() * 0.6, plantSoft(), plantBias());
         shrubs++;
-      } else if (canopies < canopyBudget && h > 7 && h < 24 && s < 0.3 && clump > 0.5) {
-        scatter.add(pick(canopyIds, x, z), x, h, z, rnd() * 6.28, 5.2 + rnd() * 2.4, tint, 0.9 + rnd() * 0.25);
-        canopies++;
-      } else if (ferns < fernBudget && h > 1.4 && h < 12 && s < 0.34 && clump > 0.58) {
-        scatter.add(pick(fernIds, x, z), x, h, z, rnd() * 6.28, 1.3 + rnd() * 0.9, tint, 0.6 + rnd() * 0.4);
+      } else if (ferns < fernBudget && h > 1.1 && h < 14 && s < 0.4 && (moist > 0.45 || fm > 0.35) && clump > 0.4) {
+        // Ferns favour humid lowlands and shaded forest floor.
+        scatter.add(pick(fernIds, x, z), x, h, z, rnd() * 6.28, 1.15 + rnd() * 1.15, tint, 0.55 + rnd() * 0.5, 0.75 + rnd() * 0.4, plantBias());
         ferns++;
-      } else if (broads < q.broad && h > 3.2 && h < 18 && s < 0.38 && clump > 0.46) {
-        scatter.add(pick(broadIds, x, z), x, h, z, rnd() * 6.28, 5.8 + rnd() * 2.8, tint, 0.85 + rnd() * 0.3);
+      } else if (canopies < canopyBudget && h > 6 && h < 26 && s < 0.32 && fm > 0.2 && clump > 0.45) {
+        scatter.add(pick(canopyIds, x, z), x, h, z, rnd() * 6.28, 4.6 + rnd() * 3.2, tint, 0.85 + rnd() * 0.35, plantSoft(), plantBias());
+        canopies++;
+      } else if (broads < q.broad && h > 2.4 && h < 18 && s < 0.4 && (fm > 0.15 || moist > 0.4) && clump > 0.38) {
+        scatter.add(pick(broadIds, x, z), x, h, z, rnd() * 6.28, 4.8 + rnd() * 3.4, tint, 0.8 + rnd() * 0.4, plantSoft(), plantBias());
         broads++;
       }
     }
@@ -1959,7 +2084,7 @@ async function main() {
       const h = fieldSample(world, x, z);
       if (h < 0.7 || h > 9 || fieldSlope(world, x, z) > 0.35) return false;
       const f = flowerIds[(rnd() * flowerIds.length) | 0], rot = rnd() * 6.28, sc = 0.9 + rnd() * 0.5, c = Math.cos(rot), s = Math.sin(rot), B = f.blooms;
-      scatter.add(f.id, x, h - 0.02, z, rot, sc, [0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2], 1);
+      scatter.add(f.id, x, h - 0.02, z, rot, sc, [0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2], 1, 0.85 + rnd() * 0.4, rnd());
       for (let i = 0; i < B.length; i += 6) {
         blooms.push(x + (B[i] * c - B[i + 2] * s) * sc, h - 0.02 + B[i + 1] * sc, z + (B[i] * s + B[i + 2] * c) * sc, B[i + 3] * c - B[i + 4] * s, B[i + 3] * s + B[i + 4] * c);
         perch.push(x, z, sc, scatter.kind.length - 1, B[i + 5]);
@@ -1973,20 +2098,34 @@ async function main() {
       if (h < 2.2 || vnoise(x * 0.02 + 9, z * 0.02) < 0.52 || forestMask(x, z, h, fieldSlope(world, x, z)) > 0.45) continue;
       if (plantFlower(x, z)) n++;
     }
-    // The interior is forest. Crowns touch, with clearings where the mask opens.
-    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 0.75, [38, 115]));
+    // Interior forest: pick form by habitat — slender near coast, emergent inland, rounded in dense cover.
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 0.75, [38, 115]));
     let trees = 0;
-    for (let i = 0; i < q.forest * 30 && trees < q.forest; i++) {
+    for (let i = 0; i < q.forest * 32 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
       const z = (rnd() - 0.5) * 410;
       const h = fieldSample(world, x, z);
       if (h < 1.9) continue;
-      const fm = forestMask(x, z, h, fieldSlope(world, x, z));
-      if (fm < 0.25 + rnd() * 0.5) continue;
-      // Taller in the sheltered middle, lower and wind-pressed near the coast.
-      const tall = 7.5 + smooth01(3, 14, h) * 6 + rnd() * 5;
-      const tint = [0.8 + rnd() * 0.45, 0.82 + rnd() * 0.36, 0.75 + rnd() * 0.5];
-      scatter.add(treeIds[(rnd() * treeIds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, 0.85 + rnd() * 0.4);
+      const s = fieldSlope(world, x, z);
+      const fm = forestMask(x, z, h, s);
+      if (fm < 0.22 + rnd() * 0.48) continue;
+      // Competition-like spacing: skip if a coarse noise cell is already "taken".
+      if (vnoise(x * 0.045 + 2, z * 0.045) < 0.22 && rnd() < 0.55) continue;
+      const inland = smooth01(3, 14, h);
+      const tall = (h < 4 ? 6.2 : 7.2) + inland * (5.5 + rnd() * 3) + rnd() * 4;
+      const sy = 0.78 + rnd() * 0.5;
+      const tint = [0.75 + rnd() * 0.5, 0.78 + rnd() * 0.4, 0.7 + rnd() * 0.45];
+      // Habitat bias: slender coastal (seed%6==5), emergent/round inland dense (1,2).
+      const seeds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218];
+      let pickIds = treeIds;
+      if (h < 4.5 && inland < 0.35) {
+        const coastal = treeIds.filter((_, k) => seeds[k] % 6 === 5 || seeds[k] % 6 === 4);
+        if (coastal.length) pickIds = coastal;
+      } else if (fm > 0.65 && inland > 0.45) {
+        const deep = treeIds.filter((_, k) => seeds[k] % 6 === 1 || seeds[k] % 6 === 2 || seeds[k] % 6 === 3);
+        if (deep.length) pickIds = deep;
+      }
+      scatter.add(pickIds[(rnd() * pickIds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, sy, 0.7 + rnd() * 0.55, rnd());
       walkHits.push(x, z, 0.55 * tall);
       trees++;
     }
@@ -2054,18 +2193,27 @@ async function main() {
 
     const grassList = [];
     const weedList = [];
-    for (let i = 0; i < (q.grass + q.weed) * 8 && (grassList.length < q.grass || weedList.length < q.weed); i++) {
+    for (let i = 0; i < (q.grass + q.weed) * 10 && (grassList.length / 4 < q.grass || weedList.length / 4 < q.weed); i++) {
       const x = (rnd() - 0.5) * 460;
       const z = (rnd() - 0.5) * 400;
       const h = fieldSample(world, x, z);
       const s = fieldSlope(world, x, z);
       const fromBeach = Math.hypot(x - beach.x, z - beach.z);
-      if (grassList.length < 70 && h > 0.28 && h < 1.15 && s < 0.18 && fromBeach > 16 && fromBeach < 70) {
-        grassList.push(x, z, rnd() * 6.28, 0.22 + rnd() * 0.2);
-      } else if (grassList.length < q.grass && h > 1.5 && h < 28 && s < 0.48 && vnoise(x * 0.03, z * 0.03) > 0.38) {
-        grassList.push(x, z, rnd() * 6.28, 0.45 + rnd() * 0.55);
-      } else if (weedList.length < q.weed && h < -0.35 && h > -3.2 && s < 0.5 && x > 20) {
-        weedList.push(x, z, rnd() * 6.28, -(0.7 + rnd() * 0.8));
+      const patch = vnoise(x * 0.028, z * 0.028);
+      const fine = vnoise(x * 0.09 + 4, z * 0.09);
+      // Short dune / coastal grass in irregular open patches — leave sandy gaps.
+      if (grassList.length / 4 < Math.min(90, q.grass * 0.12) && h > 0.25 && h < 1.2 && s < 0.2 && fromBeach > 14 && fromBeach < 75 && patch > 0.42) {
+        grassList.push(x, z, rnd() * 6.28, 0.16 + rnd() * 0.22 + fine * 0.08);
+      } else if (grassList.length / 4 < q.grass && h > 1.3 && h < 28 && s < 0.5 && patch > 0.32) {
+        // Inland meadow vs forest-edge wisps; under dense canopy, thinner short cover.
+        const under = forestMask(x, z, h, s);
+        if (under > 0.65 && fine < 0.45) continue;
+        const sc = under > 0.4
+          ? 0.28 + rnd() * 0.35
+          : (h < 2.5 ? 0.35 + rnd() * 0.4 : 0.45 + rnd() * 0.65);
+        grassList.push(x, z, rnd() * 6.28, sc * (0.85 + fine * 0.35));
+      } else if (weedList.length / 4 < q.weed && h < -0.35 && h > -3.2 && s < 0.5 && x > 20 && patch > 0.3) {
+        weedList.push(x, z, rnd() * 6.28, -(0.55 + rnd() * 0.95));
       }
     }
     const grassInst = new Float32Array(grassList.length + weedList.length);
