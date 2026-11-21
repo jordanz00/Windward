@@ -698,10 +698,11 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // Under the forest the crowns hide half the sky from the ground, the trunks and the low leaves.
   let fld = sampleField(world.xz);
   let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz)) * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
-  let open = 1.0 - 0.55 * roof;
+  // Deeper canopy occlusion under the forest roof; crowns still catch open sky.
+  let open = 1.0 - mix(0.62, 0.28, sat(leaf)) * roof;
   // The same panorama that paints the sky and the water lights the ground. Leaves take more
   // of the upper sky; a face turned down takes more of the sand bounce.
-  let sky = skyIrradiance(n) * mix(mix(0.45, 1.0, hemi), 0.9, leaf) * open;
+  let sky = skyIrradiance(n) * mix(mix(0.42, 1.0, hemi), 0.95, leaf) * open;
   let ground = vec3<f32>(0.42, 0.34, 0.22) * F.amb.w * (1.0 - hemi) * open;
   // Soften the lit / unlit edge a little so a hard sun does not cut every trunk in half.
   let gold = sat(F.day.w);
@@ -724,9 +725,11 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // Rain and dew: bark and soil soak dark, a leaf only deepens, and both take a film that shines.
   let wet = F.wx.y * step(0.05, world.y) * (1.0 - F.under);
   var col = albedo * mix(1.0, mix(0.6, 0.86, leaf), wet) * light;
-  // Light through the blade is yellower and more saturated than light off it.
-  col += albedo * vec3<f32>(1.25, 1.45, 0.3) * F.sunCol * max(-nl, 0.0) * sh * leaf;
   let V = normalize(F.camPos - world);
+  // Thin-leaf transmission: yellower through-light + soft rim when backlit.
+  let trans = max(-nl, 0.0) * leaf;
+  col += albedo * vec3<f32>(1.38, 1.58, 0.32) * F.sunCol * trans * sh * (0.9 + 0.35 * leaf);
+  col += albedo * F.sunCol * pow(sat(1.0 - abs(dot(n, V))), 2.8) * trans * sh * 0.28;
   let H = normalize(V + F.sunDir);
   // A wet leaf glints in the sun; wet bark and soil are mostly just dark. The sky shows in
   // a wet face only if the face is turned up to it, not round the edge of every shape.
@@ -735,8 +738,8 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
     let ndv = max(dot(n, V), 0.0);
     let fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
     // Tighter specular on leaves; wet bark still glints modestly.
-    let hard = mix(mix(48.0, 90.0, leaf), 70.0, wet);
-    col += F.sunCol * pow(max(dot(n, H), 0.0), hard) * step(0.0, nl) * sh * sheen * mix(0.35, 0.55, leaf);
+    let hard = mix(mix(48.0, 96.0, leaf), 70.0, wet);
+    col += F.sunCol * pow(max(dot(n, H), 0.0), hard) * step(0.0, nl) * sh * sheen * mix(0.32, 0.58, leaf);
     col += skyLook(reflect(-V, n), 0.0) * fr * max(gloss * 0.7, wet * mix(0.06, 0.18, leaf) * sat(n.y * 1.5)) * 0.35;
   }
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
@@ -792,7 +795,9 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   // Coral sand: pale, with broad slow changes in tone. The sharp detail is relief, not paint.
   var sandC = mix(vec3<f32>(0.71, 0.64, 0.51), vec3<f32>(0.60, 0.52, 0.39), n2(xz * 0.23) * 0.6 + n2(xz * 0.9) * 0.25);
   let wash = sin(dot(xz, vec2<f32>(0.42, 0.07)) + n2(xz * 0.15) * 3.0);
-  sandC *= 0.95 + 0.05 * wash;
+  sandC *= 0.94 + 0.05 * wash + 0.04 * (n2(xz * 18.0) - 0.5);
+  // Sparse shell grit / darker flecks — irregular, not a noise carpet.
+  sandC = mix(sandC, sandC * vec3<f32>(0.78, 0.74, 0.66), smoothstep(0.78, 0.92, n2(xz * 6.5)) * 0.35);
   // Sand the last high wash reached is still damp: darker, and it ends at a ragged line.
   let damp = 1.0 - smoothstep(-0.035, 0.035, y - dampLine(xz));
   sandC = mix(sandC, sandC * vec3<f32>(0.56, 0.55, 0.52), damp * 0.85);
@@ -808,8 +813,10 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   let litter = mix(vec3<f32>(0.035, 0.045, 0.022), vec3<f32>(0.075, 0.062, 0.035), n2(xz * 0.9));
   grassC = mix(grassC, litter, forest * 0.92);
   var rockC = mix(vec3<f32>(0.40, 0.38, 0.34), vec3<f32>(0.22, 0.21, 0.19), m);
-  rockC *= 0.86 + 0.18 * sin(y * 1.4 + m * 5.0);
+  rockC *= 0.84 + 0.2 * sin(y * 1.4 + m * 5.0) + 0.08 * (n2(xz * 4.2) - 0.5);
   rockC = mix(rockC, vec3<f32>(0.34, 0.36, 0.22), smoothstep(0.62, 0.86, n2(xz * 0.35)) * (1.0 - slope));
+  // Weathered lichen / damp seepage on shaded faces.
+  rockC = mix(rockC, rockC * vec3<f32>(0.7, 0.78, 0.62), smoothstep(0.55, 0.2, n.y) * smoothstep(0.45, 0.8, n2(xz * 1.1)) * 0.4);
   return sandC * sandW + grassC * grassW + rockC * rock;
 }
 
@@ -1037,18 +1044,20 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   var along = L.x;
   var across = L.y;
   if (k == 2) {
-    let ph = F.time * (2.4 + 0.65 * v) + in.p.x * 4.1 + in.p.y * 2.3 + in.p.z * 3.7 + id * 17.0 + in.i2.w * 9.0;
-    // A petal is stiffer than a leaf and only trembles.
-    let fl = (sin(ph) + 0.5 * sin(ph * 2.17 + 1.3)) * (0.011 + 0.014 * v) * select(1.0, 0.15, in.uv.y < -0.5);
+    // Leaflet / petal: tip-weighted multi-frequency flutter (Abyssal-style), out of step per blade.
+    let tip = sat(in.uv.y);
+    let ph = F.time * (2.55 + 0.85 * v) + in.p.x * 5.1 + in.p.y * 2.6 + in.p.z * 4.2 + id * 19.0 + in.i2.w * 11.0;
+    let fl = (sin(ph) + 0.48 * sin(ph * 2.41 + 1.2) + 0.22 * sin(ph * 5.3 + in.p.y * 3.1))
+      * (0.012 + 0.02 * v) * tip * tip * select(1.0, 0.14, in.uv.y < -0.5);
     along += fl;
-    across += fl * 0.8 * cos(ph * 0.7);
+    across += fl * 0.85 * cos(ph * 0.68 + 0.5);
   } else if (k == 3) {
     // Crown masses: delayed, soft wiggle — not locked to leaf flutter.
-    along += sin(F.time * (1.5 + 0.4 * id) + w.x * 0.7 + w.z * 0.55 + w.y) * 0.0055 * v;
-    across += sin(F.time * (0.9 + 0.3 * id) + w.z * 0.4) * 0.003 * v;
+    along += sin(F.time * (1.45 + 0.45 * id) + w.x * 0.65 + w.z * 0.5 + w.y) * 0.0065 * v;
+    across += sin(F.time * (0.85 + 0.35 * id) + w.z * 0.42) * 0.0035 * v;
   } else if (k == 1) {
     // Palm trunks barely move; frond bark (low sway verts) still ride plant lean.
-    along *= 0.35; across *= 0.35;
+    along *= 0.32; across *= 0.32;
   }
   return w + plantShift(vec2<f32>(along, across), in.c.w);
 }
@@ -1149,17 +1158,20 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     let upper = dot(n, Vv) > 0.0;
     if (!upper) {
       n = -n;
-      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.28, 0.58, 0.12))), 0.35) * 1.28;
+      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.28, 0.58, 0.12))), 0.35) * 1.32;
     }
     let rib = smoothstep(0.26, 0.0, abs(in.uv.x));
-    alb = mix(alb, alb * 1.22 + vec3<f32>(0.012, 0.018, 0.0), rib * 0.45);
+    alb = mix(alb, alb * 1.24 + vec3<f32>(0.014, 0.02, 0.0), rib * 0.5);
     // Desaturate mature faces slightly; keep young tips warmer.
     alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.55, 0.15))), 0.12 * (1.0 - in.uv.y));
-    let grit = 0.88 + 0.1 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.05 * sin(in.uv.y * 29.0);
+    let grit = 0.86 + 0.12 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.06 * sin(in.uv.y * 29.0);
     alb *= grit;
-    // More transmission, less wax — leaflets read as thin film, not painted plastic.
-    leaf = select(1.45, 0.78, upper);
-    gloss = select(0.02, 0.11 + 0.08 * rib, upper);
+    // Midrib V-fold in the shading normal — leaflets read as cupped blades, not flat cards.
+    let side = sign(in.uv.x + 1e-4);
+    n = normalize(n + side * cross(n, vec3<f32>(0.0, 1.0, 0.0)) * (0.18 + 0.22 * (1.0 - rib)) * select(-0.4, 1.0, upper));
+    // More transmission toward the tip; less wax — thin film, not painted plastic.
+    leaf = select(1.55, 0.72, upper) * (0.85 + 0.35 * in.uv.y);
+    gloss = select(0.015, 0.1 + 0.1 * rib, upper);
     if (in.world.y < -0.1) { gloss *= 0.15; leaf *= 0.45; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
@@ -1268,8 +1280,10 @@ struct GrassV {
   if (weed < 0.5) {
     let v = windAt(inst.xy);
     let id = fract(inst.x * 0.731 + inst.y * 0.417);
-    ph = v * v * 0.022 * (0.8 + 0.5 * sin(F.time * (2.2 + 1.5 * id) + id * 30.0))
-      + sin(F.time * (5.0 + 3.0 * id) + id * 50.0) * 0.035 * v * uv.y;
+    // Tip-weighted gust + secondary flutter — blades do not rock as one board.
+    ph = v * v * 0.024 * (0.75 + 0.55 * sin(F.time * (2.1 + 1.6 * id) + id * 30.0))
+      + sin(F.time * (5.2 + 3.2 * id) + id * 50.0) * 0.04 * v * uv.y
+      + sin(F.time * (9.5 + 4.0 * id) + id * 17.0) * 0.012 * v * uv.y * uv.y;
     dir = F.wind.xy;
   }
   w.x += ph * sway * dir.x;

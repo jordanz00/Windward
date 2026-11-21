@@ -316,16 +316,26 @@ function makePalm(seed, lod) {
   let P = [0, -0.2, 0];
   let last = null;
   const barkTone = [0.34 + age * 0.08, 0.30 + age * 0.05, 0.26 + age * 0.04];
+  // Gentle S-curve / lateral wander so trunks are not perfect arcs of a circle.
+  const bowZ = (rnd() - 0.5) * 0.18;
+  const bowX = (rnd() - 0.5) * 0.08;
   for (let i = 0; i <= rings; i++) {
     const t = i / rings, s = t * H;
     const th = lean * (1 - 0.92 * Math.pow(t, 0.75));
-    const T = [Math.sin(th), Math.cos(th), 0], X = [Math.cos(th), -Math.sin(th), 0];
-    const r = trunkFat - 0.028 * t + 0.16 * Math.exp(-s / 0.45) + 0.055 * smooth01(0.92, 1, t);
+    const T = unit([Math.sin(th) + bowX * Math.sin(t * 3.1), Math.cos(th), bowZ * Math.sin(t * 2.7)]);
+    const X0 = unit(cross(T, [0, 0, 1]));
+    const X = Math.hypot(X0[0], X0[1], X0[2]) < 0.2 ? unit(cross(T, [0, 1, 0])) : X0;
+    const Z = unit(cross(X, T));
+    // Slight oval cross-section + scar bumps along the height.
+    const oval = 0.92 + 0.1 * Math.sin(t * 9.0 + seed);
+    const scar = 1 + 0.045 * Math.sin(t * 22.0 + seed * 0.7);
+    const r = (trunkFat - 0.028 * t + 0.16 * Math.exp(-s / 0.45) + 0.055 * smooth01(0.92, 1, t)) * scar;
     const row = [];
     for (let k = 0; k <= sides; k++) {
-      const a = k / sides * 6.2832, ca = Math.cos(a), sa = Math.sin(a);
-      const nx = X[0] * ca, ny = X[1] * ca, nz = sa;
-      row.push(m.v(P[0] + nx * r, P[1] + ny * r, P[2] + nz * r, nx, ny, nz, barkTone[0], barkTone[1], barkTone[2], topSway * t * t, BARK, k / sides, s));
+      const a = k / sides * 6.2832, ca = Math.cos(a) * oval, sa = Math.sin(a);
+      const nx = X[0] * ca + Z[0] * sa, ny = X[1] * ca + Z[1] * sa, nz = X[2] * ca + Z[2] * sa;
+      const shade = 0.92 + 0.1 * Math.sin(a * 3.0 + t * 8.0);
+      row.push(m.v(P[0] + nx * r, P[1] + ny * r, P[2] + nz * r, nx, ny, nz, barkTone[0] * shade, barkTone[1] * shade, barkTone[2] * shade, topSway * t * t, BARK, k / sides, s));
     }
     if (last) for (let k = 0; k < sides; k++) { m.tri(last[k], row[k], last[k + 1]); m.tri(last[k + 1], row[k], row[k + 1]); }
     last = row;
