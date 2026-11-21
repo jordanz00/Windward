@@ -52,9 +52,20 @@ The water is a Gerstner swell running with the wind, with a bound harmonic that 
 
 A click writes into a height field on the GPU. The impulse is a crest with a trough around it, so the ring reads as a disturbance in the surface rather than a flat circle. It travels, meets the next click, and dies away. The swell is a set of layered waves, and the finer texture is the spectral tile, which drops out of the reflection once a pixel is wider than the wave. Looking along the water reflects the shore and the sky. Looking down shows the bottom through the water, darker and bluer as it gets deeper. There is no control panel. Each place chooses the swell, the color of the water, the sky, and where the camera sits: Tropical Lagoon, Open Ocean, Hidden Cove, Calm Lake, Stormy Ocean, Shallow Reef, and Swimming Pool.
 
-The seabed is a height field filled on the CPU once, then read by the GPU. Sunlight is a depth map of the ground and the trees, so a trunk throws a shadow across the sand and into the water. Each palm is its own trunk, with rings and a crown of separate leaflets, and the wind moves the tips more than the trunk. Shrubs, beach grass, and rocks are built the same way, with no shared model. Sound is filtered noise in the Web Audio API.
+The seabed is a height field filled on the CPU once, then read by the GPU. Sunlight is a depth map of the ground and the trees, so a trunk throws a shadow across the sand and into the water. Plants and rocks are a few dozen prototype meshes, built once and drawn as instances; the wind moves the tips more than the trunk. Sound is filtered noise in the Web Audio API.
 
 Nothing is allocated per frame on purpose: the uniform buffer, the bird list, and the scratch matrices are reused.
+
+### Geometry, light and startup
+
+- **Instances.** Every plant, rock and boat is one of a few dozen prototype meshes in a single vertex buffer. Each placed copy is twelve floats: position, yaw, scale, tint. Every frame the CPU culls the copies against the view, picks a level of detail by distance, and writes one instance buffer that serves the main view, the mirror and the near shadow map.
+- **Palms.** A coconut palm is a curved, tapering trunk with leaf-scar rings and 20 to 26 fronds placed by age: young ones upright, old ones hanging and yellowing. Each frond is a curved rachis carrying separate folded leaflets. Three levels of detail share the same fronds, so a palm does not change shape as it recedes. The other trees, shrubs and ferns have not been rebuilt this way yet.
+- **Shadows.** One depth map covers the island and is redrawn only when the sun moves. A second, 2048 texels across 52 m, follows the viewer so leaflets and trunks cast sharp shadows on the sand nearby.
+- **Sky.** Air and clouds are one small panorama: Rayleigh and Mie scattering, and cumulus marched through a slab with the march starting at each cloud's surface. It is baked a strip per frame and read by the sky, by reflections in water and wet sand, and by the haze.
+- **Sand.** Dry sand is shaded from a height: pits with raised rims, wind ripples in patches, and grain. Each scale is left out once it is smaller than a pixel. Below a ragged line the sand is damp, darker and smooth, and the last high wash has left a wrack line.
+- **Startup.** Render pipelines compile in parallel while the height field and the planting run. The surf simulation warms up over the first frames instead of before them. `window.__perf` holds the time of each startup step in milliseconds, and `?perf` in the address logs it.
+
+Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after. The built page is 252 KB, 74 KB gzipped. Frame rate on real GPUs has not been measured.
 
 ## License
 

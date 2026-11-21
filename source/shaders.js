@@ -284,7 +284,7 @@ fn cloudCover(p: vec2<f32>) -> f32 {
   let q = pd + (vec2<f32>(n2(pd * 0.31 + vec2<f32>(3.1, 0.0)), n2(pd * 0.31 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.2;
   let cells = n2(q * 1.5) * 0.74 + n2(q * 3.7 + vec2<f32>(4.0, 9.0)) * 0.26;
   let c = cells * (0.62 + 0.6 * n2(pd * 0.09 + vec2<f32>(5.0, 2.0)));
-  let thr = mix(0.66, 0.3, sat(F.mood.y));
+  let thr = mix(0.71, 0.3, sat(F.mood.y));
   return (c - thr) / (1.0 - thr);
 }
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
@@ -400,7 +400,8 @@ fn hazeColor(dir: vec3<f32>) -> vec3<f32> {
 fn skyReflect(rd: vec3<f32>) -> vec3<f32> {
   var col = skyColor(normalize(vec3<f32>(rd.x, max(rd.y, 0.004), rd.z)));
   if (rd.y < 0.0) {
-    col = mix(F.deepC.rgb, col, exp(rd.y * 22.0));
+    // That water is itself a mirror at this angle, so half of what comes back is still sky.
+    col = mix(mix(F.deepC.rgb, col, 0.5), col, exp(rd.y * 9.0));
   }
   return col;
 }
@@ -433,8 +434,9 @@ fn caustic(xz: vec2<f32>) -> f32 {
   let p = (surf + bend * 1.4) * cell;
   let e1 = laceCell(p, F.time * 1.3);
   let e2 = laceCell(p * 1.83 + vec2<f32>(5.3, 2.1), F.time * 1.7);
-  let l1 = 1.0 - smoothstep(0.0, 0.3, e1);
-  let l2 = 1.0 - smoothstep(0.0, 0.34, e2);
+  // Thin filaments with dark cells between. Wide lines read as a pale sheet with holes.
+  let l1 = 1.0 - smoothstep(0.0, 0.11, e1);
+  let l2 = 1.0 - smoothstep(0.0, 0.13, e2);
   let net = l1 * l1 * 0.75 + l2 * l2 * 0.4;
   return net * exp(-depth * 0.32) * smoothstep(0.03, 0.35, depth) * 0.5;
 }
@@ -500,7 +502,11 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
     let depth = max(-world.y, 0.0);
     let absorb = exp(-depth * vec3<f32>(0.38, 0.08, 0.05));
     light *= absorb;
-    if (world.y < -0.04) { light += F.sunCol * caustic(world.xz) * absorb * 0.55; }
+    // The ripples that gather sunlight into bright lines take it from the cells between them.
+    if (world.y < -0.04) {
+      let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
+      light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.4 - 0.16 * k) * absorb;
+    }
   }
   if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
   var col = albedo * light;
@@ -703,9 +709,10 @@ struct GeoV {
     let off = in.world.y - line - 0.05;
     let band = exp(-off * off * 420.0) + 0.25 * exp(-(off - 0.3) * (off - 0.3) * 150.0);
     let clump = smoothstep(0.42, 0.75, n2(in.world.xz * 0.9) * 0.6 + n2(in.world.xz * 4.5) * 0.4);
-    let bit = hash21(floor(in.world.xz * 38.0) + vec2<f32>(5.0, 9.0));
+    // Pieces of several sizes, not a sprinkle of equal dots.
+    let bit = n2(in.world.xz * 19.0) * 0.55 + n2(in.world.xz * 47.0 + vec2<f32>(5.0, 9.0)) * 0.45;
     let near = sat(1.3 - foot * 26.0);
-    let wrack = sat(band * clump * 1.6) * mix(0.35, step(0.45, bit), near);
+    let wrack = sat(band * clump * 1.6) * mix(0.3, smoothstep(0.5, 0.58, bit), near);
     alb = mix(alb, mix(vec3<f32>(0.05, 0.038, 0.025), vec3<f32>(0.16, 0.12, 0.07), bit), wrack * sandy * 0.85);
   }
   let sh = shoreFetch(in.world.xz);
@@ -1285,8 +1292,12 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   // The wind sea fades the same way once its crests pile up inside one pixel.
   let footLong = pix / max(abs(F.camPos.y - in.world.y) / max(distS, 0.1), 0.01);
   let seaKeep = (1.0 - smoothstep(5.0, 34.0, footLong)) * open;
-  var N = normalize(S.nrm + vec3<f32>(-ocn.y * seaKeep + rip.y - chop.x + cap.x * 0.1, 0.0, -ocn.z * seaKeep + rip.z - chop.y + cap.y * 0.1));
+  // Near the eye the wind ripples are resolved, so they tilt the surface itself: they
+  // wrinkle the reflection and bend the view of the bottom. Far off they only glint.
+  let capK = mix(0.1, 0.3, smoothstep(40.0, 6.0, distS));
+  var N = normalize(S.nrm + vec3<f32>(-ocn.y * seaKeep + rip.y - chop.x + cap.x * capK, 0.0, -ocn.z * seaKeep + rip.z - chop.y + cap.y * capK));
   let sh = shoreFetch(in.xz0);
+  var bore = 0.0;
   if (sh.inside > 0.5 && sh.bed > -1.5 && (in.sheet > 0.5 || sh.bed < 0.05)) {
     let e = 0.48;
     let spx = shoreFetch(in.xz0 + vec2<f32>(e, 0.0));
@@ -1305,8 +1316,12 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
       let take = smoothstep(0.012, 0.1, slopeLen) * (1.0 - smoothstep(0.58, 0.82, shoreOff)) * brim;
       let dhx = mix(spx.eta - smx.eta, spx.h - smx.h, onBeach);
       let dhz = mix(spz.eta - smz.eta, spz.h - smz.h, onBeach);
-      let sn = normalize(vec3<f32>(-dhx / (e * 2.0), 1.0, -dhz / (e * 2.0)));
+      // The surge keeps the wind ripples on its back. Without them it is a sheet of glass.
+      let sn = normalize(vec3<f32>(-dhx / (e * 2.0) + N.x, 1.0, -dhz / (e * 2.0) + N.z));
       N = normalize(mix(N, sn, take));
+      // A front this steep in water this shallow has already broken: it is a wall of
+      // air and water, not a clear face.
+      bore = smoothstep(0.16, 0.42, slopeLen) * smoothstep(-1.6, -0.5, sh.bed) * (1.0 - smoothstep(0.58, 0.82, shoreOff)) * brim;
     }
   }
   let V = normalize(F.camPos - in.world);
@@ -1342,6 +1357,10 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     onSheet = band * patches;
   }
 
+  if (bore > 0.01) {
+    let churn = n2(in.xz0 * 2.3 + sh.vel * F.time * 0.4) * 0.6 + n2(in.xz0 * 7.0 - vec2<f32>(F.time * 0.7, 0.0)) * 0.4;
+    foam = max(foam, sat(bore * (0.55 + 0.9 * churn)));
+  }
   if (in.sheet > 0.5 && sh.bed < -0.02) { discard; }
 
   if (F.under > 0.5) {
