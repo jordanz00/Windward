@@ -2725,7 +2725,15 @@ async function main() {
       device.queue.submit([enc.finish()]);
       if (doRead) {
         const wCap = viewW, hCap = viewH, bprCap = readBpr, fmtCap = format, buf = readBuf;
+        const readWatch = setTimeout(() => {
+          if (!window.__png && !window.__gpuerr) {
+            window.__gpuerr = 'read timeout';
+            console.error('READ timeout');
+            requestAnimationFrame(frame);
+          }
+        }, 45000);
         device.queue.onSubmittedWorkDone().then(() => buf.mapAsync(GPUMapMode.READ)).then(() => {
+          clearTimeout(readWatch);
           const data = new Uint8Array(buf.getMappedRange());
           const img = new Uint8ClampedArray(wCap * hCap * 4);
           const bgra = fmtCap === 'bgra8unorm';
@@ -2744,7 +2752,7 @@ async function main() {
           c2.getContext('2d').putImageData(new ImageData(img, wCap, hCap), 0, 0);
           window.__png = c2.toDataURL('image/png');
           requestAnimationFrame(frame);
-        }).catch((err) => { window.__gpuerr = String(err); console.error('READ', err); });
+        }).catch((err) => { clearTimeout(readWatch); window.__gpuerr = String(err); console.error('READ', err); });
         return;
       }
 

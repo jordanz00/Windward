@@ -1595,8 +1595,10 @@ let distS = length(world - F.camPos);
 let V = normalize(F.camPos - world);
 let cap = capillary(xz, distS / pow(max(V.y, 0.02), 0.6));
 let toCam = normalize(F.camPos.xz - xz + vec2<f32>(1e-4, 0.0));
-let calm = smoothstep(1500.0, 260.0, distS);
-let N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, calm) + vec3<f32>(cap.x, 0.0, cap.y) * calm + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.075);
+let calm = smoothstep(1600.0, 220.0, distS);
+let N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, calm * 0.92)
++ vec3<f32>(cap.x, 0.0, cap.y) * calm * 0.55
++ vec3<f32>(toCam.x, 0.0, toCam.y) * 0.06 * (1.0 - calm * 0.5));
 let ndv = max(dot(N, V), 0.02);
 let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
 var reflCol = skyColor(reflect(-V, N));
@@ -1673,19 +1675,30 @@ return oceanTap(tex, oceanRot(xz) / size).xyz;
 fn shapeField(xz: vec2<f32>) -> vec3<f32> {
 let a = oceanSample(shapeTex, xz, 220.0);
 let dist = length(xz - F.camPos.xz);
-let close = smoothstep(220.0, 50.0, dist);
+let close = smoothstep(260.0, 40.0, dist);
 let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
 let b = oceanSample(shapeTex, r, 151.0);
-return a + b * 0.28 * close;
+return a + b * 0.26 * close;
 }
 fn chopField(xz: vec2<f32>, pix: f32) -> vec2<f32> {
-let keep = 1.0 - smoothstep(0.28, 1.5, pix);
+let keep = 1.0 - smoothstep(0.22, 1.8, pix);
 if (keep <= 0.001) { return vec2<f32>(0.0); }
 let a = oceanSample(chopTex, xz, 24.0);
 let r = vec2<f32>(xz.x * 0.94 + xz.y * 0.34, -xz.x * 0.34 + xz.y * 0.94);
 let b = oceanSample(chopTex, r + vec2<f32>(11.0, 5.0), 15.5);
 let bs = vec2<f32>(b.y * 0.94 - b.z * 0.34, b.y * 0.34 + b.z * 0.94);
 return (a.yz + bs * 0.6) * keep;
+}
+fn waveWeights(dist: f32, foot: f32, footLong: f32, scale: f32) -> vec4<f32> {
+let open = mix(0.45, 1.0, scale);
+let swell = seaFade(dist);
+let shape = smoothstep(520.0, 85.0, dist) * (1.0 - smoothstep(6.0, 42.0, footLong)) * open;
+let chop = (1.0 - smoothstep(0.25, 1.85, foot)) * smoothstep(380.0, 55.0, dist) * open;
+let cap = mix(0.04, 0.28, smoothstep(55.0, 7.0, dist)) * (1.0 - smoothstep(0.12, 0.85, foot)) * open;
+return vec4<f32>(swell, shape, chop, cap);
+}
+fn seaEta(xz: vec2<f32>, w: vec4<f32>) -> f32 {
+return shapeField(xz).x * w.y + oceanSample(chopTex, xz, 24.0).x * w.z * 0.55;
 }
 fn warp(t: f32) -> f32 {
 let x = t * 2.0 - 1.0;
@@ -1696,13 +1709,20 @@ return sign(x) * u * 0.5 + 0.5;
 @vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
 let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
 let field = sampleField(xz);
-let s = seaAt(xz, field.y, max(-field.x, 0.2));
+let depth = max(-field.x, 0.2);
+let s = seaAt(xz, field.y, depth);
 let dist = length(xz - F.camPos.xz);
+let pix = max(dist * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
+let elev = max(abs(F.camPos.y), 0.15);
+let footLong = pix / max(elev / max(dist, 0.1), 0.01);
+let foot = pix / pow(elev / max(dist, 0.1), 0.6);
+let ww = waveWeights(dist, foot, footLong, field.y);
 let geom = smoothstep(1100.0, 140.0, dist);
-var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.05, 1.0, geom), xz.y + s.disp.z * geom);
-w.y += ripAt(xz).x * geom;
-let near = smoothstep(460.0, 70.0, dist);
-w.y += shapeField(xz).x * near * mix(0.25, 1.0, field.y);
+let graze = sat(elev / max(dist * 0.35, 1.0));
+let hfGeom = ww.y * smoothstep(0.04, 0.18, graze);
+var w = vec3<f32>(xz.x + s.disp.x * geom * ww.x, s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x), xz.y + s.disp.z * geom * ww.x);
+w.y += ripAt(xz).x * geom * graze;
+w.y += shapeField(xz).x * hfGeom;
 let bedW = sampleField(w.xz).x;
 if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05 + dist * 0.008, 0.0)); }
 var o: WaterV;
@@ -1717,7 +1737,11 @@ let xz = SH.origin + SH.along * (uv.x * SH.nx * SH.dx) + SH.sea * (uv.y * SH.nz 
 let sh = shoreFetch(xz);
 let field = sampleField(xz);
 let s = seaAt(xz, field.y, max(-field.x, 0.2));
-var y = s.disp.y + shapeField(xz).x * smoothstep(460.0, 70.0, length(xz - F.camPos.xz));
+let distSh = length(xz - F.camPos.xz);
+let pixSh = max(distSh * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
+let elevSh = max(abs(F.camPos.y), 0.15);
+let wwSh = waveWeights(distSh, pixSh / pow(elevSh / max(distSh, 0.1), 0.6), pixSh / max(elevSh / max(distSh, 0.1), 0.01), field.y);
+var y = s.disp.y * mix(0.2, 1.0, wwSh.x) + shapeField(xz).x * wwSh.y;
 if (sh.inside > 0.5) {
 let hVis = min(sh.h, 0.26);
 y = field.x + hVis + 0.018;
@@ -1986,7 +2010,8 @@ if (in.sheet < 0.5 && drawSheet) { discard; }
 let field = sampleField(in.xz0);
 let scale = field.y;
 let bed = field.x;
-let S = seaAt(in.xz0, scale, max(-bed, 0.2));
+let depthW = max(-bed, 0.2);
+let S = seaAt(in.xz0, scale, depthW);
 let distS = length(in.world - F.camPos);
 let rip = ripAt(in.xz0);
 let cap = capillary(in.xz0, distS);
@@ -1994,15 +2019,24 @@ let ocn = shapeField(in.xz0);
 let gl = oceanSample(glintTex, in.xz0, 4.0);
 let pix = max(distS * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
 let open = mix(0.4, 1.0, scale);
-let foot = pix / pow(max(abs(F.camPos.y - in.world.y) / max(distS, 0.1), 0.02), 0.6);
-let chop = chopField(in.xz0, foot) * mix(0.5, 1.0, scale);
-let footLong = pix / max(abs(F.camPos.y - in.world.y) / max(distS, 0.1), 0.01);
-let seaKeep = (1.0 - smoothstep(5.0, 34.0, footLong)) * open;
-let capK = mix(0.1, 0.3, smoothstep(40.0, 6.0, distS));
-var N = normalize(S.nrm + vec3<f32>(-ocn.y * seaKeep + rip.y - chop.x + cap.x * capK, 0.0, -ocn.z * seaKeep + rip.z - chop.y + cap.y * capK));
+let elev = max(abs(F.camPos.y - in.world.y), 0.08);
+let foot = pix / pow(elev / max(distS, 0.1), 0.6);
+let footLong = pix / max(elev / max(distS, 0.1), 0.01);
+let ww = waveWeights(distS, foot, footLong, scale);
+let chop = chopField(in.xz0, foot) * ww.z;
+var N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, ww.x)
++ vec3<f32>(-ocn.y * ww.y + rip.y * ww.y - chop.x + cap.x * ww.w, 0.0,
+-ocn.z * ww.y + rip.z * ww.y - chop.y + cap.y * ww.w));
+let eN = max(mix(0.18, 0.7, sat(foot * 0.7)), pix * 2.0);
+let h0 = seaEta(in.xz0, ww);
+let hx = seaEta(in.xz0 + vec2<f32>(eN, 0.0), ww);
+let hz = seaEta(in.xz0 + vec2<f32>(0.0, eN), ww);
+let Nfd = normalize(vec3<f32>((h0 - hx) / eN, 1.0, (h0 - hz) / eN));
+let fdK = (0.3 + 0.45 * sat(foot * 1.1)) * sat(ww.y + ww.z);
+N = normalize(mix(N, Nfd, fdK));
 if (F.wx.x > 0.01 && pix < 0.05) {
 let rr = rainRings(in.xz0) * (1.0 - smoothstep(0.02, 0.05, pix));
-N = normalize(N + vec3<f32>(rr.x, 0.0, rr.y));
+N = normalize(N + vec3<f32>(rr.x, 0.0, rr.y) * ww.w);
 }
 let sh = shoreFetch(in.xz0);
 var bore = 0.0;
@@ -2087,34 +2121,32 @@ let px = vec2<i32>(frag.xy);
 let dep = textureLoad(sceneDepth, px, 0);
 let swash = sh.inside > 0.5 && sh.bed > -0.12 && (sh.h > 0.018 || sh.foam > 0.2);
 if (!swash && dep < 0.999 && dep < frag.z - 0.00015) { discard; }
-var reflN = N;
-if (distS < 95.0) {
-reflN = normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * 0.7);
-}
-let lost = smoothstep(0.28, 1.5, foot) * mix(0.5, 1.0, scale);
+let lost = smoothstep(0.22, 1.6, foot) * mix(0.45, 1.0, scale);
 let toCam = normalize(F.camPos.xz - in.xz0 + vec2<f32>(1e-4, 0.0));
-reflN = normalize(reflN + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.075 * lost);
+var reflN = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), N, 1.0 - 0.55 * lost)
++ vec3<f32>(toCam.x, 0.0, toCam.y) * 0.06 * lost);
+let nearRefl = smoothstep(110.0, 25.0, distS) * ww.y;
+reflN = normalize(reflN + vec3<f32>(-ocn.y, 0.0, -ocn.z) * 0.35 * nearRefl);
 var reflCol = skyReflect(reflect(-V, reflN));
 let Rd = reflect(-V, reflN);
 if (F.reflOn > 0.5) {
 var uv = frag.xy / F.res;
 let tv = normalize(in.xz0 - F.camPos.xz + vec2<f32>(1e-4, 0.0));
-let rn = N.xz + toCam * 0.075 * lost;
+let rn = reflN.xz;
 let nt = dot(rn, tv);
 let ns = dot(rn, vec2<f32>(-tv.y, tv.x));
-let graze = sat(abs(V.y) + 0.12);
-uv.y -= clamp(nt / max(F.tanHalf, 0.2), -0.22, 0.22) * reflK;
-uv.x += clamp(ns * graze / max(F.tanHalf * F.aspect, 0.2), -0.08, 0.08) * reflK;
+let graze = sat(abs(V.y) * 1.4 + 0.05);
+let warpK = reflK * mix(0.35, 1.0, graze);
+uv.y -= clamp(nt / max(F.tanHalf, 0.2), -0.16, 0.16) * warpK;
+uv.x += clamp(ns * graze / max(F.tanHalf * F.aspect, 0.2), -0.06, 0.06) * warpK;
 uv = clamp(uv, vec2<f32>(0.004), vec2<f32>(0.996));
-let edge = 1.0;
-if (edge > 0.001) {
-let blur = 0.006 + rough * 0.05;
+let conf = sat(graze * 1.8) * (1.0 - smoothstep(0.92, 0.998, max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0));
+let blur = 0.008 + rough * 0.06 + lost * 0.02;
 let c0 = textureSampleLevel(reflTex, reflSamp, uv, 0.0).rgb;
 let c1 = textureSampleLevel(reflTex, reflSamp, uv + vec2<f32>(blur * 0.15, blur), 0.0).rgb;
 let c2 = textureSampleLevel(reflTex, reflSamp, uv - vec2<f32>(blur * 0.1, blur * 1.7), 0.0).rgb;
 let rs = (c0 + c1 + c2) * 0.333;
-reflCol = mix(reflCol, rs, edge * (1.0 - foam * 0.65) * reflK);
-}
+reflCol = mix(reflCol, rs, conf * (1.0 - foam * 0.65) * reflK);
 }
 var base = F.deepC.rgb;
 if (dep < 0.9995) {
@@ -2161,8 +2193,9 @@ var fresK = fres * reflK * (1.0 - foam * mix(0.5, 0.95, onSheet)) * film;
 fresK = mix(fresK, fresK * 0.6, sheetK);
 var col = mix(base, reflCol, fresK);
 let foamK = 1.0 - foam * 0.85;
-var spec = ggxGlint(normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * open), V, 0.007, fres * reflK);
-if (pix > 0.04) {
+let glK = open * ww.w;
+var spec = ggxGlint(normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * glK), V, 0.007, fres * reflK);
+if (pix > 0.04 && glK > 0.02) {
 let cell = floor(in.xz0 / pix);
 for (var k = 0u; k < 4u; k++) {
 let j = vec2<f32>(
@@ -2170,7 +2203,7 @@ hash21(cell + vec2<f32>(f32(k) * 3.1, 1.7)),
 hash21(cell + vec2<f32>(8.2, f32(k) * 2.7))
 );
 let g2 = oceanSample(glintTex, in.xz0 + (j - 0.5) * pix * 2.0, 4.0);
-let Nk = normalize(N + vec3<f32>(-g2.y, 0.0, -g2.z) * open);
+let Nk = normalize(N + vec3<f32>(-g2.y, 0.0, -g2.z) * glK);
 spec = max(spec, ggxGlint(Nk, V, 0.007, fres * reflK));
 }
 }
@@ -7658,7 +7691,15 @@ window.__stage = 'copy';
 device.queue.submit([enc.finish()]);
 if (doRead) {
 const wCap = viewW, hCap = viewH, bprCap = readBpr, fmtCap = format, buf = readBuf;
+const readWatch = setTimeout(() => {
+if (!window.__png && !window.__gpuerr) {
+window.__gpuerr = 'read timeout';
+console.error('READ timeout');
+requestAnimationFrame(frame);
+}
+}, 45000);
 device.queue.onSubmittedWorkDone().then(() => buf.mapAsync(GPUMapMode.READ)).then(() => {
+clearTimeout(readWatch);
 const data = new Uint8Array(buf.getMappedRange());
 const img = new Uint8ClampedArray(wCap * hCap * 4);
 const bgra = fmtCap === 'bgra8unorm';
@@ -7677,7 +7718,7 @@ c2.width = wCap; c2.height = hCap;
 c2.getContext('2d').putImageData(new ImageData(img, wCap, hCap), 0, 0);
 window.__png = c2.toDataURL('image/png');
 requestAnimationFrame(frame);
-}).catch((err) => { window.__gpuerr = String(err); console.error('READ', err); });
+}).catch((err) => { clearTimeout(readWatch); window.__gpuerr = String(err); console.error('READ', err); });
 return;
 }
 if (!statsEl.hidden && ftN) {

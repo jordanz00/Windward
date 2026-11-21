@@ -1365,8 +1365,10 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   let toCam = normalize(F.camPos.xz - xz + vec2<f32>(1e-4, 0.0));
   // Far out a pixel spans whole waves. Their slopes average away, and what is left
   // is a smooth surface that reflects a little higher than the horizon.
-  let calm = smoothstep(1500.0, 260.0, distS);
-  let N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, calm) + vec3<f32>(cap.x, 0.0, cap.y) * calm + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.075);
+  let calm = smoothstep(1600.0, 220.0, distS);
+  let N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, calm * 0.92)
+    + vec3<f32>(cap.x, 0.0, cap.y) * calm * 0.55
+    + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.06 * (1.0 - calm * 0.5));
   let ndv = max(dot(N, V), 0.02);
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   var reflCol = skyColor(reflect(-V, N));
@@ -1451,25 +1453,41 @@ fn oceanSample(tex: texture_2d<f32>, xz: vec2<f32>, size: f32) -> vec3<f32> {
 // 220 m tile does not repeat as a wallpaper. Both samples move with one clock.
 fn shapeField(xz: vec2<f32>) -> vec3<f32> {
   let a = oceanSample(shapeTex, xz, 220.0);
-  // A second scale only near the camera. Far away it would tile across the view.
   let dist = length(xz - F.camPos.xz);
-  let close = smoothstep(220.0, 50.0, dist);
+  // Wide soft blend — abrupt second-tile fade shows as interference facets.
+  let close = smoothstep(260.0, 40.0, dist);
   let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
   let b = oceanSample(shapeTex, r, 151.0);
-  return a + b * 0.28 * close;
+  return a + b * 0.26 * close;
 }
 // Wind chop between the swell and the capillaries, 0.45 to 5 m. This is the
 // texture a person actually sees on water from a beach or a boat. Two scales of
 // one tile, and it fades once a wavelength is smaller than a pixel.
 fn chopField(xz: vec2<f32>, pix: f32) -> vec2<f32> {
-  let keep = 1.0 - smoothstep(0.28, 1.5, pix);
+  // Soft screen-space cutoff — hard steps read as triangular patches at grazing angles.
+  let keep = 1.0 - smoothstep(0.22, 1.8, pix);
   if (keep <= 0.001) { return vec2<f32>(0.0); }
   let a = oceanSample(chopTex, xz, 24.0);
   let r = vec2<f32>(xz.x * 0.94 + xz.y * 0.34, -xz.x * 0.34 + xz.y * 0.94);
   let b = oceanSample(chopTex, r + vec2<f32>(11.0, 5.0), 15.5);
-  // Slopes come back in the rotated frame of the second read.
   let bs = vec2<f32>(b.y * 0.94 - b.z * 0.34, b.y * 0.34 + b.z * 0.94);
   return (a.yz + bs * 0.6) * keep;
+}
+// Shared cascade weights for vertex displacement and fragment normals so the lit
+// surface never disagrees with the mesh at grazing views.
+// x=swell geom, y=shape FFT, z=chop, w=capillary (normals / glint only).
+fn waveWeights(dist: f32, foot: f32, footLong: f32, scale: f32) -> vec4<f32> {
+  let open = mix(0.45, 1.0, scale);
+  let swell = seaFade(dist);
+  let shape = smoothstep(520.0, 85.0, dist) * (1.0 - smoothstep(6.0, 42.0, footLong)) * open;
+  let chop = (1.0 - smoothstep(0.25, 1.85, foot)) * smoothstep(380.0, 55.0, dist) * open;
+  let cap = mix(0.04, 0.28, smoothstep(55.0, 7.0, dist)) * (1.0 - smoothstep(0.12, 0.85, foot)) * open;
+  return vec4<f32>(swell, shape, chop, cap);
+}
+// Cheap continuous height for FD normals — FFT height only. Gerstner already has
+// analytic normals in seaAt; recomputing it three times per pixel stalls soft GPUs.
+fn seaEta(xz: vec2<f32>, w: vec4<f32>) -> f32 {
+  return shapeField(xz).x * w.y + oceanSample(chopTex, xz, 24.0).x * w.z * 0.55;
 }
 fn warp(t: f32) -> f32 {
   // Dense under the camera. The outer ring is allowed to be coarse because those
@@ -1482,17 +1500,22 @@ fn warp(t: f32) -> f32 {
 @vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
   let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
   let field = sampleField(xz);
-  let s = seaAt(xz, field.y, max(-field.x, 0.2));
+  let depth = max(-field.x, 0.2);
+  let s = seaAt(xz, field.y, depth);
   let dist = length(xz - F.camPos.xz);
-  // Height fades with distance, not along a grid row, so the swell does not end in a straight ridge.
+  let pix = max(dist * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
+  let elev = max(abs(F.camPos.y), 0.15);
+  let footLong = pix / max(elev / max(dist, 0.1), 0.01);
+  let foot = pix / pow(elev / max(dist, 0.1), 0.6);
+  let ww = waveWeights(dist, foot, footLong, field.y);
+  // Large-scale geometry only. Fine FFT detail stays in fragment normals so grazing
+  // views do not reveal triangle facets from high-frequency vertex displacement.
   let geom = smoothstep(1100.0, 140.0, dist);
-  var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.05, 1.0, geom), xz.y + s.disp.z * geom);
-  w.y += ripAt(xz).x * geom;
-  // The spectral tile adds the wind sea. Its height fades before the mesh gets coarse.
-  let near = smoothstep(460.0, 70.0, dist);
-  w.y += shapeField(xz).x * near * mix(0.25, 1.0, field.y);
-  // A trough cannot dig below the sand. Over a shoal the surface stays a film above the bed,
-  // thicker where the grid is coarse, so the bed does not show between two vertices either.
+  let graze = sat(elev / max(dist * 0.35, 1.0));
+  let hfGeom = ww.y * smoothstep(0.04, 0.18, graze);
+  var w = vec3<f32>(xz.x + s.disp.x * geom * ww.x, s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x), xz.y + s.disp.z * geom * ww.x);
+  w.y += ripAt(xz).x * geom * graze;
+  w.y += shapeField(xz).x * hfGeom;
   let bedW = sampleField(w.xz).x;
   if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05 + dist * 0.008, 0.0)); }
   var o: WaterV;
@@ -1510,7 +1533,11 @@ fn warp(t: f32) -> f32 {
   let sh = shoreFetch(xz);
   let field = sampleField(xz);
   let s = seaAt(xz, field.y, max(-field.x, 0.2));
-  var y = s.disp.y + shapeField(xz).x * smoothstep(460.0, 70.0, length(xz - F.camPos.xz));
+  let distSh = length(xz - F.camPos.xz);
+  let pixSh = max(distSh * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
+  let elevSh = max(abs(F.camPos.y), 0.15);
+  let wwSh = waveWeights(distSh, pixSh / pow(elevSh / max(distSh, 0.1), 0.6), pixSh / max(elevSh / max(distSh, 0.1), 0.01), field.y);
+  var y = s.disp.y * mix(0.2, 1.0, wwSh.x) + shapeField(xz).x * wwSh.y;
   if (sh.inside > 0.5) {
     // Stay on the sand even where the sheet is dry, so a triangle never stretches
     // from the water up across the sky. Dry fragments are discarded later.
@@ -1828,7 +1855,8 @@ struct BlitOut {
   let field = sampleField(in.xz0);
   let scale = field.y;
   let bed = field.x;
-  let S = seaAt(in.xz0, scale, max(-bed, 0.2));
+  let depthW = max(-bed, 0.2);
+  let S = seaAt(in.xz0, scale, depthW);
   let distS = length(in.world - F.camPos);
   let rip = ripAt(in.xz0);
   let cap = capillary(in.xz0, distS);
@@ -1836,22 +1864,26 @@ struct BlitOut {
   let gl = oceanSample(glintTex, in.xz0, 4.0);
   let pix = max(distS * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
   let open = mix(0.4, 1.0, scale);
-  // The reflection follows the swell. Capillary slopes are reserved for the sun glint,
-  // otherwise a distant pixel picks one random facet and the sea turns to static.
-  // Sheltered water still carries wind ripples. Only the swell is blocked.
-  // At a grazing view a pixel is far longer along the line of sight than across it.
-  let foot = pix / pow(max(abs(F.camPos.y - in.world.y) / max(distS, 0.1), 0.02), 0.6);
-  let chop = chopField(in.xz0, foot) * mix(0.5, 1.0, scale);
-  // The wind sea fades the same way once its crests pile up inside one pixel.
-  let footLong = pix / max(abs(F.camPos.y - in.world.y) / max(distS, 0.1), 0.01);
-  let seaKeep = (1.0 - smoothstep(5.0, 34.0, footLong)) * open;
-  // Near the eye the wind ripples are resolved, so they tilt the surface itself: they
-  // wrinkle the reflection and bend the view of the bottom. Far off they only glint.
-  let capK = mix(0.1, 0.3, smoothstep(40.0, 6.0, distS));
-  var N = normalize(S.nrm + vec3<f32>(-ocn.y * seaKeep + rip.y - chop.x + cap.x * capK, 0.0, -ocn.z * seaKeep + rip.z - chop.y + cap.y * capK));
+  let elev = max(abs(F.camPos.y - in.world.y), 0.08);
+  let foot = pix / pow(elev / max(distS, 0.1), 0.6);
+  let footLong = pix / max(elev / max(distS, 0.1), 0.01);
+  let ww = waveWeights(distS, foot, footLong, scale);
+  let chop = chopField(in.xz0, foot) * ww.z;
+  // Analytical Gerstner + FFT slopes, weighted the same way as the vertex height.
+  var N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, ww.x)
+    + vec3<f32>(-ocn.y * ww.y + rip.y * ww.y - chop.x + cap.x * ww.w, 0.0,
+                -ocn.z * ww.y + rip.z * ww.y - chop.y + cap.y * ww.w));
+  // Finite-difference refine on FFT height — continuous across triangle edges.
+  let eN = max(mix(0.18, 0.7, sat(foot * 0.7)), pix * 2.0);
+  let h0 = seaEta(in.xz0, ww);
+  let hx = seaEta(in.xz0 + vec2<f32>(eN, 0.0), ww);
+  let hz = seaEta(in.xz0 + vec2<f32>(0.0, eN), ww);
+  let Nfd = normalize(vec3<f32>((h0 - hx) / eN, 1.0, (h0 - hz) / eN));
+  let fdK = (0.3 + 0.45 * sat(foot * 1.1)) * sat(ww.y + ww.z);
+  N = normalize(mix(N, Nfd, fdK));
   if (F.wx.x > 0.01 && pix < 0.05) {
     let rr = rainRings(in.xz0) * (1.0 - smoothstep(0.02, 0.05, pix));
-    N = normalize(N + vec3<f32>(rr.x, 0.0, rr.y));
+    N = normalize(N + vec3<f32>(rr.x, 0.0, rr.y) * ww.w);
   }
   let sh = shoreFetch(in.xz0);
   var bore = 0.0;
@@ -1954,45 +1986,35 @@ struct BlitOut {
   let swash = sh.inside > 0.5 && sh.bed > -0.12 && (sh.h > 0.018 || sh.foam > 0.2);
   if (!swash && dep < 0.999 && dep < frag.z - 0.00015) { discard; }
 
-  // One facet, not an average. Averaging the nearby sky samples was flattening
-  // the grazing reflection into a single pale column.
-  var reflN = N;
-  if (distS < 95.0) {
-    reflN = normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * 0.7);
-  }
-  // Past the point where the chop is smaller than a pixel, its facets still face the
-  // viewer more often than away. The mean reflection comes from higher in the sky,
-  // which is why a real sea is darker than the haze just above the horizon.
-  let lost = smoothstep(0.28, 1.5, foot) * mix(0.5, 1.0, scale);
+  // Reflection uses a filtered macro normal — glint capillaries stay in the specular lobe only.
+  let lost = smoothstep(0.22, 1.6, foot) * mix(0.45, 1.0, scale);
   let toCam = normalize(F.camPos.xz - in.xz0 + vec2<f32>(1e-4, 0.0));
-  reflN = normalize(reflN + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.075 * lost);
+  var reflN = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), N, 1.0 - 0.55 * lost)
+    + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.06 * lost);
+  // Near, a little wind-sea slope; never the capillary glint map (that creates triangular sparkle).
+  let nearRefl = smoothstep(110.0, 25.0, distS) * ww.y;
+  reflN = normalize(reflN + vec3<f32>(-ocn.y, 0.0, -ocn.z) * 0.35 * nearRefl);
   var reflCol = skyReflect(reflect(-V, reflN));
   let Rd = reflect(-V, reflN);
   if (F.reflOn > 0.5) {
     var uv = frag.xy / F.res;
-    // A slope toward the viewer lifts the reflected ray by twice its angle, which is a
-    // long way down the screen. A sideways slope barely moves it at a grazing view.
-    // That difference is why reflections on ruffled water smear into vertical streaks.
     let tv = normalize(in.xz0 - F.camPos.xz + vec2<f32>(1e-4, 0.0));
-    // The chop moves the image. The capillaries only blur it, below.
-    let rn = N.xz + toCam * 0.075 * lost;
+    let rn = reflN.xz;
     let nt = dot(rn, tv);
     let ns = dot(rn, vec2<f32>(-tv.y, tv.x));
-    let graze = sat(abs(V.y) + 0.12);
-    uv.y -= clamp(nt / max(F.tanHalf, 0.2), -0.22, 0.22) * reflK;
-    uv.x += clamp(ns * graze / max(F.tanHalf * F.aspect, 0.2), -0.08, 0.08) * reflK;
-    // The mirrored view has the same frame as this one. A ray that leaves it reads the
-    // nearest edge, which is sky, instead of switching to a different sky model.
+    let graze = sat(abs(V.y) * 1.4 + 0.05);
+    // At grazing, shrink UV warps so planar reflections do not streak into facets.
+    let warpK = reflK * mix(0.35, 1.0, graze);
+    uv.y -= clamp(nt / max(F.tanHalf, 0.2), -0.16, 0.16) * warpK;
+    uv.x += clamp(ns * graze / max(F.tanHalf * F.aspect, 0.2), -0.06, 0.06) * warpK;
     uv = clamp(uv, vec2<f32>(0.004), vec2<f32>(0.996));
-    let edge = 1.0;
-    if (edge > 0.001) {
-      let blur = 0.006 + rough * 0.05;
-      let c0 = textureSampleLevel(reflTex, reflSamp, uv, 0.0).rgb;
-      let c1 = textureSampleLevel(reflTex, reflSamp, uv + vec2<f32>(blur * 0.15, blur), 0.0).rgb;
-      let c2 = textureSampleLevel(reflTex, reflSamp, uv - vec2<f32>(blur * 0.1, blur * 1.7), 0.0).rgb;
-      let rs = (c0 + c1 + c2) * 0.333;
-      reflCol = mix(reflCol, rs, edge * (1.0 - foam * 0.65) * reflK);
-    }
+    let conf = sat(graze * 1.8) * (1.0 - smoothstep(0.92, 0.998, max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0));
+    let blur = 0.008 + rough * 0.06 + lost * 0.02;
+    let c0 = textureSampleLevel(reflTex, reflSamp, uv, 0.0).rgb;
+    let c1 = textureSampleLevel(reflTex, reflSamp, uv + vec2<f32>(blur * 0.15, blur), 0.0).rgb;
+    let c2 = textureSampleLevel(reflTex, reflSamp, uv - vec2<f32>(blur * 0.1, blur * 1.7), 0.0).rgb;
+    let rs = (c0 + c1 + c2) * 0.333;
+    reflCol = mix(reflCol, rs, conf * (1.0 - foam * 0.65) * reflK);
   }
 
   var base = F.deepC.rgb;
@@ -2047,11 +2069,11 @@ struct BlitOut {
   // The film on the sand is the water and the foam, not a mirror of the horizon.
   fresK = mix(fresK, fresK * 0.6, sheetK);
   var col = mix(base, reflCol, fresK);
-  // The sun lights the capillary facets. Close in, one facet per pixel. Farther away a pixel
-  // covers many of them, so the brightest facet in that pixel is the glint that survives.
+  // Capillary glitter stays in the specular lobe only, gated by screen-space keep.
   let foamK = 1.0 - foam * 0.85;
-  var spec = ggxGlint(normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * open), V, 0.007, fres * reflK);
-  if (pix > 0.04) {
+  let glK = open * ww.w;
+  var spec = ggxGlint(normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * glK), V, 0.007, fres * reflK);
+  if (pix > 0.04 && glK > 0.02) {
     let cell = floor(in.xz0 / pix);
     for (var k = 0u; k < 4u; k++) {
       let j = vec2<f32>(
@@ -2059,7 +2081,7 @@ struct BlitOut {
         hash21(cell + vec2<f32>(8.2, f32(k) * 2.7))
       );
       let g2 = oceanSample(glintTex, in.xz0 + (j - 0.5) * pix * 2.0, 4.0);
-      let Nk = normalize(N + vec3<f32>(-g2.y, 0.0, -g2.z) * open);
+      let Nk = normalize(N + vec3<f32>(-g2.y, 0.0, -g2.z) * glK);
       spec = max(spec, ggxGlint(Nk, V, 0.007, fres * reflK));
     }
   }
