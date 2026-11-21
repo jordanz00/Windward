@@ -508,6 +508,8 @@ function shaderCode(res, span) {
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
 @group(1) @binding(2) var reflTex: texture_2d<f32>;
 @group(1) @binding(3) var reflSamp: sampler;
+@group(1) @binding(4) var shapeTex: texture_2d<f32>;
+@group(1) @binding(5) var glintTex: texture_2d<f32>;
 
 const SPAN: f32 = ${span.toFixed(1)};
 const ORIGIN: f32 = ${(-span).toFixed(1)};
@@ -1007,6 +1009,19 @@ fn ggxSun(N: vec3<f32>, V: vec3<f32>, rough: f32, fres: f32) -> vec3<f32> {
   // The peak is narrow. Scale it so a whole crest cannot clip to white.
   return F.sunCol * (D * G * fres * ndl) / (4.0 * ndv) * 0.16;
 }
+fn ggxGlint(N: vec3<f32>, V: vec3<f32>, rough: f32, fres: f32) -> vec3<f32> {
+  let a = max(rough, 0.002);
+  let a2 = a * a;
+  let H = normalize(V + F.sunDir);
+  let ndh = max(dot(N, H), 0.0);
+  let ndv = max(dot(N, V), 0.001);
+  let ndl = max(dot(N, F.sunDir), 0.0);
+  let d = ndh * ndh * (a2 - 1.0) + 1.0;
+  let D = a2 / max(PI * d * d, 1e-6);
+  let k = a2 * 0.5;
+  let G = (ndv / (ndv * (1.0 - k) + k)) * (ndl / (ndl * (1.0 - k) + k));
+  return F.sunCol * (D * G * fres * ndl) / (4.0 * ndv);
+}
 
 fn capillary(xz: vec2<f32>, dist: f32) -> vec2<f32> {
   // Wind waves at several lengths. Each band drops out once it is smaller than a pixel.
@@ -1076,6 +1091,8 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     if (steep > 0.72) { As *= 0.72 / steep; }
     let collapse = 1.0 - smoothstep(0.4, 2.4, D);
     As *= 1.0 - collapse * 0.38;
+    // The spectral field owns the mid and short waves. These layers were the repeating ripples.
+    if (i >= 3) { As *= 0.22; }
     var omega = sqrt(G * k) * spdK;
     if (i == 1) { omega = wP * (k / kP) * spdK; }
     let phase = k * dot(dir, xz) - omega * F.time;
@@ -1175,6 +1192,25 @@ fn ripAt(xz: vec2<f32>) -> vec3<f32> {
   let k = F.shalC.w * fade;
   return vec3<f32>(h * k, (h - hx) / e * k * 0.85, (h - hz) / e * k * 0.85);
 }
+fn oceanRot(xz: vec2<f32>) -> vec2<f32> {
+  let cs = cos(F.ctrl.w);
+  let sn = sin(F.ctrl.w);
+  return vec2<f32>(xz.x * cs - xz.y * sn, xz.x * sn + xz.y * cs);
+}
+fn oceanSample(tex: texture_2d<f32>, xz: vec2<f32>, size: f32) -> vec3<f32> {
+  let p = fract(oceanRot(xz) / size) * 128.0;
+  let i = vec2<i32>(floor(p));
+  let f = fract(p);
+  let x0 = i.x & 127;
+  let y0 = i.y & 127;
+  let x1 = (i.x + 1) & 127;
+  let y1 = (i.y + 1) & 127;
+  let a = textureLoad(tex, vec2<i32>(x0, y0), 0);
+  let b = textureLoad(tex, vec2<i32>(x1, y0), 0);
+  let c = textureLoad(tex, vec2<i32>(x0, y1), 0);
+  let d = textureLoad(tex, vec2<i32>(x1, y1), 0);
+  return mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
+}
 fn warp(t: f32) -> f32 {
   // Dense under the camera. The outer ring is allowed to be coarse because those
   // triangles are not asked to hold a wave.
@@ -1192,6 +1228,9 @@ fn warp(t: f32) -> f32 {
   let geom = smoothstep(1100.0, 140.0, dist);
   var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.05, 1.0, geom), xz.y + s.disp.z * geom);
   w.y += ripAt(xz).x * geom;
+  // The spectral tile adds the wind sea. Its height fades before the mesh gets coarse.
+  let near = smoothstep(460.0, 70.0, dist);
+  w.y += oceanSample(shapeTex, xz, 220.0).x * near * mix(0.25, 1.0, field.y);
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -1214,7 +1253,13 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let distS = length(in.world - F.camPos);
   let rip = ripAt(in.xz0);
   let cap = capillary(in.xz0, distS);
-  let N = normalize(S.nrm + vec3<f32>(rip.y + cap.x, 0.0, rip.z + cap.y));
+  let ocn = oceanSample(shapeTex, in.xz0, 220.0);
+  let gl = oceanSample(glintTex, in.xz0, 4.0);
+  let pix = max(distS * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
+  let open = mix(0.4, 1.0, scale);
+  // The reflection follows the swell. Capillary slopes are reserved for the sun glint,
+  // otherwise a distant pixel picks one random facet and the sea turns to static.
+  let N = normalize(S.nrm + vec3<f32>(-ocn.y * open + rip.y + cap.x * 0.25, 0.0, -ocn.z * open + rip.z + cap.y * 0.25));
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
   // Schlick, F0 for water against air (IOR 1.333).
@@ -1303,14 +1348,23 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
 
   // Fresnel is the only thing that chooses reflection versus the water beneath it.
   var col = mix(base, reflCol, fres * reflK * (1.0 - foam * 0.55));
-  // A second, rougher normal breaks the sun reflection into glitter instead of one disc.
-  let glitter = vec3<f32>(
-    n2(in.xz0 * 13.0 + vec2<f32>(F.time * 0.55, 0.0)) - 0.5,
-    0.0,
-    n2(in.xz0 * 13.0 + vec2<f32>(1.7, -F.time * 0.4)) - 0.5
-  );
-  let Ng = normalize(N + vec3<f32>(cap.x, 0.0, cap.y) * 1.6 + glitter * 0.85);
-  col += ggxSun(Ng, V, max(rough * 0.45, 0.005), fres * reflK) * (1.0 - foam * 0.8);
+  // The sun lights the capillary facets. Close in, one facet per pixel. Farther away a pixel
+  // covers many of them, so the brightest facet in that pixel is the glint that survives.
+  let foamK = 1.0 - foam * 0.85;
+  var spec = ggxGlint(normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * open), V, 0.007, fres * reflK);
+  if (pix > 0.04) {
+    let cell = floor(in.xz0 / pix);
+    for (var k = 0u; k < 4u; k++) {
+      let j = vec2<f32>(
+        hash21(cell + vec2<f32>(f32(k) * 3.1, 1.7)),
+        hash21(cell + vec2<f32>(8.2, f32(k) * 2.7))
+      );
+      let g2 = oceanSample(glintTex, in.xz0 + (j - 0.5) * pix * 2.0, 4.0);
+      let Nk = normalize(N + vec3<f32>(-g2.y, 0.0, -g2.z) * open);
+      spec = max(spec, ggxGlint(Nk, V, 0.007, fres * reflK));
+    }
+  }
+  col += spec * foamK;
   let crestLight = pow(sat(1.0 - N.y), 1.6) * sat(S.disp.y * 0.8) * max(dot(F.sunDir, vec3<f32>(0.0, 1.0, 0.0)), 0.0);
   col += F.sunCol * vec3<f32>(0.45, 0.62, 0.55) * crestLight * 0.12;
 
@@ -1394,6 +1448,253 @@ struct BlitOut {
   return o;
 }
 `;
+}
+
+// Spectral ocean. Two tiled FFT cascades: a wind-sea that displaces the
+// mesh, and a short-wave field whose slopes break the sun into glitter.
+// The long swell stays in the Gerstner set so the horizon is not a tiled patch.
+
+const OCEAN_N = 128;
+
+const OCEAN_WGSL = `
+struct OceanU {
+  time: f32,
+  size: f32,
+  pad0: f32,
+  pad1: f32,
+}
+@group(0) @binding(0) var<storage, read> h0s: array<vec2<f32>>;
+@group(0) @binding(1) var<storage, read_write> spec: array<vec2<f32>>;
+@group(0) @binding(2) var<uniform> U: OceanU;
+@group(0) @binding(3) var outTex: texture_storage_2d<rgba16float, write>;
+
+const ON: u32 = 128u;
+const OLOG: u32 = 7u;
+const TAU: f32 = 6.28318530718;
+const GRAV: f32 = 9.81;
+
+fn cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+  return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+fn brev7(x: u32) -> u32 {
+  var v = x & 0xffu;
+  v = ((v & 0x55u) << 1u) | ((v & 0xaau) >> 1u);
+  v = ((v & 0x33u) << 2u) | ((v & 0xccu) >> 2u);
+  v = ((v & 0x0fu) << 4u) | ((v & 0xf0u) >> 4u);
+  return (v >> 1u) & 0x7fu;
+}
+fn k_of(i: u32, size: f32) -> f32 {
+  var n = i32(i);
+  if (n >= 64) { n = n - 128; }
+  return f32(n) * TAU / size;
+}
+
+@compute @workgroup_size(16, 16)
+fn evolve(@builtin(global_invocation_id) id: vec3<u32>) {
+  let x = id.x;
+  let z = id.y;
+  if (x >= ON || z >= ON) { return; }
+  let idx = z * ON + x;
+  let nx = (ON - x) % ON;
+  let nz = (ON - z) % ON;
+  let h0 = h0s[idx];
+  let h0n = h0s[nz * ON + nx];
+  let k = vec2<f32>(k_of(x, U.size), k_of(z, U.size));
+  let len = length(k);
+  let w = sqrt(GRAV * len);
+  let ph = w * U.time;
+  let e = vec2<f32>(cos(ph), sin(ph));
+  let en = vec2<f32>(e.x, -e.y);
+  let a = cmul(h0, e);
+  let b = cmul(vec2<f32>(h0n.x, -h0n.y), en);
+  spec[idx] = a + b;
+}
+
+var<workgroup> col: array<vec2<f32>, 128>;
+
+fn butterfly(tid: u32) {
+  for (var stage = 0u; stage < OLOG; stage++) {
+    workgroupBarrier();
+    let span = 1u << (stage + 1u);
+    let half = span >> 1u;
+    let inGroup = tid & (span - 1u);
+    if (inGroup < half) {
+      let i0 = tid;
+      let i1 = tid + half;
+      let ang = TAU * f32(inGroup) / f32(span);
+      let w = vec2<f32>(cos(ang), sin(ang));
+      let a = col[i0];
+      let b = cmul(col[i1], w);
+      col[i0] = a + b;
+      col[i1] = a - b;
+    }
+  }
+  workgroupBarrier();
+}
+
+@compute @workgroup_size(128)
+fn ifft_rows(@builtin(workgroup_id) gid: vec3<u32>, @builtin(local_invocation_index) tid: u32) {
+  let row = gid.x;
+  col[tid] = spec[row * ON + brev7(tid)];
+  butterfly(tid);
+  spec[row * ON + tid] = col[tid] / f32(ON);
+}
+
+@compute @workgroup_size(128)
+fn ifft_cols(@builtin(workgroup_id) gid: vec3<u32>, @builtin(local_invocation_index) tid: u32) {
+  let c = gid.x;
+  col[tid] = spec[brev7(tid) * ON + c];
+  butterfly(tid);
+  spec[tid * ON + c] = col[tid] / f32(ON);
+}
+
+@compute @workgroup_size(16, 16)
+fn slopes(@builtin(global_invocation_id) id: vec3<u32>) {
+  let x = id.x;
+  let y = id.y;
+  if (x >= ON || y >= ON) { return; }
+  let h = spec[y * ON + x].x;
+  let hr = spec[y * ON + (x + 1u) % ON].x;
+  let hl = spec[y * ON + (x + ON - 1u) % ON].x;
+  let hu = spec[((y + 1u) % ON) * ON + x].x;
+  let hd = spec[((y + ON - 1u) % ON) * ON + x].x;
+  let e = U.size / f32(ON);
+  let dx = (hr - hl) / (2.0 * e);
+  let dz = (hu - hd) / (2.0 * e);
+  textureStore(outTex, vec2<i32>(i32(x), i32(y)), vec4<f32>(h, dx, dz, 1.0));
+}
+`;
+
+function oceanRand(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function oceanGauss(rnd) {
+  const u = Math.max(1e-7, rnd());
+  const v = rnd();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(Math.PI * 2 * v);
+}
+function oceanBreve(x, bits) {
+  let y = 0;
+  for (let i = 0; i < bits; i++) y = (y << 1) | ((x >> i) & 1);
+  return y;
+}
+// Inverse FFT matching the GPU butterflies, used only to scale the spectrum.
+function oceanIfft2(h0, n) {
+  const bits = Math.log2(n) | 0;
+  const spec = new Float32Array(h0);
+  const col = new Float32Array(n * 2);
+  const pass = (read, write, stride, count) => {
+    for (let g = 0; g < count; g++) {
+      for (let tid = 0; tid < n; tid++) {
+        const src = read(g, oceanBreve(tid, bits));
+        col[tid * 2] = src[0];
+        col[tid * 2 + 1] = src[1];
+      }
+      for (let stage = 0; stage < bits; stage++) {
+        const span = 1 << (stage + 1);
+        const half = span >> 1;
+        const next = new Float32Array(col);
+        for (let tid = 0; tid < n; tid++) {
+          const inGroup = tid & (span - 1);
+          if (inGroup < half) {
+            const i0 = tid, i1 = tid + half;
+            const ang = Math.PI * 2 * inGroup / span;
+            const wr = Math.cos(ang), wi = Math.sin(ang);
+            const br = col[i1 * 2] * wr - col[i1 * 2 + 1] * wi;
+            const bi = col[i1 * 2] * wi + col[i1 * 2 + 1] * wr;
+            next[i0 * 2] = col[i0 * 2] + br;
+            next[i0 * 2 + 1] = col[i0 * 2 + 1] + bi;
+            next[i1 * 2] = col[i0 * 2] - br;
+            next[i1 * 2 + 1] = col[i0 * 2 + 1] - bi;
+          }
+        }
+        col.set(next);
+      }
+      for (let tid = 0; tid < n; tid++) write(g, tid, col[tid * 2] / n, col[tid * 2 + 1] / n);
+    }
+  };
+  const row = new Float32Array(spec);
+  pass(
+    (g, i) => [spec[g * n * 2 + i * 2], spec[g * n * 2 + i * 2 + 1]],
+    (g, i, re, im) => { row[g * n * 2 + i * 2] = re; row[g * n * 2 + i * 2 + 1] = im; },
+    1, n
+  );
+  pass(
+    (g, i) => [row[i * n * 2 + g * 2], row[i * n * 2 + g * 2 + 1]],
+    (g, i, re, im) => { spec[i * n * 2 + g * 2] = re; spec[i * n * 2 + g * 2 + 1] = im; },
+    n, n
+  );
+  return spec;
+}
+
+// h0 is tightly packed vec2 (re, im). size is the tile in meters.
+// band is [minWavelength, maxWavelength] in meters. target is the std-dev
+// of height (shape) or of slope (glint) after the inverse transform.
+function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed) {
+  const rnd = oceanRand(seed);
+  const h0 = new Float32Array(n * n * 2);
+  const g = 9.81;
+  const wx = wind[0], wz = wind[1];
+  const wlen = Math.hypot(wx, wz) || 1;
+  const wdx = wx / wlen, wdz = wz / wlen;
+  const L = (wlen * wlen) / g;
+  const kOf = (i) => {
+    let k = i;
+    if (k >= n / 2) k -= n;
+    return k * Math.PI * 2 / size;
+  };
+  for (let z = 0; z < n; z++) {
+    for (let x = 0; x < n; x++) {
+      const kx = kOf(x), kz = kOf(z);
+      const k2 = kx * kx + kz * kz;
+      const o = (z * n + x) * 2;
+      if (k2 < 1e-8) { h0[o] = 0; h0[o + 1] = 0; continue; }
+      const k = Math.sqrt(k2);
+      const lambda = Math.PI * 2 / k;
+      if (lambda < band[0] || lambda > band[1]) { h0[o] = 0; h0[o + 1] = 0; continue; }
+      const kd = (kx * wdx + kz * wdz) / k;
+      const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * kd * kd;
+      const amp = Math.sqrt(Math.max(phillips, 0) * 0.5);
+      h0[o] = oceanGauss(rnd) * amp;
+      h0[o + 1] = oceanGauss(rnd) * amp;
+    }
+  }
+  // A real height field needs h0(-k) = conj(h0(k)).
+  for (let z = 0; z < n; z++) {
+    for (let x = 0; x < n; x++) {
+      const nx = (n - x) % n, nz = (n - z) % n;
+      if (nz * n + nx < z * n + x) continue;
+      const o = (z * n + x) * 2;
+      const p = (nz * n + nx) * 2;
+      h0[p] = h0[o];
+      h0[p + 1] = -h0[o + 1];
+    }
+  }
+  h0[0] = 0; h0[1] = 0;
+  const spatial = oceanIfft2(h0, n);
+  let hs = 0, hn = 0, ss = 0, sn = 0;
+  const e = size / n;
+  for (let z = 0; z < n; z++) {
+    for (let x = 0; x < n; x++) {
+      const h = spatial[(z * n + x) * 2];
+      hs += h * h; hn++;
+      const hr = spatial[(z * n + ((x + 1) % n)) * 2];
+      const hl = spatial[(z * n + ((x + n - 1) % n)) * 2];
+      const dx = (hr - hl) / (2 * e);
+      ss += dx * dx; sn++;
+    }
+  }
+  const hStd = Math.sqrt(hs / hn) || 1;
+  const sStd = Math.sqrt(ss / sn) || 1;
+  const scale = slopeTarget ? (slopeTarget / sStd) : (target / hStd);
+  for (let i = 0; i < h0.length; i++) h0[i] *= scale;
+  return h0;
 }
 
 const PRESETS = {
@@ -2670,10 +2971,12 @@ async function main() {
     const mod = device.createShaderModule({ code: code });
     const blitMod = device.createShaderModule({ code: blitShaderCode() });
     const simMod = device.createShaderModule({ code: SIM_WGSL });
+    const oceanMod = device.createShaderModule({ code: OCEAN_WGSL });
     const info = await mod.getCompilationInfo();
     const binfo = await blitMod.getCompilationInfo();
     const sinfo = await simMod.getCompilationInfo();
-    const errs = info.messages.concat(binfo.messages, sinfo.messages).filter((m) => m.type === 'error');
+    const oinfo = await oceanMod.getCompilationInfo();
+    const errs = info.messages.concat(binfo.messages, sinfo.messages, oinfo.messages).filter((m) => m.type === 'error');
     if (errs.length) {
       fail(errs.map((e) => e.lineNum + ':' + e.linePos + '  ' + e.message).join('\n'));
       return;
@@ -2728,7 +3031,9 @@ async function main() {
         { binding: 0, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 1, visibility: FS, texture: { sampleType: 'depth' } },
         { binding: 2, visibility: FS, texture: { sampleType: 'float' } },
-        { binding: 3, visibility: FS, sampler: { type: 'filtering' } }
+        { binding: 3, visibility: FS, sampler: { type: 'filtering' } },
+        { binding: 4, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 5, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
       ]
     });
     const blitLayout = device.createBindGroupLayout({
@@ -2880,6 +3185,53 @@ async function main() {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
     const shadowView = shadowTex.createView();
+    const oceanLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } }
+      ]
+    });
+    const oceanPL = device.createPipelineLayout({ bindGroupLayouts: [oceanLayout] });
+    const oceanEntry = (name) => device.createComputePipelineAsync({
+      layout: oceanPL, compute: { module: oceanMod, entryPoint: name }
+    });
+    const oceanPipes = {
+      evolve: await oceanEntry('evolve'),
+      rows: await oceanEntry('ifft_rows'),
+      cols: await oceanEntry('ifft_cols'),
+      slopes: await oceanEntry('slopes')
+    };
+    const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 80], 0.32, 0, 11);
+    const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
+    const oceanU = new Float32Array(4);
+    function oceanCascade(h0, size) {
+      const store = (data, extra) => {
+        const b = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | (extra || 0), mappedAtCreation: true });
+        new Float32Array(b.getMappedRange()).set(data);
+        b.unmap();
+        return b;
+      };
+      const ub = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const tex = device.createTexture({
+        size: [OCEAN_N, OCEAN_N],
+        format: 'rgba16float',
+        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING
+      });
+      const view = tex.createView();
+      const bg = device.createBindGroup({
+        layout: oceanLayout,
+        entries: [
+          { binding: 0, resource: { buffer: store(h0) } },
+          { binding: 1, resource: { buffer: store(new Float32Array(h0.length)) } },
+          { binding: 2, resource: { buffer: ub } },
+          { binding: 3, resource: view }
+        ]
+      });
+      return { size, ub, view, bg };
+    }
+    const cascades = [oceanCascade(shapeH0, 220), oceanCascade(glintH0, 4)];
     const shadowPass = {
       colorAttachments: [],
       depthStencilAttachment: { view: shadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
@@ -2970,7 +3322,9 @@ async function main() {
         { binding: 0, resource: sv },
         { binding: 1, resource: sd },
         { binding: 2, resource: rv },
-        { binding: 3, resource: samp }
+        { binding: 3, resource: samp },
+        { binding: 4, resource: cascades[0].view },
+        { binding: 5, resource: cascades[1].view }
       ] });
     }
     resize();
@@ -3244,6 +3598,21 @@ async function main() {
       device.queue.writeBuffer(simBuf, 0, simU);
 
       const enc = device.createCommandEncoder();
+      for (let ci = 0; ci < cascades.length; ci++) {
+        const c = cascades[ci];
+        oceanU[0] = time;
+        oceanU[1] = c.size;
+        device.queue.writeBuffer(c.ub, 0, oceanU);
+        const steps = ['evolve', 'rows', 'cols', 'slopes'];
+        for (let s = 0; s < steps.length; s++) {
+          const cp = enc.beginComputePass();
+          cp.setPipeline(oceanPipes[steps[s]]);
+          cp.setBindGroup(0, c.bg);
+          if (s === 1 || s === 2) cp.dispatchWorkgroups(OCEAN_N);
+          else cp.dispatchWorkgroups(OCEAN_N / 16, OCEAN_N / 16);
+          cp.end();
+        }
+      }
       if (mode === 2 && !wp.paused) {
         if (ripClear) {
           for (let i = 0; i < 2; i++) {

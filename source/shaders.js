@@ -47,6 +47,8 @@ function shaderCode(res, span) {
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
 @group(1) @binding(2) var reflTex: texture_2d<f32>;
 @group(1) @binding(3) var reflSamp: sampler;
+@group(1) @binding(4) var shapeTex: texture_2d<f32>;
+@group(1) @binding(5) var glintTex: texture_2d<f32>;
 
 const SPAN: f32 = ${span.toFixed(1)};
 const ORIGIN: f32 = ${(-span).toFixed(1)};
@@ -546,6 +548,19 @@ fn ggxSun(N: vec3<f32>, V: vec3<f32>, rough: f32, fres: f32) -> vec3<f32> {
   // The peak is narrow. Scale it so a whole crest cannot clip to white.
   return F.sunCol * (D * G * fres * ndl) / (4.0 * ndv) * 0.16;
 }
+fn ggxGlint(N: vec3<f32>, V: vec3<f32>, rough: f32, fres: f32) -> vec3<f32> {
+  let a = max(rough, 0.002);
+  let a2 = a * a;
+  let H = normalize(V + F.sunDir);
+  let ndh = max(dot(N, H), 0.0);
+  let ndv = max(dot(N, V), 0.001);
+  let ndl = max(dot(N, F.sunDir), 0.0);
+  let d = ndh * ndh * (a2 - 1.0) + 1.0;
+  let D = a2 / max(PI * d * d, 1e-6);
+  let k = a2 * 0.5;
+  let G = (ndv / (ndv * (1.0 - k) + k)) * (ndl / (ndl * (1.0 - k) + k));
+  return F.sunCol * (D * G * fres * ndl) / (4.0 * ndv);
+}
 
 fn capillary(xz: vec2<f32>, dist: f32) -> vec2<f32> {
   // Wind waves at several lengths. Each band drops out once it is smaller than a pixel.
@@ -615,6 +630,8 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     if (steep > 0.72) { As *= 0.72 / steep; }
     let collapse = 1.0 - smoothstep(0.4, 2.4, D);
     As *= 1.0 - collapse * 0.38;
+    // The spectral field owns the mid and short waves. These layers were the repeating ripples.
+    if (i >= 3) { As *= 0.22; }
     var omega = sqrt(G * k) * spdK;
     if (i == 1) { omega = wP * (k / kP) * spdK; }
     let phase = k * dot(dir, xz) - omega * F.time;
@@ -714,6 +731,25 @@ fn ripAt(xz: vec2<f32>) -> vec3<f32> {
   let k = F.shalC.w * fade;
   return vec3<f32>(h * k, (h - hx) / e * k * 0.85, (h - hz) / e * k * 0.85);
 }
+fn oceanRot(xz: vec2<f32>) -> vec2<f32> {
+  let cs = cos(F.ctrl.w);
+  let sn = sin(F.ctrl.w);
+  return vec2<f32>(xz.x * cs - xz.y * sn, xz.x * sn + xz.y * cs);
+}
+fn oceanSample(tex: texture_2d<f32>, xz: vec2<f32>, size: f32) -> vec3<f32> {
+  let p = fract(oceanRot(xz) / size) * 128.0;
+  let i = vec2<i32>(floor(p));
+  let f = fract(p);
+  let x0 = i.x & 127;
+  let y0 = i.y & 127;
+  let x1 = (i.x + 1) & 127;
+  let y1 = (i.y + 1) & 127;
+  let a = textureLoad(tex, vec2<i32>(x0, y0), 0);
+  let b = textureLoad(tex, vec2<i32>(x1, y0), 0);
+  let c = textureLoad(tex, vec2<i32>(x0, y1), 0);
+  let d = textureLoad(tex, vec2<i32>(x1, y1), 0);
+  return mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
+}
 fn warp(t: f32) -> f32 {
   // Dense under the camera. The outer ring is allowed to be coarse because those
   // triangles are not asked to hold a wave.
@@ -731,6 +767,9 @@ fn warp(t: f32) -> f32 {
   let geom = smoothstep(1100.0, 140.0, dist);
   var w = vec3<f32>(xz.x + s.disp.x * geom, s.disp.y * mix(0.05, 1.0, geom), xz.y + s.disp.z * geom);
   w.y += ripAt(xz).x * geom;
+  // The spectral tile adds the wind sea. Its height fades before the mesh gets coarse.
+  let near = smoothstep(460.0, 70.0, dist);
+  w.y += oceanSample(shapeTex, xz, 220.0).x * near * mix(0.25, 1.0, field.y);
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -753,7 +792,13 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let distS = length(in.world - F.camPos);
   let rip = ripAt(in.xz0);
   let cap = capillary(in.xz0, distS);
-  let N = normalize(S.nrm + vec3<f32>(rip.y + cap.x, 0.0, rip.z + cap.y));
+  let ocn = oceanSample(shapeTex, in.xz0, 220.0);
+  let gl = oceanSample(glintTex, in.xz0, 4.0);
+  let pix = max(distS * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
+  let open = mix(0.4, 1.0, scale);
+  // The reflection follows the swell. Capillary slopes are reserved for the sun glint,
+  // otherwise a distant pixel picks one random facet and the sea turns to static.
+  let N = normalize(S.nrm + vec3<f32>(-ocn.y * open + rip.y + cap.x * 0.25, 0.0, -ocn.z * open + rip.z + cap.y * 0.25));
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
   // Schlick, F0 for water against air (IOR 1.333).
@@ -842,14 +887,23 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
 
   // Fresnel is the only thing that chooses reflection versus the water beneath it.
   var col = mix(base, reflCol, fres * reflK * (1.0 - foam * 0.55));
-  // A second, rougher normal breaks the sun reflection into glitter instead of one disc.
-  let glitter = vec3<f32>(
-    n2(in.xz0 * 13.0 + vec2<f32>(F.time * 0.55, 0.0)) - 0.5,
-    0.0,
-    n2(in.xz0 * 13.0 + vec2<f32>(1.7, -F.time * 0.4)) - 0.5
-  );
-  let Ng = normalize(N + vec3<f32>(cap.x, 0.0, cap.y) * 1.6 + glitter * 0.85);
-  col += ggxSun(Ng, V, max(rough * 0.45, 0.005), fres * reflK) * (1.0 - foam * 0.8);
+  // The sun lights the capillary facets. Close in, one facet per pixel. Farther away a pixel
+  // covers many of them, so the brightest facet in that pixel is the glint that survives.
+  let foamK = 1.0 - foam * 0.85;
+  var spec = ggxGlint(normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * open), V, 0.007, fres * reflK);
+  if (pix > 0.04) {
+    let cell = floor(in.xz0 / pix);
+    for (var k = 0u; k < 4u; k++) {
+      let j = vec2<f32>(
+        hash21(cell + vec2<f32>(f32(k) * 3.1, 1.7)),
+        hash21(cell + vec2<f32>(8.2, f32(k) * 2.7))
+      );
+      let g2 = oceanSample(glintTex, in.xz0 + (j - 0.5) * pix * 2.0, 4.0);
+      let Nk = normalize(N + vec3<f32>(-g2.y, 0.0, -g2.z) * open);
+      spec = max(spec, ggxGlint(Nk, V, 0.007, fres * reflK));
+    }
+  }
+  col += spec * foamK;
   let crestLight = pow(sat(1.0 - N.y), 1.6) * sat(S.disp.y * 0.8) * max(dot(F.sunDir, vec3<f32>(0.0, 1.0, 0.0)), 0.0);
   col += F.sunCol * vec3<f32>(0.45, 0.62, 0.55) * crestLight * 0.12;
 

@@ -1272,10 +1272,12 @@ async function main() {
     const mod = device.createShaderModule({ code: code });
     const blitMod = device.createShaderModule({ code: blitShaderCode() });
     const simMod = device.createShaderModule({ code: SIM_WGSL });
+    const oceanMod = device.createShaderModule({ code: OCEAN_WGSL });
     const info = await mod.getCompilationInfo();
     const binfo = await blitMod.getCompilationInfo();
     const sinfo = await simMod.getCompilationInfo();
-    const errs = info.messages.concat(binfo.messages, sinfo.messages).filter((m) => m.type === 'error');
+    const oinfo = await oceanMod.getCompilationInfo();
+    const errs = info.messages.concat(binfo.messages, sinfo.messages, oinfo.messages).filter((m) => m.type === 'error');
     if (errs.length) {
       fail(errs.map((e) => e.lineNum + ':' + e.linePos + '  ' + e.message).join('\n'));
       return;
@@ -1330,7 +1332,9 @@ async function main() {
         { binding: 0, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 1, visibility: FS, texture: { sampleType: 'depth' } },
         { binding: 2, visibility: FS, texture: { sampleType: 'float' } },
-        { binding: 3, visibility: FS, sampler: { type: 'filtering' } }
+        { binding: 3, visibility: FS, sampler: { type: 'filtering' } },
+        { binding: 4, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 5, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
       ]
     });
     const blitLayout = device.createBindGroupLayout({
@@ -1482,6 +1486,53 @@ async function main() {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
     const shadowView = shadowTex.createView();
+    const oceanLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } }
+      ]
+    });
+    const oceanPL = device.createPipelineLayout({ bindGroupLayouts: [oceanLayout] });
+    const oceanEntry = (name) => device.createComputePipelineAsync({
+      layout: oceanPL, compute: { module: oceanMod, entryPoint: name }
+    });
+    const oceanPipes = {
+      evolve: await oceanEntry('evolve'),
+      rows: await oceanEntry('ifft_rows'),
+      cols: await oceanEntry('ifft_cols'),
+      slopes: await oceanEntry('slopes')
+    };
+    const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 80], 0.32, 0, 11);
+    const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
+    const oceanU = new Float32Array(4);
+    function oceanCascade(h0, size) {
+      const store = (data, extra) => {
+        const b = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | (extra || 0), mappedAtCreation: true });
+        new Float32Array(b.getMappedRange()).set(data);
+        b.unmap();
+        return b;
+      };
+      const ub = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const tex = device.createTexture({
+        size: [OCEAN_N, OCEAN_N],
+        format: 'rgba16float',
+        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING
+      });
+      const view = tex.createView();
+      const bg = device.createBindGroup({
+        layout: oceanLayout,
+        entries: [
+          { binding: 0, resource: { buffer: store(h0) } },
+          { binding: 1, resource: { buffer: store(new Float32Array(h0.length)) } },
+          { binding: 2, resource: { buffer: ub } },
+          { binding: 3, resource: view }
+        ]
+      });
+      return { size, ub, view, bg };
+    }
+    const cascades = [oceanCascade(shapeH0, 220), oceanCascade(glintH0, 4)];
     const shadowPass = {
       colorAttachments: [],
       depthStencilAttachment: { view: shadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
@@ -1572,7 +1623,9 @@ async function main() {
         { binding: 0, resource: sv },
         { binding: 1, resource: sd },
         { binding: 2, resource: rv },
-        { binding: 3, resource: samp }
+        { binding: 3, resource: samp },
+        { binding: 4, resource: cascades[0].view },
+        { binding: 5, resource: cascades[1].view }
       ] });
     }
     resize();
@@ -1846,6 +1899,21 @@ async function main() {
       device.queue.writeBuffer(simBuf, 0, simU);
 
       const enc = device.createCommandEncoder();
+      for (let ci = 0; ci < cascades.length; ci++) {
+        const c = cascades[ci];
+        oceanU[0] = time;
+        oceanU[1] = c.size;
+        device.queue.writeBuffer(c.ub, 0, oceanU);
+        const steps = ['evolve', 'rows', 'cols', 'slopes'];
+        for (let s = 0; s < steps.length; s++) {
+          const cp = enc.beginComputePass();
+          cp.setPipeline(oceanPipes[steps[s]]);
+          cp.setBindGroup(0, c.bg);
+          if (s === 1 || s === 2) cp.dispatchWorkgroups(OCEAN_N);
+          else cp.dispatchWorkgroups(OCEAN_N / 16, OCEAN_N / 16);
+          cp.end();
+        }
+      }
       if (mode === 2 && !wp.paused) {
         if (ripClear) {
           for (let i = 0; i < 2; i++) {
