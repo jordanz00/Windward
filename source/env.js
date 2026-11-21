@@ -80,14 +80,14 @@ function envLight(cover) {
     env.keyCol = [0.55 * mk, 0.7 * mk, mk];
   }
   const tw = smooth01(-0.24, -0.04, sy) * (1 - smooth01(-0.04, 0.2, sy)), nk = night * (0.5 + 0.5 * moonUp);
-  // Cooler, quieter ambient — fill light that is too high flattens the island into a game render.
+  // Ambient carries shade detail; keep contrast via key strength, not by crushing fill.
   const amb = [
-    dayK * (0.24 + 0.03 * low) * (1 - 0.22 * gold) + tw * 0.04 + nk * 0.004,
-    dayK * (0.38 - 0.02 * low) * (1 + 0.05 * gold) + tw * 0.05 + nk * 0.006,
-    dayK * (0.6 - 0.07 * low) * (1 + 0.32 * gold) + tw * 0.1 + nk * 0.012
+    dayK * (0.32 + 0.04 * low) * (1 - 0.2 * gold) + tw * 0.045 + nk * 0.004,
+    dayK * (0.48 - 0.02 * low) * (1 + 0.05 * gold) + tw * 0.055 + nk * 0.006,
+    dayK * (0.7 - 0.08 * low) * (1 + 0.32 * gold) + tw * 0.11 + nk * 0.012
   ];
   // Under cloud the whole sky is the lamp: grey, and about as bright as a clear sky's blue.
-  const g = envLum(amb) * 1.05, oc = cover * 0.85;
+  const g = envLum(amb) * 1.1, oc = cover * 0.85;
   env.amb = [amb[0] + (g * 0.96 - amb[0]) * oc, amb[1] + (g - amb[1]) * oc, amb[2] + (g * 1.05 - amb[2]) * oc];
   // All the light reaching open ground, and the same thing as a colour for whatever has no
   // light of its own in the shaders: foam, and the glow of the water's own body.

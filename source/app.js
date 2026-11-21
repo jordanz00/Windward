@@ -2682,7 +2682,7 @@ async function main() {
     if (qstr.has('wx')) { envSet(qstr.get('wx'), true); env.auto = false; }
     let last = performance.now();
     const ft = new Float32Array(40);
-    let ftI = 0, ftN = 0, frames = 0, adaptLeft = 3, ready = false;
+    let ftI = 0, ftN = 0, frames = 0, adaptLeft = 6, ready = false;
     let showHint = 0;
     let shoreWarm = 110;
     let fishCam = null, birdNear = 0;
@@ -2775,15 +2775,16 @@ async function main() {
         barEl.parentElement.hidden = true;
       }
       ft[ftI] = dt; ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
-      // Abyssal-style progressive quality: resolution first, then cloud samples, then shadows.
+      // Progressive quality when frame time exceeds ~22 ms: scale → clouds → shadows → reflections.
       // Never shrink large-plant reach (that reintroduces tree pop-in).
-      if (adaptLeft > 0 && !qstr.has('shot') && (frames === 50 || (frames > 50 && frames % 90 === 0))) {
+      if (adaptLeft > 0 && !qstr.has('shot') && (frames === 40 || (frames > 40 && frames % 60 === 0))) {
         let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
         const avg = sum / Math.max(ftN, 1);
-        if (avg > 0.03) {
-          if (q.scale > 0.5) { q.scale = Math.max(0.5, q.scale * 0.82); adaptLeft--; resize(); }
-          else if (q.clouds > 2) { q.clouds--; adaptLeft--; }
-          else if (q.shadow > 4) { q.shadow = Math.max(4, q.shadow - 2); adaptLeft--; }
+        if (avg > 0.022) {
+          if (q.scale > 0.48) { q.scale = Math.max(0.48, q.scale * 0.8); adaptLeft--; resize(); }
+          else if (q.clouds > 1) { q.clouds--; adaptLeft--; }
+          else if (q.shadow > 3) { q.shadow = Math.max(3, q.shadow - 2); adaptLeft--; }
+          else if (q.refl) { q.refl = 0; adaptLeft--; }
         }
       }
 
@@ -3312,7 +3313,8 @@ async function main() {
             camX = fs.cx; camY = fs.cy; camZ = fs.cz;
           }
         }
-        for (let k = 0; k < num('warm') * 20; k++) fishLife.update(0.05, time + k * 0.05, camX, camY, camZ);
+        const warmN = Math.min(Math.max(0, num('warm')), 8) * 20;
+        for (let k = 0; k < warmN; k++) fishLife.update(0.05, time + k * 0.05, camX, camY, camZ);
         // shade=<height> stands the camera in the shadow of the nearest palm's crown, taken
         // to be that many metres up, so the light has to come through the fronds.
         if (qstr.has('shade')) {
@@ -3335,7 +3337,8 @@ async function main() {
           // bat=<n> first walks the camera to the n-th place that kind lives.
           const hab = bugLife.sites[(BUGS.find((b) => b.id === qstr.get('bug')) || BUGS[0]).site];
           if (qstr.has('bat') && hab.length) { const k = ((num('bat') * 37) % (hab.length / 5) | 0) * 5; camX = hab[k] + 1.5; camZ = hab[k + 2] + 1.5; camY = Math.max(fieldSample(world, camX, camZ), 0) + 1.6; }
-          for (let k = 0; k < (num('bwarm') || 8) * 30; k++) bugLife.update(1 / 30, time + k / 30, camX, camY, camZ);
+          const bwarmN = Math.min(Math.max(0, num('bwarm') || 8), 12) * 30;
+          for (let k = 0; k < bwarmN; k++) bugLife.update(1 / 30, time + k / 30, camX, camY, camZ);
           const st = qstr.has('bst') ? num('bst') : null;
           bugCam = { a: bugLife.find(qstr.get('bug'), st) || bugLife.find(qstr.get('bug'), null), d: num('bd') || 0.3, turn: num('turn'), up: num('fup'), tilt: num('tilt') };
           if (bugCam.a) { fly = true; if (qstr.has('hold')) { bugCam.a.t = 1e3; bugCam.a.pin = true; } }

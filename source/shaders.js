@@ -227,23 +227,18 @@ fn sampleField(xz: vec2<f32>) -> vec2<f32> {
 }
 
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
-  // Photographic response: exposure, soft shoulder, midtone desat, subtle sun white-balance.
+  // Photographic response: soft shoulder, restrained midtone desat — no crushed blacks.
   var x = max(c, vec3<f32>(0.0)) * F.exposure;
-  // Neutralize key tint slightly so golden hour warms the scene, not the camera.
   let gold = sat(F.day.w);
-  let wb = mix(vec3<f32>(1.0), vec3<f32>(0.96, 1.0, 1.06), gold * 0.35);
-  x *= wb;
-  // ACES-inspired shoulder — preserves shadow structure without HDR punch.
+  x *= mix(vec3<f32>(1.0), vec3<f32>(0.97, 1.0, 1.04), gold * 0.28);
   let a = x * (2.51 * x + 0.03);
   let b = x * (2.43 * x + 0.59) + 0.14;
   var soft = a / b;
-  soft = soft / (1.0 + max(soft - 0.92, vec3<f32>(0.0)) * 0.7);
+  soft = soft / (1.0 + max(soft - 0.94, vec3<f32>(0.0)) * 0.55);
   let luma = dot(soft, vec3<f32>(0.2126, 0.7152, 0.0722));
-  let mid = smoothstep(0.03, 0.16, luma) * (1.0 - smoothstep(0.48, 0.88, luma));
-  let photo = mix(soft, vec3<f32>(luma), mid * 0.26);
-  // Gentle contrast around mid-gray — landscape photos, not crushed game looks.
-  let c2 = (photo - 0.5) * 1.06 + 0.5;
-  return pow(clamp(c2, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
+  let mid = smoothstep(0.05, 0.2, luma) * (1.0 - smoothstep(0.55, 0.92, luma));
+  let photo = mix(soft, vec3<f32>(luma), mid * 0.16);
+  return pow(clamp(photo, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
 }
 
 // ---- Sky. One panorama holds the air and the clouds. It is baked a strip at a time
@@ -423,7 +418,13 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let t0 = CLOUD_BASE / sinE;
   // Slightly taller slab so tropical towers have room without adding march steps.
   let big = min(2.25 / sinE, 15.5) / 20.0;
-  let ds = big / 7.0;
+  // Quality from adaptive cloudOct: fewer steps / light taps when GPU is struggling.
+  let cq = clamp(F.cloudOct, 1.0, 5.0);
+  let stepDiv = mix(5.0, 7.0, sat((cq - 1.0) / 3.0));
+  let ds = big / stepDiv;
+  let maxIt = i32(mix(55.0, 110.0, sat((cq - 1.0) / 3.0)));
+  let fineQ = select(0.0, 1.0, cq >= 3.0);
+  let bisectN = select(2, 4, cq >= 3.5);
   // Direct sunlight fades out below the horizon; night clouds keep shape via amb/moon only.
   let dayK = smoothstep(-0.04, 0.1, F.sunTrue.y);
   let sunAim = mix(F.moon.xyz, F.sunTrue.xyz, dayK);
@@ -448,41 +449,39 @@ struct SkyBake { @location(0) c: vec4<f32> }
     var tp = t0;
     var inside = false;
     for (var i = 0; i < 150; i++) {
-      if (t > t0 + big * 20.0 || T < 0.02) { break; }
+      if (i >= maxIt || t > t0 + big * 20.0 || T < 0.02) { break; }
       let p = org + dir * t;
       if (!inside) {
         if (cloudCover(p.xz) < -0.12) { tp = t; t += ds * 3.0; continue; }
-        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t += ds; continue; }
+        if (cloudAt(p, fineQ) <= 0.004) { tp = t; t += ds; continue; }
         var a = tp;
         var b = t;
         for (var k = 0; k < 5; k++) {
+          if (k >= bisectN) { break; }
           let m = (a + b) * 0.5;
-          if (cloudAt(org + dir * m, 1.0) > 0.004) { b = m; } else { a = m; }
+          if (cloudAt(org + dir * m, 0.0) > 0.004) { b = m; } else { a = m; }
         }
         t = b + ds * 0.3;
         inside = true;
         continue;
       }
-      let d = cloudAt(p, 1.0);
+      let d = cloudAt(p, fineQ);
       if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
       let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.04, 0.0));
-      // Beer-law self-shadow: longer path through dense cores → deep internal darkness.
-      var ls = cloudAt(p + lightDir * 0.04, 1.0) * 0.1;
-      ls += cloudAt(p + lightDir * 0.12, 1.0) * 0.18;
-      ls += cloudAt(p + lightDir * 0.32, 0.0) * 0.35;
-      ls += cloudAt(p + lightDir * 0.75, 0.0) * 0.55;
-      ls += cloudAt(p + lightDir * 1.45, 0.0) * 0.7;
+      // Three coarse light taps — enough for volume depth without 5× fine cloudAt cost.
+      var ls = cloudAt(p + lightDir * 0.08, 0.0) * 0.2;
+      ls += cloudAt(p + lightDir * 0.35, 0.0) * 0.4;
+      ls += cloudAt(p + lightDir * 0.95, 0.0) * 0.65;
       let hK = sat((p.y - CLOUD_BASE) / 1.85);
-      let sunT = exp(-ls * 18.5);
+      let sunT = exp(-ls * 16.0);
       let powder = 1.0 - exp(-d * 4.8);
       let phase = 0.55 + 0.85 * pow(sat(mu), 2.8);
       let silver = pow(sat(mu), 5.5) * sunT * powder * (0.65 + 1.2 * gold);
-      // Massive tropical depth: dark bases, lit rims, soft multiple scatter in the body.
-      let baseAO = mix(0.18, 1.0, sat(hK * 1.1 + sunT * 0.4));
-      let L = sunL * (sunT * (0.42 + 0.55 * powder) * phase + silver * 1.55) * baseAO
-        + skyL * (0.08 + 0.38 * hK + 0.32 * (1.0 - hK) * (0.45 + 0.55 * sunT))
+      let baseAO = mix(0.22, 1.0, sat(hK * 1.1 + sunT * 0.4));
+      let L = sunL * (sunT * (0.42 + 0.55 * powder) * phase + silver * 1.45) * baseAO
+        + skyL * (0.1 + 0.4 * hK + 0.3 * (1.0 - hK) * (0.45 + 0.55 * sunT))
         + moonL * (0.3 + 0.55 * hK);
-      let al = 1.0 - exp(-d * ds * 40.0);
+      let al = 1.0 - exp(-d * ds * 38.0);
       C += T * al * L;
       tm += T * al * t;
       wsum += T * al;
@@ -570,24 +569,17 @@ fn waterFill(depth: f32) -> vec3<f32> {
     * mix(0.55, 1.0, cloudShade(F.camPos.xz, 0.0));
 }
 // Lightweight environmental lighting field — Abyssal vol() idea without a 3D texture.
+// Cheap: one height sample + one forest noise. No cloudCover / cliff FD per fragment.
 // r = skylight openness, g = in-scatter density, b = warm canopy/ground bounce.
 fn envVol(p: vec3<f32>) -> vec3<f32> {
   let h = sampleField(p.xz).x;
   let above = p.y - h;
-  // Multi-scale canopy: broad forest mass + local crown crowding.
-  let f0 = smoothstep(-0.65, -0.1, forestNoise(p.xz));
-  let f1 = smoothstep(-0.55, 0.05, forestNoise(p.xz * 1.7 + vec2<f32>(9.0, 3.0)));
-  let forest = smoothstep(1.8, 4.6, h) * mix(f0, f1, 0.45);
-  let canopy = forest * smoothstep(16.0, 1.2, above) * smoothstep(-0.5, 3.2, above);
-  let hx = sampleField(p.xz + vec2<f32>(2.2, 0.0)).x - sampleField(p.xz - vec2<f32>(2.2, 0.0)).x;
-  let hz = sampleField(p.xz + vec2<f32>(0.0, 2.2)).x - sampleField(p.xz - vec2<f32>(0.0, 2.2)).x;
-  let cliff = sat(length(vec2<f32>(hx, hz)) * 0.22) * smoothstep(6.0, 1.0, above);
-  let cloudOcc = sat(cloudCover(p.xz * 0.001) * 0.55 + 0.15);
-  // Contact darkening near ground under canopy — AO without a screen pass.
-  let contact = sat(1.0 - above / 2.4) * canopy;
-  let open = sat(1.0 - 0.78 * canopy - 0.28 * cliff - 0.2 * cloudOcc * sat(above / 40.0) - 0.22 * contact);
-  let dens = 0.28 + 0.58 * canopy + 0.22 * sat(F.wx.w) + 0.18 * sat(F.mood.y) + 0.14 * cliff;
-  let bounce = sat(canopy * 0.72 + cliff * 0.22 + contact * 0.25);
+  let forest = smoothstep(1.8, 4.6, h) * smoothstep(-0.65, -0.1, forestNoise(p.xz));
+  let canopy = forest * smoothstep(14.0, 1.5, above) * smoothstep(-0.4, 2.8, above);
+  let contact = sat(1.0 - above / 2.8) * canopy * 0.55;
+  let open = sat(1.0 - 0.52 * canopy - 0.12 * contact);
+  let dens = 0.3 + 0.45 * canopy + 0.18 * sat(F.wx.w) + 0.12 * sat(F.mood.y);
+  let bounce = sat(canopy * 0.55 + contact * 0.15);
   return vec3<f32>(open, dens, bounce);
 }
 
@@ -629,10 +621,9 @@ fn airMix(col: vec3<f32>, dir: vec3<f32>, dist: f32) -> vec3<f32> {
     haze = mix(haze, haze * vec3<f32>(0.88, 1.02, 0.95) + F.amb.rgb * 0.08, ev.g * 0.45);
     keep *= mix(1.0, 0.8, ev.g * sat((dist - 22.0) / 70.0));
   }
-  // Extra contrast fade with distance — island scale reads as real world, not miniature.
-  keep *= mix(1.0, 0.82, smoothstep(45.0, 200.0, dist));
-  // Distant chroma collapses toward haze — photographic atmospheric perspective.
-  let desat = smoothstep(40.0, 180.0, dist) * 0.35;
+  // Distance contrast fade — keep detail in mid-ground; don't crush near shade.
+  keep *= mix(1.0, 0.9, smoothstep(70.0, 240.0, dist));
+  let desat = smoothstep(55.0, 200.0, dist) * 0.22;
   let c2 = mix(col, vec3<f32>(dot(col, vec3<f32>(0.3, 0.55, 0.15))), desat);
   return c2 * keep + haze * (1.0 - keep);
 }
@@ -727,21 +718,22 @@ fn sunShadow(p: vec3<f32>) -> f32 {
   return mix(far, sn / 9.0, wn);
 }
 
-// Diffuse light from the sky panorama. Three taps stand in for the hemisphere: along
-// the normal, toward the zenith, and a little toward the sun. Without this, sand and
-// leaves are a flat fill with a hard sun.
+// Diffuse light from the sky panorama. Two taps — zenith + normal — keep shade cheap.
 fn skyIrradiance(n: vec3<f32>) -> vec3<f32> {
-  let n0 = normalize(n + vec3<f32>(0.0, 0.4, 0.0));
-  let n1 = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.7));
-  let n2 = normalize(n + F.sunDir * 0.35 + vec3<f32>(0.0, 0.15, 0.0));
-  return (skyLook(n0, 0.0) + skyLook(n1, 0.0) * 1.15 + skyLook(n2, 0.0) * 0.85) * 0.333;
+  let n0 = normalize(n + vec3<f32>(0.0, 0.35, 0.0));
+  let n1 = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.65));
+  return (skyLook(n0, 0.0) + skyLook(n1, 0.0)) * 0.5;
 }
 
 // Microfacet GGX (shared by land materials). Energy-conserving with Fresnel + Schlick-GGX.
 fn microSpec(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, rough: f32, F0: vec3<f32>) -> vec3<f32> {
   let a = max(rough * rough, 0.0025);
   let a2 = a * a;
-  let H = normalize(V + L);
+  // Guard against V ≈ -L (zero-length half vector → NaN glitches).
+  let Hraw = V + L;
+  let hl = length(Hraw);
+  if (hl < 1e-4) { return vec3<f32>(0.0); }
+  let H = Hraw / hl;
   let ndh = max(dot(N, H), 0.0);
   let ndv = max(dot(N, V), 0.001);
   let ndl = max(dot(N, L), 0.0);
@@ -754,36 +746,36 @@ fn microSpec(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, rough: f32, F0: vec3<f32>
   return Fr * (D * G * ndl) / max(4.0 * ndv, 1e-4);
 }
 
-// Unified land shading: one lighting frame for terrain, bark, leaves, rocks.
-// leaf ≈ thin-blade transmission weight; gloss ≈ upper-face wax (maps to roughness).
+// Unified land shading. Direct light is shadowed; ambient is NOT — that caused black shade.
 fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: f32) -> vec3<f32> {
   let n = normalize(nrm);
-  let V = normalize(F.camPos - world);
+  let toCam = F.camPos - world;
+  let V = toCam / max(length(toCam), 1e-4);
   let L = F.sunDir;
   let nl = dot(n, L);
+  // Direct occlusion only. Multiplying ambient by this crushed forests to black.
   let sh = sunShadow(world) * cloudShade(world.xz, world.y);
   let hemi = n.y * 0.5 + 0.5;
   let fld = sampleField(world.xz);
   let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz))
     * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
   let ev = envVol(world);
-  let open = sat((1.0 - mix(0.78, 0.38, sat(leaf)) * roof) * mix(0.55, 1.0, ev.r));
+  // Soft canopy occlusion — retain visible detail in shade.
+  let open = sat((1.0 - mix(0.48, 0.22, sat(leaf)) * roof) * mix(0.72, 1.0, ev.r) + 0.06);
   let gold = sat(F.day.w);
   let wet = F.wx.y * step(0.05, world.y) * (1.0 - F.under);
-  // Roughness: bark/soil matte; waxed leaf mid; wet pulls toward mirror.
   let rough = clamp(mix(0.72, 0.38, sat(gloss)) * mix(1.0, 0.82, leaf) * mix(1.0, 0.55, wet), 0.08, 0.95);
   let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.06, 0.08, 0.04), leaf);
-  // Wrap diffuse for foliage — soft plant silhouette lighting, not hard Lambert cut.
   let wrap = mix(0.0, 0.55, sat(leaf));
   let sunDiff = sat((nl + wrap) / (1.0 + wrap));
   let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.14, 0.94, 0.74), gold * sunDiff);
-  let sky = skyIrradiance(n) * mix(mix(0.28, 0.78, hemi), 0.72, leaf) * open;
-  let ground = mix(vec3<f32>(0.38, 0.32, 0.22), vec3<f32>(0.18, 0.22, 0.1), roof) * F.amb.w * (1.0 - hemi) * open;
-  let bounce = mix(vec3<f32>(0.1, 0.14, 0.07), vec3<f32>(0.2, 0.16, 0.12), gold)
-    * F.amb.w * ev.b * (0.2 + 0.32 * (1.0 - hemi));
-  // Shade is dark; lit faces carry the key. Avoid flat game fill.
-  let shadeK = mix(0.36, 1.0, sh) * mix(0.55, 1.0, sunDiff * 0.75 + 0.25);
-  var light = F.sunCol * keyTint * sunDiff * sh * 0.92 + (sky * mix(0.55, 0.75, gold) + ground * 0.28 + bounce) * shadeK;
+  let sky = skyIrradiance(n) * mix(mix(0.38, 0.9, hemi), 0.85, leaf) * open;
+  let ground = mix(vec3<f32>(0.4, 0.34, 0.24), vec3<f32>(0.22, 0.26, 0.14), roof) * F.amb.w * (1.0 - hemi) * open;
+  let bounce = mix(vec3<f32>(0.14, 0.18, 0.1), vec3<f32>(0.24, 0.2, 0.14), gold)
+    * F.amb.w * ev.b * (0.28 + 0.35 * (1.0 - hemi));
+  // Ambient independent of sun shadow — contrast from key only.
+  let amb = sky * mix(0.7, 0.88, gold) + ground * 0.42 + bounce;
+  var light = F.sunCol * keyTint * sunDiff * sh * 0.95 + amb;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
     let absorb = exp(W_KD * (-depth) / max(F.sunDir.y, 0.12));
@@ -794,25 +786,20 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
     }
   }
   if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
-  // Albedo loses chroma in open shade — photographic foliage/soil.
-  let albShade = mix(albedo, vec3<f32>(dot(albedo, vec3<f32>(0.3, 0.55, 0.15))), 0.14 + (1.0 - sunDiff * sh) * 0.3);
+  let albShade = mix(albedo, vec3<f32>(dot(albedo, vec3<f32>(0.3, 0.55, 0.15))), 0.1 + (1.0 - sunDiff * sh) * 0.2);
   let albWet = albShade * mix(1.0, mix(0.58, 0.84, leaf), wet);
-  // Energy-conserving diffuse: leave room for specular.
   let ndv = max(dot(n, V), 0.0);
   let Fs = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
   var col = albWet * (1.0 - Fs) * light;
-  // Microfacet sun specular (shared GGX).
-  let specAmt = mix(0.55, 0.22, leaf) * mix(1.0, 1.35, wet);
+  let specAmt = mix(0.45, 0.18, leaf) * mix(1.0, 1.25, wet);
   col += F.sunCol * keyTint * microSpec(n, V, L, rough, F0) * sh * specAmt;
-  // Environment specular: only faces that see the sky.
-  col += skyLook(reflect(-V, n), 0.0) * Fs * mix(0.08, 0.2, gloss) * sat(n.y * 1.4 + 0.15) * open * 0.55;
-  // Thin-leaf subsurface: yellower transmitted light when backlit.
+  col += skyLook(reflect(-V, n), 0.0) * Fs * mix(0.06, 0.16, gloss) * sat(n.y * 1.4 + 0.15) * open * 0.45;
   let trans = max(-nl, 0.0) * leaf;
   col += albWet * vec3<f32>(1.22, 1.42, 0.26) * F.sunCol * trans * sh * (0.5 + 0.28 * leaf);
   col += albWet * F.sunCol * pow(sat(1.0 - abs(dot(n, V))), 3.4) * trans * sh * 0.1;
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let shoreWet = 1.0 - sat(world.y / 0.7);
-    col += F.sunCol * microSpec(n, V, L, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.35;
+    col += F.sunCol * microSpec(n, V, L, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.28;
   }
   return applyFog(col, world);
 }
