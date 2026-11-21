@@ -1716,14 +1716,15 @@ async function main() {
     const face = sunYaw;
     let standX, standZ, byaw, pitchBeach, eye;
     if (shore) {
-      // Off the sun, so the wash reads along the beach instead of through the glare.
-      byaw = Math.atan2(shore.fx, -shore.fz) + 0.72;
+      // Along the beach with the sun off to one side: the wash, the palms and their
+      // shadows are all lit across the frame instead of seen through the glare.
+      byaw = Math.atan2(shore.fx, -shore.fz) + 1.22;
       const back = 2.4;
       standX = shore.x - shore.fx * back;
       standZ = shore.z - shore.fz * back;
       const standH = fieldSample(world, standX, standZ);
       eye = Math.max(standH, 0.05) + 1.62;
-      pitchBeach = -0.26;
+      pitchBeach = -0.1;
     } else {
       byaw = downhillYaw(world, beach.x, beach.z);
       standX = beach.x; standZ = beach.z;
@@ -1845,7 +1846,7 @@ async function main() {
       stacks++;
     }
     // Skiff and a buoy, so the beach and the bay have a scale.
-    scatter.add(scatter.proto([makeSkiff()], 2), beach.x + 3.5, beach.h, beach.z + 1.2, byaw + Math.PI * 0.5, 1.15, null, 1);
+    scatter.add(scatter.proto([makeSkiff()], 2), beach.x + 3.5, beach.h, beach.z + 1.2, byaw - 0.5 + Math.PI * 0.5, 1.15, null, 1);
     scatter.add(scatter.proto([icosphere(1, 0.28, [0.75, 0.08, 0.06])], 0.4), lagoon.x + 16, 0.12, lagoon.z + 4, 0, 1, null, 1.15);
     scatter.finish();
 

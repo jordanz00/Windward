@@ -89,6 +89,9 @@ fn hash21(p: vec2<f32>) -> f32 {
   p3 += dot(p3, p3.yzx + 33.33);
   return fract((p3.x + p3.y) * p3.z);
 }
+fn hash22(p: vec2<f32>) -> vec2<f32> {
+  return vec2<f32>(hash21(p), hash21(p + vec2<f32>(41.3, 17.9)));
+}
 fn n2(p: vec2<f32>) -> f32 {
   let i = floor(p);
   let f = fract(p);
@@ -279,7 +282,7 @@ fn atmosphere(rd: vec3<f32>) -> vec3<f32> {
 fn cloudCover(p: vec2<f32>) -> f32 {
   let pd = p + vec2<f32>(F.time * 0.008, F.time * 0.003);
   let q = pd + (vec2<f32>(n2(pd * 0.31 + vec2<f32>(3.1, 0.0)), n2(pd * 0.31 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.2;
-  let cells = n2(q * 1.5) * 0.6 + n2(q * 3.7 + vec2<f32>(4.0, 9.0)) * 0.4;
+  let cells = n2(q * 1.5) * 0.74 + n2(q * 3.7 + vec2<f32>(4.0, 9.0)) * 0.26;
   let c = cells * (0.62 + 0.6 * n2(pd * 0.09 + vec2<f32>(5.0, 2.0)));
   let thr = mix(0.66, 0.3, sat(F.mood.y));
   return (c - thr) / (1.0 - thr);
@@ -287,7 +290,7 @@ fn cloudCover(p: vec2<f32>) -> f32 {
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   let amt = cloudCover(p.xz);
   if (amt <= 0.0) { return 0.0; }
-  let h = (p.y - CLOUD_BASE) / (0.1 + 1.15 * pow(amt, 0.62));
+  let h = (p.y - CLOUD_BASE) / (0.1 + 0.95 * pow(amt, 0.62));
   if (h < 0.0 || h > 1.0) { return 0.0; }
   var d = smoothstep(0.0, 0.12, h) * (1.0 - h * h) * sat(amt * 5.0);
   // Billows eat into the sides and the top, in four sizes from a few hundred metres
@@ -524,6 +527,35 @@ fn forestNoise(p: vec2<f32>) -> f32 {
     + 0.6 * sin((p.x + p.y) * 0.053 + 2.1) * sin((p.x - p.y) * 0.047 + 0.4)
     + 0.35 * sin(p.x * 0.11 + 3.0) * sin(p.y * 0.13 + 1.0);
 }
+// Height the damp sand reaches. It wanders, in long scallops and short tongues.
+fn dampLine(xz: vec2<f32>) -> f32 {
+  return 0.66 + (n2(xz * 0.07) - 0.5) * 0.3 + (n2(xz * 0.31) - 0.5) * 0.16 + (n2(xz * 1.3) - 0.5) * 0.05;
+}
+// Relief of dry sand in metres: pits and scuffs with raised rims, low wind ripples
+// in patches, and grain. foot is the width of a pixel on the ground; anything finer is left out.
+fn sandRelief(p: vec2<f32>, foot: f32) -> f32 {
+  var h = 0.0;
+  let q = p * 2.9;
+  let c = floor(q);
+  let f = q - c;
+  for (var j = -1; j <= 1; j++) {
+    for (var i = -1; i <= 1; i++) {
+      let g = vec2<f32>(f32(i), f32(j));
+      let r = hash22(c + g);
+      let k = hash21(c + g + vec2<f32>(17.0, 3.0));
+      if (k < 0.3) { continue; }
+      let d = length(g + r - f) / (0.2 + 0.42 * k);
+      h += (-smoothstep(1.0, 0.0, d) + 0.38 * exp(-(d - 1.05) * (d - 1.05) * 9.0)) * (0.012 + 0.03 * k);
+    }
+  }
+  h *= sat(1.6 - foot * 9.0);
+  h += (n2(p * 7.0) - 0.5) * 0.02 * sat(1.5 - foot * 20.0);
+  let warp = n2(p * 0.4) * 3.0 + n2(p * 1.7 + vec2<f32>(7.0, 2.0)) * 0.8;
+  let rip = sin(dot(p, vec2<f32>(0.83, 0.56)) * 46.0 + warp * 5.0);
+  h += rip * 0.0035 * smoothstep(0.45, 0.7, n2(p * 0.19 + vec2<f32>(3.0, 8.0))) * sat(1.4 - foot * 28.0);
+  h += (n2(p * 31.0) - 0.5) * 0.006 * sat(1.4 - foot * 70.0);
+  return h;
+}
 fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   let slope = sat(1.0 - n.y);
   let rock = smoothstep(0.5, 0.82, slope) * smoothstep(1.2, 5.0, y);
@@ -532,15 +564,15 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   if (y < 0.3) { sandW = max(sandW, 1.0 - rock); }
   let grassW = sat(1.0 - rock - sandW);
   let m = n2(xz * 0.11);
-  let fine = n2(xz * 0.85);
-  let grain = n2(xz * 3.6);
-  var sandC = mix(vec3<f32>(0.62, 0.54, 0.39), vec3<f32>(0.46, 0.39, 0.27), fine);
+  // Coral sand: pale, with broad slow changes in tone. The sharp detail is relief, not paint.
+  var sandC = mix(vec3<f32>(0.71, 0.64, 0.51), vec3<f32>(0.60, 0.52, 0.39), n2(xz * 0.23) * 0.6 + n2(xz * 0.9) * 0.25);
   let wash = sin(dot(xz, vec2<f32>(0.42, 0.07)) + n2(xz * 0.15) * 3.0);
-  sandC *= 0.9 + 0.1 * wash;
-  sandC *= 0.92 + 0.12 * grain;
-  // Only the sand the tide never leaves is always dark. The wash above it moves.
-  let wet = smoothstep(0.28, 0.0, y);
-  sandC = mix(sandC, sandC * vec3<f32>(0.42, 0.46, 0.44), wet * 0.78);
+  sandC *= 0.95 + 0.05 * wash;
+  // Sand the last high wash reached is still damp: darker, and it ends at a ragged line.
+  let damp = 1.0 - smoothstep(-0.035, 0.035, y - dampLine(xz));
+  sandC = mix(sandC, sandC * vec3<f32>(0.56, 0.55, 0.52), damp * 0.85);
+  let wet = smoothstep(0.2, 0.0, y);
+  sandC = mix(sandC, sandC * vec3<f32>(0.62, 0.66, 0.66), wet * 0.7);
   if (y < 0.05) { sandC = mix(vec3<f32>(0.70, 0.64, 0.50), sandC, sat(-y * 0.4 + 0.3)); }
   var grassC = mix(vec3<f32>(0.075, 0.13, 0.04), vec3<f32>(0.19, 0.22, 0.085), m);
   grassC *= 0.78 + 0.36 * n2(xz * 0.22);
@@ -643,20 +675,39 @@ struct GeoV {
   let gx = n2(in.world.xz * 5.5 + vec2<f32>(0.18, 0.0)) - g0;
   let gz = n2(in.world.xz * 5.5 + vec2<f32>(0.0, 0.18)) - g0;
   n = normalize(n + vec3<f32>(gx, 0.0, gz) * (1.0 - slope) * 0.55);
-  // Dry sand near the eye is pocked and grainy. Each band fades before it is smaller than a pixel.
+  // Dry sand near the eye has relief: its normal comes from a height, and so does the shade in its pits.
   let distG = length(in.world - F.camPos);
-  let dry = smoothstep(0.3, 0.8, in.world.y) * smoothstep(3.4, 2.2, in.world.y) * (1.0 - smoothstep(0.1, 0.3, slope));
-  let nearA = dry * smoothstep(34.0, 5.0, distG);
-  let nearB = dry * smoothstep(9.0, 2.0, distG);
+  let foot = distG * F.tanHalf * 2.0 / max(F.res.y, 1.0);
+  let line = dampLine(in.world.xz);
+  let sandy = smoothstep(3.4, 2.2, in.world.y) * (1.0 - smoothstep(0.1, 0.3, slope)) * step(-0.05, in.world.y);
+  let dry = smoothstep(line - 0.02, line + 0.22, in.world.y) * sandy;
+  let nearA = dry * smoothstep(70.0, 20.0, distG);
+  var pit = 0.0;
   if (nearA > 0.01) {
-    let q1 = in.world.xz * 4.3;
-    let d0 = n2(q1) + 0.5 * n2(q1 * 2.3 + vec2<f32>(3.0, 1.0));
-    let dx1 = n2(q1 + vec2<f32>(0.35, 0.0)) + 0.5 * n2(q1 * 2.3 + vec2<f32>(3.8, 1.0)) - d0;
-    let dz1 = n2(q1 + vec2<f32>(0.0, 0.35)) + 0.5 * n2(q1 * 2.3 + vec2<f32>(3.0, 1.8)) - d0;
-    n = normalize(n + vec3<f32>(-dx1, 0.0, -dz1) * 1.05 * nearA);
+    let e = max(0.012, foot * 1.2);
+    let h0 = sandRelief(in.world.xz, foot);
+    let hx = sandRelief(in.world.xz + vec2<f32>(e, 0.0), foot);
+    let hz = sandRelief(in.world.xz + vec2<f32>(0.0, e), foot);
+    n = normalize(n + vec3<f32>(h0 - hx, 0.0, h0 - hz) / e * nearA);
+    pit = sat(-h0 * 26.0) * nearA;
   }
   var alb = terrainAlbedo(in.world.xz, in.world.y, n);
-  alb *= 1.0 + (n2(in.world.xz * 37.0) - 0.5) * 0.16 * nearA + (hash21(floor(in.world.xz * 140.0)) - 0.5) * 0.2 * nearB;
+  if (sandy > 0.01) {
+    let cell = floor(in.world.xz * 90.0);
+    let grainK = sat(1.3 - foot * 60.0) * sandy;
+    // Grains: most are pale shell and coral, a few are dark.
+    let gr = hash21(cell);
+    alb *= 1.0 + ((gr - 0.5) * 0.22 - step(0.965, gr) * 0.4 + step(gr, 0.02) * 0.35) * grainK;
+    alb *= 1.0 - pit * 0.3;
+    // The wrack line: what the last high wash left where it stopped. Weed, husk, bits of shell.
+    let off = in.world.y - line - 0.05;
+    let band = exp(-off * off * 420.0) + 0.25 * exp(-(off - 0.3) * (off - 0.3) * 150.0);
+    let clump = smoothstep(0.42, 0.75, n2(in.world.xz * 0.9) * 0.6 + n2(in.world.xz * 4.5) * 0.4);
+    let bit = hash21(floor(in.world.xz * 38.0) + vec2<f32>(5.0, 9.0));
+    let near = sat(1.3 - foot * 26.0);
+    let wrack = sat(band * clump * 1.6) * mix(0.35, step(0.45, bit), near);
+    alb = mix(alb, mix(vec3<f32>(0.05, 0.038, 0.025), vec3<f32>(0.16, 0.12, 0.07), bit), wrack * sandy * 0.85);
+  }
   let sh = shoreFetch(in.world.xz);
   var washFoam = 0.0;
   var washWet = 0.0;
