@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -1603,6 +1603,19 @@ async function main() {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: shadowBias
     });
+    pipe('fish', {
+      layout: geoPL,
+      vertex: { module: mod, entryPoint: 'vsFish', buffers: meshBuffers },
+      fragment: { module: mod, entryPoint: 'fsFish', targets: [{ format: sceneFmt }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: depthOn('depth32float', true, 'less')
+    });
+    pipe('shadowFish', {
+      layout: skyPL,
+      vertex: { module: mod, entryPoint: 'vsShadowFish', buffers: meshBuffers },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: shadowBias
+    });
     pipe('grass', {
       layout: geoPL,
       vertex: { module: mod, entryPoint: 'vsGrass', buffers: [
@@ -1836,6 +1849,7 @@ async function main() {
       scatter.add(pick(rockIds, x, z), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
       rocks++;
     }
+    const stackList = [];
     for (let i = 0; i < q.stacks * 30 && stacks < q.stacks; i++) {
       const x = -40 - rnd() * 160;
       const z = (rnd() - 0.5) * 220;
@@ -1843,12 +1857,34 @@ async function main() {
       if (h < -6 || h > -0.4) continue;
       const sc = 1.5 + rnd() * 2.8;
       scatter.add(rockIds[stacks % 2], x, h - sc * 0.2, z, rnd() * 6, sc, [0.9, 0.86, 0.8], 1.05 + rnd() * 0.9);
+      stackList.push(x, h + sc * 0.3, z, sc * 0.9);
       stacks++;
     }
     // Skiff and a buoy, so the beach and the bay have a scale.
     scatter.add(scatter.proto([makeSkiff()], 2), beach.x + 3.5, beach.h, beach.z + 1.2, byaw - 0.5 + Math.PI * 0.5, 1.15, null, 1);
     scatter.add(scatter.proto([icosphere(1, 0.28, [0.75, 0.08, 0.06])], 0.4), lagoon.x + 16, 0.12, lagoon.z + 4, 0, 1, null, 1.15);
+    const reef = plantReef(world, scatter, q);
     scatter.finish();
+    const fishLife = new FishLife(world, reef, q, stackList);
+    const fishPack = packMeshes(fishMeshes());
+    // The underwater place: beside a coral head that has a school over it.
+    {
+      // The one whose water is nearest two metres deep, so there is room to swim round it.
+      let s = null, best = 9;
+      for (const c of fishLife.schools) {
+        if (c.sp !== 0) continue;
+        const a = Math.atan2(lagoon.z - c.hz, lagoon.x - c.hx);
+        // Inside the reef, where the water is quiet.
+        const d = Math.abs(fieldSample(world, c.hx, c.hz) + 2) + (fieldSample(world, c.hx + Math.cos(a) * 3.2, c.hz + Math.sin(a) * 3.2) > -1.5 || c.hx > 180 ? 5 : 0);
+        if (d < best) { best = d; s = c; }
+      }
+      if (s) {
+        const a = Math.atan2(lagoon.z - s.hz, lagoon.x - s.hx);
+        const ux = s.hx + Math.cos(a) * 3.2, uz = s.hz + Math.sin(a) * 3.2;
+        const look = lookYP(s.hx - ux, 0.1, s.hz - uz);
+        spots[5] = { x: ux, y: -1, z: uz, yaw: look[0], pitch: look[1], fly: false, dive: 1.35 };
+      }
+    }
 
     const grassList = [];
     const weedList = [];
@@ -1961,12 +1997,22 @@ async function main() {
       pass.setVertexBuffer(0, meshVB); pass.setVertexBuffer(1, buf); pass.setIndexBuffer(meshIB, 'uint32');
       for (let i = 0; i < draws.length; i += 5) pass.drawIndexed(draws[i + 1], draws[i + 4], draws[i], draws[i + 2], draws[i + 3]);
     }
+    function drawMeshes2(pass, pipeline, bg, vb, ib, buf, draws) {
+      pass.setPipeline(pipeline); pass.setBindGroup(0, bg);
+      pass.setVertexBuffer(0, vb); pass.setVertexBuffer(1, buf); pass.setIndexBuffer(ib, 'uint32');
+      for (let i = 0; i < draws.length; i += 5) pass.drawIndexed(draws[i + 1], draws[i + 4], draws[i], draws[i + 2], draws[i + 3]);
+    }
     const grassVB = upload(grassVert, GPUBufferUsage.VERTEX);
     const grassIB = upload(g.idx, GPUBufferUsage.INDEX);
     const grassInstB = upload(grassInst, GPUBufferUsage.VERTEX);
     const birdVB = upload(birdVert, GPUBufferUsage.VERTEX);
     const birdIB = upload(bgeom.idx, GPUBufferUsage.INDEX);
     const birdInstB = device.createBuffer({ size: Math.max(16, birdData.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    const fishVB = upload(fishPack.vert, GPUBufferUsage.VERTEX);
+    const fishIB = upload(fishPack.idx, GPUBufferUsage.INDEX);
+    const fishArr = new Float32Array(Math.max(1, fishLife.n) * ISTRIDE);
+    const fishInstB = device.createBuffer({ size: fishArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    let fishDraws = [];
 
     mark('buffers');
     setStatus('Warming the light', 0.9);
@@ -2170,6 +2216,7 @@ async function main() {
         pass.setIndexBuffer(birdIB, 'uint16');
         pass.drawIndexed(bgeom.idx.length, q.birds);
       }
+      if (birds && fishDraws.length) drawMeshes2(pass, pipes.fish, geo, fishVB, fishIB, fishInstB, fishDraws);
       if (birds && grassCount) {
         pass.setPipeline(pipes.grass); pass.setBindGroup(0, geo);
         pass.setVertexBuffer(0, grassVB); pass.setVertexBuffer(1, grassInstB);
@@ -2186,6 +2233,7 @@ async function main() {
     let ftI = 0, ftN = 0, frames = 0, adaptLeft = 3, ready = false;
     let showHint = 0;
     let shoreWarm = 110;
+    let fishCam = null;
 
     const nearC = [0, 0, 0];
     function fillCam(arr, eyeX, eyeY, eyeZ, cyaw, cpitch, clipBelow, underFlag) {
@@ -2345,7 +2393,8 @@ async function main() {
           const ground = fieldSample(world, camX, camZ);
           const wy = waveY(world, camX, camZ, time);
           const swimming = ground < wy - 0.25;
-          const spm = swimming ? (sprint ? 7.5 : 3.2) : (sprint ? 8.2 : 4.1);
+          // Slower under water, so the fish are watched and not chased.
+          const spm = swimming ? (dive > 0.7 ? (sprint ? 3.6 : 1.5) : (sprint ? 7.5 : 3.2)) : (sprint ? 8.2 : 4.1);
           if (ml > 0) {
             const nx = camX + mx / ml * spm * dt;
             const nz = camZ + mz / ml * spm * dt;
@@ -2357,7 +2406,8 @@ async function main() {
           if (gh < wh - 0.25) {
             if (K.KeyQ) dive = Math.min(6, dive + dt * 1.6);
             else if (K.KeyE || K.Space) dive = Math.max(0, dive - dt * 2.2);
-            else dive = Math.max(0, dive - dt * 0.35);
+            // Just under the surface a swimmer bobs back up. Further down they stay where they are.
+            else if (dive < 0.7) dive = Math.max(0, dive - dt * 0.35);
             camY = Math.max(gh + 0.45, wh + 0.42 - dive);
           } else {
             dive = 0;
@@ -2370,6 +2420,27 @@ async function main() {
         if (camY < -8) camY = -8;
       }
       lookX = 0; lookY = 0;
+
+      fishLife.update(dt, time, camX, camY, camZ);
+      if (fishCam) {
+        // A capture framing: stay beside one fish, or back from its school, and look at it.
+        const s = fishCam.s, i = s.first + Math.min(fishCam.i, s.n - 1), wide = fishCam.d > 1.6;
+        const tx = wide ? s.cx : fishLife.px[i], ty = wide ? s.cy : fishLife.py[i], tz = wide ? s.cz : fishLife.pz[i];
+        if (fishCam.a == null) {
+          // Beside the fish, on whichever side is open water.
+          const B = fishLife.blocks, a0 = (wide ? s.face : fishLife.yaw[i]) + Math.PI * 0.5 + fishCam.turn;
+          for (let k = 0; k < 8 && fishCam.a == null; k++) {
+            const a = a0 + [0, 3.1416, 0.6, -0.6, 2.5, -2.5, 1.3, -1.3][k], x = tx + Math.cos(a) * fishCam.d, z = tz + Math.sin(a) * fishCam.d;
+            let free = fieldSample(world, x, z) < ty - 0.1;
+            for (let o = 0; o < B.length && free; o += 4) free = Math.hypot(x - B[o], ty - B[o + 1], z - B[o + 2]) > B[o + 3] + 0.25;
+            if (free || k === 7) fishCam.a = a;
+          }
+        }
+        camX = tx + Math.cos(fishCam.a) * fishCam.d; camZ = tz + Math.sin(fishCam.a) * fishCam.d;
+        camY = Math.min(waveY(world, camX, camZ, time) - 0.3, Math.max(ty + fishCam.d * 0.12 + fishCam.up, fieldSample(world, camX, camZ) + 0.12));
+        const lp = lookYP(tx - camX, ty - camY, tz - camZ);
+        yaw = lp[0]; pitch = lp[1] + fishCam.tilt;
+      }
 
       const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
       // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
@@ -2417,6 +2488,9 @@ async function main() {
       // The same frame data with the near matrix in the shadow slot, for the near shadow pass.
       un.set(uf); un.set(NEARVP, 156);
       device.queue.writeBuffer(nbuf, 0, un);
+      // Fish are seen under water from 44 m at most, and from the air only close by.
+      fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 44 : 30, fishPack.ranges);
+      if (fishDraws.end) device.queue.writeBuffer(fishInstB, 0, fishArr, 0, fishDraws.end * ISTRIDE);
 
       if (q.birds) {
         for (let i = 0; i < q.birds; i++) {
@@ -2532,6 +2606,7 @@ async function main() {
         np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
         np.drawIndexed(terrain.idx.length);
         drawMeshes(np, pipes.shadowMesh, bgUBN, instB, nearDraws);
+        if (fishDraws.length) drawMeshes2(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
         np.end();
       }
       if (uf[86] > 0.5) {
@@ -2647,7 +2722,7 @@ async function main() {
     });
 
     if (qstr.has('shot')) {
-      const idx = Math.max(0, Math.min(5, parseInt(qstr.get('shot'), 10) || 1));
+      const idx = Math.max(0, Math.min(6, parseInt(qstr.get('shot'), 10) || 1));
       // shot=0 keeps the orbit but hides the menu; 1..6 are places
       document.body.classList.add('playing');
       if (qstr.get('shot') !== '0') {
@@ -2659,6 +2734,18 @@ async function main() {
         camX += Math.sin(yaw) * num('fwd') + Math.cos(yaw) * num('side');
         camZ += -Math.cos(yaw) * num('fwd') + Math.sin(yaw) * num('side');
         if (qstr.has('up')) { fly = true; camY += num('up'); }
+        // fish=<species> frames one fish (fd under 1.6 m) or its school; calm stops them minding the camera;
+        // warm runs the animals for that many seconds first.
+        fishLife.calm = qstr.has('calm');
+        if (qstr.has('fish')) {
+          const fs = fishLife.find(parseInt(qstr.get('fish'), 10) || 0, parseInt(qstr.get('nth') || '0', 10));
+          if (fs) {
+            fly = true;
+            fishCam = { s: fs, i: parseInt(qstr.get('fi') || '0', 10), d: num('fd') || 0.5, turn: num('turn'), up: num('fup'), tilt: num('tilt'), a: null };
+            camX = fs.cx; camY = fs.cy; camZ = fs.cz;
+          }
+        }
+        for (let k = 0; k < num('warm') * 20; k++) fishLife.update(0.05, time + k * 0.05, camX, camY, camZ);
       }
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';

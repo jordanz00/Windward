@@ -412,13 +412,24 @@ fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
   return mix(1.0, 0.42, smoothstep(0.0, 0.3, amt));
 }
 
+// The colour clear tropical water goes to with distance: lit from above, so it dims under a cloud.
+// Brighter looking up toward the light, bluer and darker looking down and away.
+fn waterHaze(dy: f32) -> vec3<f32> {
+  let c = mix(vec3<f32>(0.012, 0.13, 0.25), vec3<f32>(0.06, 0.33, 0.42), sat(dy * 1.4 + 0.45));
+  return c * mix(0.55, 1.0, cloudShade(F.camPos.xz, 0.0)) * max(F.lit.y, 0.0);
+}
+// Light scattered by the water itself reaches every side of a thing that is in it,
+// which is why nothing under water has a black shadow.
+fn waterFill(depth: f32) -> vec3<f32> {
+  return vec3<f32>(0.10, 0.21, 0.24) * F.under * sat(depth * 3.0) * exp(-depth * 0.12) * max(F.lit.y, 0.0);
+}
 fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
   let dist = length(world - F.camPos);
   var dens = mix(0.00055, 0.00018, sat(F.camPos.y / 160.0));
   var fc = hazeColor(world - F.camPos);
   if (F.under > 0.5) {
-    dens = mix(0.028, 0.07, sat(F.camDamp));
-    fc = vec3<f32>(0.025, 0.16, 0.20);
+    dens = mix(0.028, 0.06, sat(F.camDamp));
+    fc = waterHaze((world.y - F.camPos.y) / max(dist, 0.01));
   }
   return mix(fc, col, sat(exp(-dist * dens)));
 }
@@ -500,7 +511,7 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   var light = F.sunCol * max(nl, 0.0) * sh * 1.2 + sky * 0.7 + ground * 0.4;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
-    let absorb = exp(-depth * vec3<f32>(0.38, 0.08, 0.05));
+    let absorb = exp(-depth * vec3<f32>(0.19, 0.06, 0.05));
     light *= absorb;
     // The ripples that gather sunlight into bright lines take it from the cells between them.
     if (world.y < -0.04) {
@@ -508,7 +519,7 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
       light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.4 - 0.16 * k) * absorb;
     }
   }
-  if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
+  if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
   var col = albedo * light;
   // Light through the blade is yellower and more saturated than light off it.
   col += albedo * vec3<f32>(1.25, 1.45, 0.3) * F.sunCol * max(-nl, 0.0) * sh * leaf;
@@ -697,7 +708,32 @@ struct GeoV {
     n = normalize(n + vec3<f32>(h0 - hx, 0.0, h0 - hz) / e * nearA);
     pit = sat(-h0 * 26.0) * nearA;
   }
+  // Under water the sand is combed into ripples by the waves passing over it:
+  // sharp crests a hand apart, bending and forking, with darker troughs.
+  var trough = 0.0;
+  // A pixel at a glancing angle is far longer than it is wide, and the ripples have to fit inside it.
+  let footLong = foot / max(abs(F.camPos.y - in.world.y) / max(distG, 0.1), 0.08);
+  let bedK = smoothstep(-0.15, -0.6, in.world.y) * (1.0 - smoothstep(0.08, 0.3, slope)) * sat(1.5 - footLong * 9.0);
+  if (bedK > 0.01) {
+    let q = in.world.xz;
+    // One direction, set by the waves; the crests wander and fork because the sand under them is uneven.
+    let rd = vec2<f32>(0.95, 0.31);
+    let ph = dot(q, rd) * 33.0 + n2(q * 0.4) * 9.0 + n2(q * 1.9 + vec2<f32>(4.0, 1.0)) * 2.4;
+    let lull = smoothstep(0.25, 0.6, n2(q * 0.13 + vec2<f32>(2.0, 7.0)));
+    n = normalize(n + vec3<f32>(rd.x, 0.0, rd.y) * cos(ph) * 0.2 * bedK * lull);
+    trough = (0.5 - 0.5 * sin(ph)) * bedK * lull;
+  }
   var alb = terrainAlbedo(in.world.xz, in.world.y, n);
+  alb *= 1.0 - 0.1 * trough;
+  if (bedK > 0.01) {
+    // The bed is not one colour: a film of algae greys it in patches, and close to it is
+    // grains, with bits of shell and broken coral among them.
+    let q = in.world.xz;
+    alb *= 1.0 - 0.2 * bedK * smoothstep(0.35, 0.75, n2(q * 0.55 + vec2<f32>(7.0, 1.0)) * 0.65 + n2(q * 2.3) * 0.35);
+    let gr = n2(q * 260.0) * 0.6 + n2(q * 610.0 + vec2<f32>(3.0, 8.0)) * 0.4;
+    alb *= 1.0 + ((gr - 0.5) * 0.5 - smoothstep(0.74, 0.82, gr) * 0.3 + smoothstep(0.27, 0.2, gr) * 0.25) * sat(1.2 - foot * 300.0) * bedK
+      + (n2(q * 37.0) - 0.5) * 0.2 * sat(1.3 - foot * 30.0) * bedK;
+  }
   if (sandy > 0.01) {
     let cell = floor(in.world.xz * 90.0);
     let grainK = sat(1.3 - foot * 60.0) * sandy;
@@ -774,7 +810,9 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   // One wind for the whole island, with a faster flutter that differs along each plant.
   let field = sin(F.time * 0.31 + w.x * 0.012 + w.z * 0.009);
   let phase = F.time * (1.15 + 0.45 * fract(w.x * 0.013 + w.z * 0.017)) + w.z * 0.05;
-  let gust = field * 0.55 + sin(phase) * 0.35 + sin(phase * 2.3 + 0.7) * 0.12;
+  var gust = field * 0.55 + sin(phase) * 0.35 + sin(phase * 2.3 + 0.7) * 0.12;
+  // Under water there is no wind. Things lean one way and then the other with the surge.
+  if (in.i0.y < -0.3) { gust = sin(F.time * 1.15 + w.x * 0.5 + w.z * 0.35) * 0.7 + sin(F.time * 0.43 + w.z * 0.2) * 0.4; }
   w.x += gust * in.sway * 1.15;
   w.z += gust * in.sway * 0.22;
   w.y -= abs(gust) * in.sway * in.sway * 0.28;
@@ -834,6 +872,8 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
     alb *= 0.9 + 0.1 * sin(in.uv.x * 11.0);
     leaf = 1.0;
     gloss = select(0.2, 1.0, upper);
+    // Seagrass is not waxed.
+    if (in.world.y < -0.1) { gloss *= 0.2; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
     if (kind == 1) {
@@ -847,6 +887,55 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
       alb = mix(alb, vec3<f32>(0.40, 0.42, 0.33), smoothstep(0.58, 0.85, blotch) * 0.35);
       alb *= mix(0.62, 1.0, smoothstep(0.0, 1.4, in.uv.y));
       n = normalize(n + vec3<f32>(0.0, (ring - 0.5) * 0.7 * groove, 0.0) + (fibre - 0.5) * 0.25 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
+    }
+    if (kind == 8) {
+      // Coral. uv.x says which: 0 branches, 1 a boulder with a maze of grooves, 2 a table, 3 soft tissue.
+      let p = in.world;
+      let sub = i32(in.uv.x + 0.5);
+      let fine = sat(1.6 - length(F.camPos - p) * 0.22);
+      let mott = n3(p * 8.0);
+      let polyp = n3(p * 150.0);
+      alb *= 0.84 + 0.32 * mott;
+      if (sub == 0) {
+        // Growing tips are pale, and each branch is studded with polyps.
+        alb = mix(alb, alb * 1.3 + vec3<f32>(0.10, 0.11, 0.12), smoothstep(0.8, 1.0, in.uv.y));
+        alb *= 1.0 - 0.3 * smoothstep(0.45, 0.6, polyp) * fine;
+      } else if (sub == 1) {
+        // A brain coral: ridges a centimetre apart winding over the whole surface.
+        let q = p * 85.0;
+        let g0 = n3(q);
+        let maze = smoothstep(0.0, 0.16, abs(g0 - 0.5));
+        alb *= mix(1.0, 0.7 + 0.34 * maze, fine);
+        let gr = vec3<f32>(n3(q + vec3<f32>(0.3, 0.0, 0.0)), n3(q + vec3<f32>(0.0, 0.3, 0.0)), n3(q + vec3<f32>(0.0, 0.0, 0.3))) - g0;
+        n = normalize(n - gr * sign(g0 - 0.5) * (1.0 - maze) * 2.6 * fine);
+        let lump = n3(p * 5.0) - 0.5;
+        alb *= 1.0 + 0.3 * lump;
+      } else if (sub == 2) {
+        // A table: a lawn of finger-length branchlets seen end on, paler toward the growing rim.
+        let bud = n3(p * vec3<f32>(60.0, 20.0, 60.0));
+        let gb = vec3<f32>(n3(p * vec3<f32>(60.0, 20.0, 60.0) + vec3<f32>(0.4, 0.0, 0.0)) - bud, 0.0, n3(p * vec3<f32>(60.0, 20.0, 60.0) + vec3<f32>(0.0, 0.0, 0.4)) - bud);
+        n = normalize(n - gb * 2.4 * fine);
+        alb *= 1.0 + (bud - 0.4) * 0.9 * fine;
+        alb = mix(alb, alb * 1.3 + vec3<f32>(0.05, 0.05, 0.06), smoothstep(0.8, 1.0, in.uv.y));
+      } else if (sub == 4) {
+        // The old rock a head grows on: pitted limestone under crusts of pink algae and green turf.
+        let a = n3(p * 2.2);
+        let b = n3(p * 9.0 + vec3<f32>(3.1, 0.0, 1.7));
+        let c = n3(p * 34.0);
+        let d = n3(p * 110.0);
+        let rough = a * 0.4 + b * 0.3 + c * 0.2 + d * 0.1;
+        alb = mix(alb, vec3<f32>(0.44, 0.31, 0.30), smoothstep(0.42, 0.62, a * 0.6 + c * 0.4) * 0.5);
+        alb = mix(alb, vec3<f32>(0.21, 0.23, 0.12), smoothstep(0.4, 0.62, b * 0.6 + d * 0.4) * smoothstep(0.1, 0.8, n.y) * 0.65);
+        // Pitted all over: the hollows are dark, the knobs catch the light.
+        alb *= 0.45 + 1.1 * rough * (0.75 + 0.5 * d * fine);
+        let q = p * 34.0;
+        let gr = vec3<f32>(n3(q + vec3<f32>(0.3, 0.0, 0.0)), n3(q + vec3<f32>(0.0, 0.3, 0.0)), n3(q + vec3<f32>(0.0, 0.0, 0.3))) - c;
+        let q2 = p * 9.0 + vec3<f32>(3.1, 0.0, 1.7);
+        let gr2 = vec3<f32>(n3(q2 + vec3<f32>(0.3, 0.0, 0.0)), n3(q2 + vec3<f32>(0.0, 0.3, 0.0)), n3(q2 + vec3<f32>(0.0, 0.0, 0.3))) - b;
+        n = normalize(n - gr * 2.6 * sat(fine + 0.3) - gr2 * 1.8);
+      } else {
+        gloss = 0.35;
+      }
     }
   }
   var col = shade(in.world, n, alb, select(leaf, 0.3, kind == 3), gloss);
@@ -926,6 +1015,7 @@ struct BirdV {
   return vec4<f32>(shade(in.world, in.nrm, in.col, 0.0, 0.0), 1.0);
 }
 
+${FISH_WGSL}
 fn steepQ(i: i32) -> f32 {
   let v = F.steep[i >> 2];
   let k = i & 3;
@@ -1128,6 +1218,8 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
 
 @fragment fn fsSky(in: SkyV) -> @location(0) vec4<f32> {
   let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
+  // From under water, whatever nothing else covers is more water.
+  if (F.under > 0.5) { return vec4<f32>(waterHaze(rd.y), 1.0); }
   // Any ray that meets the sea plane is open ocean, so the water does not end at the mesh.
   if (rd.y < -0.0003 && F.camPos.y > 0.2 && F.under < 0.5) {
     let t = -F.camPos.y / rd.y;
@@ -1364,18 +1456,26 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   if (in.sheet > 0.5 && sh.bed < -0.02) { discard; }
 
   if (F.under > 0.5) {
+    let lit0 = cloudShade(in.xz0, 0.0);
     let I = normalize(in.world - F.camPos);
     let R = refract(I, -N, 1.333);
-    var col: vec3<f32>;
-    if (dot(R, R) < 1e-4) {
-      col = vec3<f32>(0.01, 0.04, 0.055);
-      col += vec3<f32>(0.04, 0.07, 0.08) * pow(1.0 - max(dot(-I, N), 0.0), 3.0);
-    } else {
-      col = skyColor(normalize(R));
+    let haze = waterHaze(I.y);
+    // Outside the window of sky the surface is a mirror of what lies under it: the lit
+    // bottom where the mirrored ray reaches it soon, open water where it has far to go.
+    let down = reflect(I, -N);
+    let deep = max(-bed, 0.2);
+    let reachB = deep / max(-down.y, 0.05);
+    let sandC = vec3<f32>(0.40, 0.58, 0.52) * mix(0.5, 1.0, lit0) * exp(-deep * vec3<f32>(0.3, 0.07, 0.05));
+    var col = mix(waterHaze(down.y), sandC, exp(-reachB * 0.09) * 0.7);
+    // The window has a soft edge: near the critical angle the surface is part mirror, part glass.
+    let ci = dot(I, N);
+    let open = 1.0 - 1.777 * (1.0 - ci * ci);
+    if (open > 0.0) {
+      col = mix(col, skyColor(normalize(R)) * vec3<f32>(0.8, 0.95, 1.0), smoothstep(0.0, 0.3, open));
     }
-    col = mix(vec3<f32>(0.02, 0.09, 0.1), col, exp(-distS * 0.06));
+    col = mix(haze, col, exp(-distS * mix(0.028, 0.06, sat(F.camDamp))));
     col = mix(col, vec3<f32>(0.75, 0.78, 0.76), foam * 0.35);
-    return vec4<f32>(tonemap(col), 1.0);
+    return vec4<f32>(tonemap(col * 1.3), 1.0);
   }
 
   let frag = in.clip;
@@ -1578,10 +1678,11 @@ struct BlitOut {
 }
 @fragment fn fsBlit(in: SkyV) -> BlitOut {
   let px = vec2<i32>(in.clip.xy);
-  var col = tonemap(textureLoad(sceneTex, px, 0).rgb);
+  // Under water the eye opens up: the same scene is exposed a little brighter.
+  var col = tonemap(textureLoad(sceneTex, px, 0).rgb * (1.0 + 0.3 * F.under));
   if (F.under > 0.5) {
     let uv = in.clip.xy / max(F.res, vec2<f32>(1.0));
-    col *= mix(1.0, 0.5, sat(length(uv - 0.5) * 1.35));
+    col *= mix(1.0, 0.72, sat(length(uv - 0.5) * 1.35));
   }
   var o: BlitOut;
   o.d = textureLoad(sceneDepth, px, 0);

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
-const js = [read('island.js'), read('shaders.js'), read('ocean.js'), read('shore.js'), read('score.js'), read('app.js')].join('\n');
+const js = [read('island.js'), read('shaders.js'), read('ocean.js'), read('shore.js'), read('score.js'), read('fish.js'), read('app.js')].join('\n');
 
 const html = `<!DOCTYPE html>
 <html lang="en">

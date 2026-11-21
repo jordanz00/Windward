@@ -33,7 +33,7 @@ On a phone, drag to look and tap the water. A second finger is Shift once you ar
 
 Low, Medium, and High are the same island with less or more in it. The choice is remembered. If a load dies, the next one steps down a level.
 
-You stay on the sand. Step into the water and you swim; hold `Q` to go under and look up through the surface. `F` lets the camera leave the ground.
+You stay on the sand. Step into the water and you swim; hold `Q` to go under and look up through the surface. Once you are properly under you stay at that depth and swim slowly, so the fish can be watched. `6` puts you beside a coral head in the lagoon. `F` lets the camera leave the ground.
 
 ## How it is built
 
@@ -45,6 +45,7 @@ You stay on the sand. Step into the water and you swim; hold `Q` to go under and
 | `source/shaders.js` | WGSL: sky, terrain, plants, and the water |
 | `source/ocean.js` | The spectral sea: two FFT wave tiles and the slopes that glitter |
 | `source/shore.js` | Shallow water on the beach: run-up, foam, and the sand it leaves wet |
+| `source/fish.js` | The reef and what lives on it: coral, seagrass, eight kinds of fish, and how they behave |
 | `source/app.js` | WebGPU, the camera, the boats and trees, the sound |
 | `source/ui.css` | The card on top of the picture |
 
@@ -65,7 +66,18 @@ Nothing is allocated per frame on purpose: the uniform buffer, the bird list, an
 - **Sand.** Dry sand is shaded from a height: pits with raised rims, wind ripples in patches, and grain. Each scale is left out once it is smaller than a pixel. Below a ragged line the sand is damp, darker and smooth, and the last high wash has left a wrack line.
 - **Startup.** Render pipelines compile in parallel while the height field and the planting run. The surf simulation warms up over the first frames instead of before them. `window.__perf` holds the time of each startup step in milliseconds, and `?perf` in the address logs it.
 
-Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after. The built page is 252 KB, 74 KB gzipped. Frame rate on real GPUs has not been measured.
+### Under the water
+
+- **The reef.** Coral grows in heads on firm ground one to three and a half metres down, thickest along the reef across the bay mouth. A head is a mound of old coral rock with living coral over it and round its foot: thickets of thin branches, clumps of blunt fingers, sea fans that bend with the surge, grooved boulders, tables, and sometimes an anemone. Seagrass grows in meadows on the calm lagoon sand, and the sand itself is combed into ripples. All of it is the same instanced prototypes as the plants on land.
+- **The fish.** Eight original species, each with its own outline built from a profile: a small blue-green chromis, an orange anemonefish with one white bar, a disc-shaped butterflyfish with a false eye, a ringed angelfish, a blunt-headed parrotfish with scales large enough to count, a sand goby, a silver trevally and a yellow-striped fusilier. A fish is a lofted body with a tail fin, dorsal and anal fins, paired fins and eyes, in three levels of detail. The fins it rows with are drawn as clear film on rays.
+- **Swimming.** A fish instance is twelve floats. The vertex shader bends the body with a wave that runs from head to tail and grows as it goes, bends the whole fish into a turn, and sculls the paired fins. The tail beats faster the faster the fish goes and stops when it glides. Small fish move in bursts; large ones hold a steady pace.
+- **Behaviour.** A school knows where it is going: a home to hover over, or a round of stops to travel and linger at. A fish knows its wandering place in the school, its neighbours, the bottom ahead, the surface, the coral in its way, the larger fish that frighten it, and you. Chromis hover over branching coral, anemonefish keep to their anemone, butterflyfish and angelfish work from head to head, parrotfish tip down to graze, gobies sit on the sand and dart, trevally patrol the lagoon and pass close by the coral, fusiliers stream along the seaward face of the reef, and a few large fish cruise the deep water alone. When a trevally passes, or you swim in among them, a school tightens and moves off, then drifts back.
+- **Cost.** Schools near you are stepped every frame with every rule. Further out they are stepped one frame in three without the neighbour rules. Beyond that only the school moves, and its fish are carried along when they come back into range. Fish are culled against the view and drawn in one buffer, one draw per species and level of detail.
+- **Light.** Under water the sun loses its red with depth, the ripples gather it into caustics, the water itself lights the shaded side of things, and distance fades everything toward the colour of the water. Outside the window of sky, the underside of the surface mirrors the bottom.
+
+For captures, `?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
+
+Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, and still 1.2 s with the reef and the fish. The built page is 319 KB, 98 KB gzipped; the reef and fish are 67 KB of that. Frame rate on real GPUs has not been measured.
 
 ## License
 
