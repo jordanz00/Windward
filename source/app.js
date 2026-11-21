@@ -1164,11 +1164,23 @@ function bindStudio() {
   $('walkbtn').addEventListener('click', () => {
     trip = null;
     orbit = false;
+    setFlyMode(false);
     mode = 2;
+    document.body.classList.add('playing', 'studio');
     document.body.classList.remove('places-open', 'cinema');
-    $('hint').textContent = 'WASD move · mouse look · Q dive · 1–6 places · Esc menu';
-    showHint = 6;
-    $('hint').classList.add('show');
+    showModeHint(false);
+    tryLockPointer();
+  });
+  const flyBtn = $('flybtn');
+  if (flyBtn) flyBtn.addEventListener('click', () => {
+    trip = null;
+    orbit = false;
+    mode = 2;
+    document.body.classList.add('playing', 'studio');
+    document.body.classList.remove('places-open', 'cinema');
+    setFlyMode(true);
+    showModeHint(true);
+    tryLockPointer();
   });
   const musicBtn = $('musicbtn');
   if (musicBtn) musicBtn.addEventListener('click', () => { musicOn = !musicOn; paintMusic(); });
@@ -1470,8 +1482,11 @@ function paintMusic() {
 }
 
 const K = Object.create(null);
-['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight'].forEach((c) => { K[c] = 0; });
+['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight'].forEach((c) => { K[c] = 0; });
 let lookX = 0, lookY = 0, dragging = false, touchN = 0;
+let velX = 0, velY = 0, velZ = 0;
+let walkHits = []; // x, z, radius — rocks, trunks, coral for walking collision
+let reefBlocks = null;
 
 // T moves the clock to the next part of the day. R changes the weather, which then stays
 // until R is pressed again past the end of the list, where the island takes it back.
@@ -1483,6 +1498,53 @@ function stepWeather(back) {
   env.hold = env.auto ? 240 : 1e9;
   showCaption(envLabel());
 }
+function paintMoveMode() {
+  const w = $('walkbtn'), f = $('flybtn');
+  if (w) w.setAttribute('aria-pressed', fly ? 'false' : 'true');
+  if (f) f.setAttribute('aria-pressed', fly ? 'true' : 'false');
+}
+function setFlyMode(on) {
+  fly = !!on;
+  if (fly) dive = 0;
+  velX = velY = velZ = 0;
+  paintMoveMode();
+}
+function showModeHint(flying) {
+  hintEl.textContent = flying
+    ? 'WASD · Space up · Ctrl down · Shift fast · Esc release look'
+    : 'Click to look · WASD move · Shift run · Q dive · F fly · Esc release';
+  showHint = 6;
+  hintEl.classList.add('show');
+}
+function tryLockPointer() {
+  const canvas = $('c');
+  if (!canvas || document.pointerLockElement === canvas || qstr.has('shot')) return;
+  const fail = () => {
+    hintEl.textContent = 'Click the view to look around';
+    showHint = 4;
+    hintEl.classList.add('show');
+  };
+  try {
+    const req = canvas.requestPointerLock({ unadjustedMovement: true });
+    if (req && typeof req.then === 'function') req.catch(fail);
+  } catch (err) {
+    try { canvas.requestPointerLock(); } catch (e2) { fail(); }
+  }
+}
+function walkBlocked(x, z, y) {
+  const rPad = 0.4;
+  for (let i = 0; i < walkHits.length; i += 3) {
+    if (Math.hypot(x - walkHits[i], z - walkHits[i + 1]) < walkHits[i + 2] + rPad) return true;
+  }
+  const B = reefBlocks;
+  if (B) {
+    for (let o = 0; o < B.length; o += 4) {
+      if (Math.abs(y - B[o + 1]) > B[o + 3] + 1.2) continue;
+      if (Math.hypot(x - B[o], z - B[o + 2]) < B[o + 3] + rPad) return true;
+    }
+  }
+  return false;
+}
 function bootKeys() {
   addEventListener('keydown', (e) => {
     if (K[e.code] != null) { K[e.code] = 1; e.preventDefault(); }
@@ -1493,7 +1555,10 @@ function bootKeys() {
     if (e.code === 'KeyM') { muted = !muted; if (audio) audio.master.gain.value = muted ? 0 : 0.9; }
     if (e.code === 'KeyN') { musicOn = !musicOn; paintMusic(); }
     if (e.code === 'KeyH') statsEl.hidden = !statsEl.hidden;
-    if (e.code === 'KeyF' && mode === 2 && !orbit) fly = !fly;
+    if (e.code === 'KeyF' && mode === 2 && !orbit) {
+      setFlyMode(!fly);
+      showModeHint(fly);
+    }
     if (e.code === 'Escape') {
       if (document.body.classList.contains('cinema')) {
         document.body.classList.remove('cinema', 'cinema-peek');
@@ -1502,6 +1567,11 @@ function bootKeys() {
       }
       if (document.body.classList.contains('places-open')) {
         document.body.classList.remove('places-open');
+        return;
+      }
+      // First Esc releases look without resetting the camera; second opens the menu.
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
         return;
       }
       openMenu();
@@ -1517,7 +1587,7 @@ function bootKeys() {
     if (mode !== 2 || e.button !== 0) return;
     dragging = true;
     if (orbit) { downX = e.clientX; downY = e.clientY; moved = 0; return; }
-    if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
+    tryLockPointer();
   });
   canvas.addEventListener('wheel', (e) => {
     if (!orbit || mode !== 2) return;
@@ -1539,12 +1609,13 @@ function bootKeys() {
       applyOrbitPose();
       return;
     }
-    if (document.pointerLockElement === canvas || dragging) { lookX += e.movementX; lookY += e.movementY; }
+    // FPS look only while pointer-locked. Mouse look never moves the player.
+    if (document.pointerLockElement === canvas) { lookX += e.movementX; lookY += e.movementY; }
   });
   canvas.addEventListener('touchstart', (e) => {
     touchN = e.touches.length;
     if (mode === 2) e.preventDefault();
-    if (orbit && e.touches[0]) { touchLX = e.touches[0].clientX; touchLY = e.touches[0].clientY; moved = 0; }
+    if (e.touches[0]) { touchLX = e.touches[0].clientX; touchLY = e.touches[0].clientY; if (orbit) moved = 0; }
   }, { passive: false });
   canvas.addEventListener('touchmove', (e) => {
     if (mode !== 2 || !e.touches.length) return;
@@ -1571,7 +1642,18 @@ function bootKeys() {
     if (!e.touches.length) { touchLX = null; touchLY = null; }
   });
   document.addEventListener('pointerlockchange', () => {
-    if (document.pointerLockElement !== $('c') && mode === 2 && !orbit && !qstr.has('shot')) openMenu();
+    const locked = document.pointerLockElement === $('c');
+    document.body.classList.toggle('locked', locked);
+    if (!locked && mode === 2 && !orbit && !qstr.has('shot')) {
+      hintEl.textContent = 'Click to look · Esc menu';
+      showHint = 4;
+      hintEl.classList.add('show');
+    }
+  });
+  document.addEventListener('pointerlockerror', () => {
+    hintEl.textContent = 'Click the view to look around';
+    showHint = 4;
+    hintEl.classList.add('show');
   });
 }
 let touchLX = null, touchLY = null;
@@ -1586,7 +1668,8 @@ let introT = 0, introFrom = null, introTo = null;
 function openMenu() {
   if (mode === 0) return;
   mode = 0;
-  document.body.classList.remove('playing', 'places-open', 'cinema', 'cinema-peek');
+  document.body.classList.remove('playing', 'places-open', 'cinema', 'cinema-peek', 'locked');
+  velX = velY = velZ = 0;
   if (document.pointerLockElement) document.exitPointerLock();
 }
 function goSpot(i) {
@@ -1594,8 +1677,9 @@ function goSpot(i) {
   const s = spots[i];
   if (!s) return;
   camX = s.x; camY = s.y; camZ = s.z; yaw = s.yaw; pitch = s.pitch;
-  fly = s.fly; dive = s.dive || 0;
+  setFlyMode(!!s.fly); dive = s.dive || 0;
   mode = 2;
+  velX = velY = velZ = 0;
 }
 
 async function main() {
@@ -1798,6 +1882,7 @@ async function main() {
     aerial.yaw = yp[0]; aerial.pitch = yp[1];
 
     const scatter = new Scatter();
+    walkHits = [];
     const pick = (ids, x, z) => ids[Math.abs(Math.floor(x * 7.3 + z * 3.1)) % ids.length];
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
     const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [32]));
@@ -1834,7 +1919,9 @@ async function main() {
       const h = fieldSample(world, x, z);
       if (h < 0.4 || h > 4.5) continue;
       const tint = [0.9 + rnd() * 0.16, 0.92 + rnd() * 0.14, 0.84 + rnd() * 0.16];
-      scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), 0.85 + rnd() * 0.3, tint, 0.92 + rnd() * 0.2);
+      const psc = 0.85 + rnd() * 0.3;
+      scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.92 + rnd() * 0.2);
+      walkHits.push(x, z, 0.4 * psc);
       palms++;
     }
     for (let i = 0; i < (q.palms + q.broad) * 20 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget || ferns < fernBudget || canopies < canopyBudget); i++) {
@@ -1846,7 +1933,9 @@ async function main() {
       const clump = vnoise(x * 0.012, z * 0.012);
       const tint = [0.86 + rnd() * 0.22, 0.9 + rnd() * 0.18, 0.84 + rnd() * 0.2];
       if (palms < q.palms && h > 0.6 && h < 5.5 && s < 0.32 && clump > 0.42) {
-        scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), 0.8 + rnd() * 0.4, tint, 0.9 + rnd() * 0.25);
+        const psc = 0.8 + rnd() * 0.4;
+        scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.9 + rnd() * 0.25);
+        walkHits.push(x, z, 0.4 * psc);
         palms++;
       } else if (shrubs < shrubBudget && h > 0.35 && h < 2.4 && s < 0.36 && clump > 0.36) {
         scatter.add(pick(shrubIds, x, z), x, h, z, rnd() * 6.28, 1.8 + rnd() * 1.5, tint, 0.7 + rnd() * 0.5);
@@ -1898,6 +1987,7 @@ async function main() {
       const tall = 7.5 + smooth01(3, 14, h) * 6 + rnd() * 5;
       const tint = [0.8 + rnd() * 0.45, 0.82 + rnd() * 0.36, 0.75 + rnd() * 0.5];
       scatter.add(treeIds[(rnd() * treeIds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, 0.85 + rnd() * 0.4);
+      walkHits.push(x, z, 0.55 * tall);
       trees++;
     }
     for (let i = 0; i < q.rocks * 20 && rocks < q.rocks; i++) {
@@ -1910,6 +2000,7 @@ async function main() {
       if (vnoise(x * 0.04, z * 0.04) < 0.58) continue;
       const sc = 0.35 + rnd() * 1.1;
       scatter.add(pick(rockIds, x, z), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
+      walkHits.push(x, z, 0.65 * sc);
       rocks++;
     }
     const stackList = [];
@@ -1920,11 +2011,13 @@ async function main() {
       if (h < -6 || h > -0.4) continue;
       const sc = 1.5 + rnd() * 2.8;
       scatter.add(rockIds[stacks % 2], x, h - sc * 0.2, z, rnd() * 6, sc, [0.9, 0.86, 0.8], 1.05 + rnd() * 0.9);
+      walkHits.push(x, z, 0.7 * sc);
       stackList.push(x, h + sc * 0.3, z, sc * 0.9);
       stacks++;
     }
     // Skiff and a buoy, so the beach and the bay have a scale.
     scatter.add(scatter.proto([makeSkiff()], 2), beach.x + 3.5, beach.h, beach.z + 1.2, byaw - 0.5 + Math.PI * 0.5, 1.15, null, 1);
+    walkHits.push(beach.x + 3.5, beach.z + 1.2, 1.1);
     scatter.add(scatter.proto([icosphere(1, 0.28, [0.75, 0.08, 0.06])], 0.4), lagoon.x + 16, 0.12, lagoon.z + 4, 0, 1, null, 1.15);
     const reef = plantReef(world, scatter, q);
     // How open each plant stands to the trade wind: full on the windward shore, less in the
@@ -1938,6 +2031,7 @@ async function main() {
     for (let i = 3; i < perch.length; i += 5) perch[i] = scatter.data[perch[i] * ISTRIDE + 6];
     scatter.finish();
     const fishLife = new FishLife(world, reef, q, stackList);
+    reefBlocks = fishLife.blocks;
     const fishPack = packMeshes(fishMeshes());
     // The underwater place: beside a coral head that has a school over it.
     {
@@ -2370,7 +2464,7 @@ async function main() {
         yaw = introFrom.yaw + dyaw * t;
         pitch = introFrom.pitch + (introTo.pitch - introFrom.pitch) * t;
         if (Math.abs(lookX) + Math.abs(lookY) > 12) introT = 1;
-        if (introT >= 1) { mode = 2; showHint = 7; fly = false; dive = 0; }
+        if (introT >= 1) { mode = 2; setFlyMode(false); dive = 0; showModeHint(false); }
       } else if (mode === 2 && orbit) {
         if (trip) { advanceTrip(dt); }
         else {
@@ -2390,50 +2484,64 @@ async function main() {
         if (camY < 0.35) camY = 0.35;
         }
       } else if (mode === 2) {
+        // Mouse-look: yaw/pitch independent of WASD. Accumulate then clear each frame.
         yaw += lookX * 0.00215; pitch -= lookY * 0.00215;
-        pitch = Math.max(-1.4, Math.min(1.4, pitch));
+        pitch = Math.max(-1.45, Math.min(1.45, pitch));
         const sprint = K.ShiftLeft || K.ShiftRight || touchN >= 2;
-        const cp = Math.cos(pitch), sp = Math.sin(pitch);
         const fx = Math.sin(yaw), fz = -Math.cos(yaw);
-        let mx = 0, my = 0, mz = 0;
-        const forward = (K.KeyW || touchN >= 1) ? 1 : 0;
+        const rx = Math.cos(yaw), rz = Math.sin(yaw);
+        let wishX = 0, wishY = 0, wishZ = 0;
+        const forward = (K.KeyW || (touchN >= 1 && !orbit)) ? 1 : 0;
         const back = K.KeyS ? 1 : 0;
+        if (forward) { wishX += fx; wishZ += fz; }
+        if (back) { wishX -= fx; wishZ -= fz; }
+        if (K.KeyD) { wishX += rx; wishZ += rz; }
+        if (K.KeyA) { wishX -= rx; wishZ -= rz; }
+        const hLen = Math.hypot(wishX, wishZ);
+        if (hLen > 1e-6) { wishX /= hLen; wishZ /= hLen; }
         if (fly) {
-          const fxx = fx * cp, fzz = fz * cp, fyy = sp;
-          if (forward) { mx += fxx; my += fyy; mz += fzz; }
-          if (back) { mx -= fxx; my -= fyy; mz -= fzz; }
-          const rx = Math.cos(yaw), rz = Math.sin(yaw);
-          if (K.KeyD) { mx += rx; mz += rz; }
-          if (K.KeyA) { mx -= rx; mz -= rz; }
-          if (K.KeyE || K.Space) my += 1;
-          if (K.KeyQ) my -= 1;
-          const spm = sprint ? 46 : 13;
-          const ml = Math.hypot(mx, my, mz) || 1;
-          camX += mx / ml * spm * dt; camY += my / ml * spm * dt; camZ += mz / ml * spm * dt;
+          // Horizontal WASD; Space / Ctrl for vertical. No terrain lock.
+          if (K.Space || K.KeyE) wishY += 1;
+          if (K.ControlLeft || K.ControlRight || K.KeyQ) wishY -= 1;
+          const spm = sprint ? 48 : 14;
+          const accel = 9.0, friction = 7.0;
+          const tx = wishX * spm, ty = wishY * spm, tz = wishZ * spm;
+          const kA = 1 - Math.exp(-accel * dt), kF = 1 - Math.exp(-friction * dt);
+          velX += (tx - velX) * (wishX || wishZ || wishY ? kA : kF);
+          velY += (ty - velY) * (wishY ? kA : kF);
+          velZ += (tz - velZ) * (wishX || wishZ || wishY ? kA : kF);
+          camX += velX * dt; camY += velY * dt; camZ += velZ * dt;
         } else {
-          const rx = Math.cos(yaw), rz = Math.sin(yaw);
-          if (forward) { mx += fx; mz += fz; }
-          if (back) { mx -= fx; mz -= fz; }
-          if (K.KeyD) { mx += rx; mz += rz; }
-          if (K.KeyA) { mx -= rx; mz -= rz; }
-          const ml = Math.hypot(mx, mz);
           const ground = fieldSample(world, camX, camZ);
           const wy = waveY(world, camX, camZ, time);
           const swimming = ground < wy - 0.25;
-          // Slower under water, so the fish are watched and not chased.
-          const spm = swimming ? (dive > 0.7 ? (sprint ? 3.6 : 1.5) : (sprint ? 7.5 : 3.2)) : (sprint ? 8.2 : 4.1);
-          if (ml > 0) {
-            const nx = camX + mx / ml * spm * dt;
-            const nz = camZ + mz / ml * spm * dt;
+          const spm = swimming ? (dive > 0.7 ? (sprint ? 3.6 : 1.5) : (sprint ? 7.5 : 3.2)) : (sprint ? 8.4 : 4.2);
+          const accel = swimming ? 6.0 : 11.0, friction = swimming ? 5.0 : 14.0;
+          const tx = wishX * spm, tz = wishZ * spm;
+          const kA = 1 - Math.exp(-accel * dt), kF = 1 - Math.exp(-friction * dt);
+          const moving = hLen > 1e-6;
+          velX += (tx - velX) * (moving ? kA : kF);
+          velZ += (tz - velZ) * (moving ? kA : kF);
+          velY = 0;
+          const step = Math.hypot(velX, velZ) * dt;
+          if (step > 1e-5) {
+            const nx = camX + velX * dt, nz = camZ + velZ * dt;
             const nh = fieldSample(world, nx, nz);
-            if (nh < ground + 0.75) { camX = nx; camZ = nz; }
+            // Respect slopes and solid props; try axis slides when blocked.
+            if (nh < ground + 0.85 && !walkBlocked(nx, nz, camY)) {
+              camX = nx; camZ = nz;
+            } else {
+              const xOnly = !walkBlocked(camX + velX * dt, camZ, camY) && fieldSample(world, camX + velX * dt, camZ) < ground + 0.85;
+              const zOnly = !walkBlocked(camX, camZ + velZ * dt, camY) && fieldSample(world, camX, camZ + velZ * dt) < ground + 0.85;
+              if (xOnly) camX += velX * dt; else velX = 0;
+              if (zOnly) camZ += velZ * dt; else velZ = 0;
+            }
           }
           const gh = fieldSample(world, camX, camZ);
           const wh = waveY(world, camX, camZ, time);
           if (gh < wh - 0.25) {
             if (K.KeyQ) dive = Math.min(6, dive + dt * 1.6);
             else if (K.KeyE || K.Space) dive = Math.max(0, dive - dt * 2.2);
-            // Just under the surface a swimmer bobs back up. Further down they stay where they are.
             else if (dive < 0.7) dive = Math.max(0, dive - dt * 0.35);
             camY = Math.max(gh + 0.45, wh + 0.42 - dive);
           } else {
@@ -2805,7 +2913,8 @@ async function main() {
       mode = 2;
       enterPlace('lagoon', false);
       showHint = 7;
-      $('hint').textContent = 'Drag to look · click the water · Places to travel';
+      $('hint').textContent = 'Click Walk for FPS look · or drag here in Places view';
+      paintMoveMode();
     });
     menuBtn.addEventListener('click', () => {
       if (mode === 0) {

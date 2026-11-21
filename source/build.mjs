@@ -41,21 +41,22 @@ ${pack(css)}
     <button type="button" data-q="high">High</button>
   </div>
   <div class="keys">
-    <b>Drag</b><span>Look around. Scroll comes closer. Click the water.</span>
+    <b>Look</b><span>Click the view to lock the mouse. Move it to look. Esc releases.</span>
+    <b>Walk</b><span>WASD to move. Shift to run. Q to dive in the water.</span>
+    <b>Fly</b><span>F or Fly. WASD, Space up, Ctrl down, Shift faster.</span>
     <b>Places</b><span>Lagoon, ocean, cove, lake, storm, reef, pool</span>
-    <b>Walk</b><span>Step onto the sand. WASD, Q to dive, F to fly.</span>
     <b>Watch</b><span>Hide the interface. C does the same.</span>
-    <b>Day</b><span>The hours pass on their own. T moves to the next part of the day, R changes the weather.</span>
+    <b>Day</b><span>T next hour, R weather. N music.</span>
     <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
-    <b>Music</b><span>N quiets the score. [ and ] set how present it is.</span>
-    <b>Esc</b><span>This card</span>
+    <b>Esc</b><span>Release look, then open this card</span>
   </div>
   <p class="fine">Best in Chrome. On a phone, drag to look and tap the water. One HTML file, MIT licensed.</p>
 </div>
 <nav id="places" aria-label="Places"></nav>
 <div id="chrome">
   <button id="placebtn" type="button">Places</button>
-  <button id="walkbtn" type="button">Walk</button>
+  <button id="walkbtn" type="button" aria-pressed="true">Walk</button>
+  <button id="flybtn" type="button" aria-pressed="false">Fly</button>
   <button id="watchbtn" type="button">Watch</button>
   <button id="hourbtn" type="button">Hour</button>
   <button id="skybtn" type="button">Weather</button>
@@ -63,7 +64,7 @@ ${pack(css)}
 </div>
 <div id="caption"></div>
 <button id="menubtn" type="button">Menu</button>
-<div id="hint">Drag to look · click the water</div>
+<div id="hint">Click to look</div>
 <div id="stats" hidden></div>
 <script>
 ${js}
