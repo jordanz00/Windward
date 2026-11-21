@@ -813,7 +813,7 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser) {
         const cx = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
         const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
         // Outside the view, or smaller than a couple of pixels.
-        ok = cw > -r && Math.abs(cx) < cw + r * 2.2 && Math.abs(cv) < cw + r * 2.2 && r > dist * 0.003;
+        ok = cw > -r && Math.abs(cx) < cw + r * 2.2 && Math.abs(cv) < cw + r * 2.2 && r > dist * 0.004;
       }
       if (ok) {
         let lod = coarser;
@@ -1792,8 +1792,9 @@ async function main() {
     const scatter = new Scatter();
     const pick = (ids, x, z) => ids[Math.abs(Math.floor(x * 7.3 + z * 3.1)) % ids.length];
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
-    const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [45]));
-    const palmIds = [3, 8, 21].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 9, [30, 110]));
+    const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [32]));
+    // Close palms keep every leaflet; beyond ~22 m / ~72 m the coarser crowns carry the silhouette.
+    const palmIds = [3, 8, 21].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 9, [22, 72]));
     // A palm leans the way the ground falls, toward the open light over the water.
     const leanYaw = (x, z) => {
       const gx = fieldSample(world, x + 3, z) - fieldSample(world, x - 3, z), gz = fieldSample(world, x, z + 3) - fieldSample(world, x, z - 3);
@@ -1856,7 +1857,7 @@ async function main() {
     // Flowering shrubs, in the open where the sun reaches: behind the beach, by the lagoon,
     // and along the edge of the forest. Every blossom is somewhere a bee or a butterfly can go.
     const blooms = [], perch = [];
-    const flowerIds = [0, 1, 2, 3, 4, 5].map((sd) => { const f = makeFlowerShrub(sd + 1, 0); return { id: scatter.proto([f.mesh, makeFlowerShrub(sd + 1, 1).mesh], 1.3, [16]), blooms: f.blooms }; });
+    const flowerIds = [0, 1, 2, 3, 4, 5].map((sd) => { const f = makeFlowerShrub(sd + 1, 0); return { id: scatter.proto([f.mesh, makeFlowerShrub(sd + 1, 1).mesh], 1.3, [12]), blooms: f.blooms }; });
     const plantFlower = (x, z) => {
       const h = fieldSample(world, x, z);
       if (h < 0.7 || h > 9 || fieldSlope(world, x, z) > 0.35) return false;
@@ -1876,7 +1877,7 @@ async function main() {
       if (plantFlower(x, z)) n++;
     }
     // The interior is forest. Crowns touch, with clearings where the mask opens.
-    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 0.75, [55, 170]));
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 0.75, [38, 115]));
     let trees = 0;
     for (let i = 0; i < q.forest * 30 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
@@ -2089,7 +2090,8 @@ async function main() {
     const shadowView = targetOf(device, 2048, 2048, shadowFmt).createView();
     // A second, tight shadow map around the eye. The island map has 33 cm texels,
     // which cannot hold the shadow of a leaflet. This one has 2.5 cm texels.
-    const NEAR_R = 26, NEAR_RES = 2048;
+    // Near map only needs leaflet-scale shadows around the eye; beyond that the island map is enough.
+    const NEAR_R = 20, NEAR_RES = 2048;
     const nearView = targetOf(device, NEAR_RES, NEAR_RES, shadowFmt).createView();
     const nearPass = passOf(undefined, null, nearView);
     const NEARVP = new Float32Array(16);
@@ -2507,15 +2509,17 @@ async function main() {
       device.queue.writeBuffer(ubuf, 0, uf);
       device.queue.writeBuffer(rbuf, 0, ur);
 
-      mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, 1e9, 0);
+      // Plants past the haze are invisible; stop drawing them instead of shading every tree on the island.
+      const plantReach = Math.min(360, 190 + eyeH * 3.2);
+      mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, plantReach, 0);
       let instEnd = mainDraws.end;
       if (uf[86] > 0.5) {
-        // The mirror is half resolution, so it takes each plant one level coarser.
-        reflDraws = scatter.collect(instArr, instEnd, RVP, camX, -camY, camZ, 1e9, 1);
+        // Half-res mirror: one LOD coarser, and a shorter reach — distant reflections are a shimmer.
+        reflDraws = scatter.collect(instArr, instEnd, RVP, camX, -camY, camZ, Math.min(240, plantReach * 0.65), 1);
         instEnd = reflDraws.end;
       }
-      // What stands near enough to throw a shadow into the near box.
-      nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.6, 0);
+      // Leaflet-scale near shadows only around the eye; coarser LOD past the first cut.
+      nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.45, 0);
       instEnd = nearDraws.end;
       if (instEnd) device.queue.writeBuffer(instB, 0, instArr, 0, instEnd * ISTRIDE);
       // The same frame data with the near matrix in the shadow slot, for the near shadow pass.
