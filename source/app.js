@@ -320,8 +320,10 @@ function makePalm(seed, lod) {
     if (i < rings) P = add(P, T, H / rings);
   }
   const C = P;
-  const nf = 24 + ((rnd() * 8) | 0), nd = 2 + ((rnd() * 3) | 0);
-  const nseg = [20, 8, 4][lod], lseg = [6, 3, 2][lod];
+  // Cap geometry so one palm stays under 65535 verts (packed as uint16). Density comes from
+  // width, droop and fold, not from blowing past the index limit.
+  const nf = 22 + ((rnd() * 5) | 0), nd = 2 + ((rnd() * 2) | 0);
+  const nseg = [18, 8, 4][lod], lseg = [4, 3, 2][lod];
   for (let j = 0; j < nf + nd; j++) {
     const dead = j >= nf;
     // 0 has just opened at the top of the crown. 1 is about to fall.
@@ -367,8 +369,8 @@ function makePalm(seed, lod) {
     }
     // Close to, the leaflets must fill the silhouette: denser, wider, and overlapping so the
     // crown is a mass of leaves, not a starburst of flat blades.
-    const per = Math.max(3, Math.round(L * [18, 5.2, 1.6][lod]));
-    const W = widthK * [1.35, 3.0, 7][lod] * (dead ? 0.6 : 1);
+    const per = Math.max(3, Math.round(L * [14, 5.2, 1.6][lod]));
+    const W = widthK * [1.4, 3.0, 7][lod] * (dead ? 0.6 : 1);
     const lift = dead ? -0.2 : 0.35 - age * 0.55;
     const hang = dead ? 2.5 : 0.35 + age * 1.65 + hang0;
     const young = sat(1 - age / 0.3), old = sat((age - 0.72) / 0.28);
