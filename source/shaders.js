@@ -36,6 +36,7 @@ function shaderCode(res, span) {
   ripO: vec4<f32>,
   mood: vec4<f32>,
   shadowVP: mat4x4<f32>,
+  nearVP: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var htex: texture_2d<f32>;
@@ -64,6 +65,7 @@ struct ShoreU {
 @group(0) @binding(7) var shoreWet: texture_2d<f32>;
 @group(0) @binding(8) var skyMap: texture_2d<f32>;
 @group(0) @binding(9) var skySamp: sampler;
+@group(0) @binding(10) var shadowNear: texture_depth_2d;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
@@ -285,15 +287,20 @@ fn cloudCover(p: vec2<f32>) -> f32 {
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   let amt = cloudCover(p.xz);
   if (amt <= 0.0) { return 0.0; }
-  let h = (p.y - CLOUD_BASE) / (0.1 + 1.25 * amt);
+  let h = (p.y - CLOUD_BASE) / (0.1 + 1.15 * pow(amt, 0.62));
   if (h < 0.0 || h > 1.0) { return 0.0; }
-  var d = smoothstep(0.0, 0.2, h) * (1.0 - h * h) * sat(amt * 6.0);
-  // Billows eat into the sides and the top. The base stays flat.
+  var d = smoothstep(0.0, 0.12, h) * (1.0 - h * h) * sat(amt * 5.0);
+  // Billows eat into the sides and the top, in four sizes from a few hundred metres
+  // down to a few tens. The base stays flat.
   if (fine > 0.5) {
-    let b = n3(p * 4.1) * 0.5 + n3(p * 9.7 + vec3<f32>(4.0, 1.0, 7.0)) * 0.3 + n3(p * 23.0 + vec3<f32>(2.0, 9.0, 5.0)) * 0.2;
-    d -= b * (0.2 + 0.65 * h);
+    let w = p + vec3<f32>(F.time * 0.008, 0.0, F.time * 0.003);
+    let b = n3(w * 3.1) * 0.42 + n3(w * 7.3 + vec3<f32>(4.0, 1.0, 7.0)) * 0.28
+      + n3(w * 17.0 + vec3<f32>(2.0, 9.0, 5.0)) * 0.18 + n3(w * 39.0 + vec3<f32>(8.0, 3.0, 1.0)) * 0.12;
+    d -= sat(0.5 + (b - 0.5) * 3.4) * (0.22 + 0.95 * h);
+  } else {
+    d -= 0.25 + 0.3 * h;
   }
-  return sat(d * 3.0);
+  return sat(d * 1.8);
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
@@ -308,37 +315,54 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let sinE = max(rd.y, 0.0) + 0.012;
   let hz = normalize(rd.xz + vec2<f32>(1e-5, 0.0)) * sqrt(1.0 - sinE * sinE);
   let t0 = CLOUD_BASE / sinE;
-  let dt = min(1.9 / sinE, 14.0) / 48.0;
-  // A different offset for every texel and every bake. The bakes are blended, so it averages out.
-  let jit = fract(52.9829189 * fract(dot(in.clip.xy, vec2<f32>(0.06711056, 0.00583715))) + F.time * 7.137);
+  let big = min(1.9 / sinE, 14.0) / 20.0;
+  let ds = big / 7.0;
   let mu = dot(rd, F.sunDir);
   let sunL = F.sunCol * 1.35 * (1.0 + 1.6 * pow(sat(mu), 6.0));
   let skyL = vec3<f32>(0.30, 0.40, 0.56);
   var C = vec3<f32>(0.0);
   var tm = 0.0;
   var wsum = 0.0;
-  let org = F.camPos.xz * 0.001;
+  let org = vec3<f32>(F.camPos.x * 0.001, 0.0, F.camPos.z * 0.001);
+  let dir = vec3<f32>(hz.x, sinE, hz.y);
   if (rd.y > -0.004) {
-    for (var i = 0; i < 48; i++) {
-      let t = t0 + dt * (f32(i) + jit);
-      let p = vec3<f32>(org.x + hz.x * t, sinE * t, org.y + hz.y * t);
-      let d = cloudAt(p, 1.0);
-      if (d > 0.004) {
-        var ls = 0.0;
-        ls += cloudAt(p + F.sunDir * 0.10, 0.0) * 0.14;
-        ls += cloudAt(p + F.sunDir * 0.30, 0.0) * 0.26;
-        ls += cloudAt(p + F.sunDir * 0.70, 0.0) * 0.5;
-        let hK = sat((p.y - CLOUD_BASE) / 1.6);
-        let sunT = exp(-ls * 13.0);
-        // Light that scatters many times still gets out, so the shaded side is grey, not black.
-        let L = sunL * (sunT * 0.85 + 0.1 * exp(-ls * 1.5)) + skyL * (0.32 + 0.68 * hK);
-        let a = 1.0 - exp(-d * dt * 22.0);
-        C += T * a * L;
-        tm += T * a * t;
-        wsum += T * a;
-        T *= 1.0 - a;
-        if (T < 0.02) { break; }
+    // Long strides through clear air. Where the ray enters a cloud the surface is found
+    // by bisection and the short steps are counted from there, so the samples sit at
+    // the same depths under the surface for every texel and leave no banding or grain.
+    var t = t0;
+    var tp = t0;
+    var inside = false;
+    for (var i = 0; i < 150; i++) {
+      if (t > t0 + big * 20.0 || T < 0.02) { break; }
+      let p = org + dir * t;
+      if (!inside) {
+        if (cloudCover(p.xz) < -0.12) { tp = t; t += ds * 3.0; continue; }
+        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t += ds; continue; }
+        var a = tp;
+        var b = t;
+        for (var k = 0; k < 5; k++) {
+          let m = (a + b) * 0.5;
+          if (cloudAt(org + dir * m, 1.0) > 0.004) { b = m; } else { a = m; }
+        }
+        t = b + ds * 0.3;
+        inside = true;
+        continue;
       }
+      let d = cloudAt(p, 1.0);
+      if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
+      var ls = cloudAt(p + F.sunDir * 0.06, 1.0) * 0.1;
+      ls += cloudAt(p + F.sunDir * 0.22, 0.0) * 0.2;
+      ls += cloudAt(p + F.sunDir * 0.6, 0.0) * 0.5;
+      let hK = sat((p.y - CLOUD_BASE) / 1.3);
+      let sunT = exp(-ls * 13.0);
+      // Light that scatters many times still gets out, so the shaded side is grey, not black.
+      let L = sunL * (sunT * 0.85 + 0.1 * exp(-ls * 1.5)) + skyL * (0.32 + 0.68 * hK);
+      let al = 1.0 - exp(-d * ds * 34.0);
+      C += T * al * L;
+      tm += T * al * t;
+      wsum += T * al;
+      T *= 1.0 - al;
+      t += ds;
     }
   }
   if (wsum > 0.0) {
@@ -441,19 +465,34 @@ fn sunShadow(p: vec3<f32>) -> f32 {
   let raw = vec2<f32>(c.x / w * 0.5 + 0.5, 0.5 - c.y / w * 0.5);
   let inside = smoothstep(0.0, 0.03, raw.x) * smoothstep(1.0, 0.97, raw.x)
              * smoothstep(0.0, 0.03, raw.y) * smoothstep(1.0, 0.97, raw.y);
-  return mix(shadowAt(p), s * 0.2, inside);
+  let far = mix(shadowAt(p), s * 0.2, inside);
+  // Close to the eye, the tight map. Nine taps over about ten centimetres, which is
+  // roughly how soft the sun leaves the edge of a frond's shadow.
+  let cn = F.nearVP * vec4<f32>(p + F.sunDir * 0.06, 1.0);
+  let un = vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5);
+  let zn = clamp(cn.z, 0.0, 1.0);
+  let tn = 1.7 / 2048.0;
+  var sn = 0.0;
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      sn += textureSampleCompare(shadowNear, shadowSamp, un + vec2<f32>(f32(x), f32(y)) * tn, zn);
+    }
+  }
+  let wn = 1.0 - smoothstep(0.8, 0.97, max(abs(cn.x), abs(cn.y)));
+  return mix(far, sn / 9.0, wn);
 }
 
-// leaf is 1 for foliage, which wraps the light and passes it when backlit.
-fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32) -> vec3<f32> {
+// leaf is 1 for a thin blade, which is lit from whichever side the sun is on: by
+// reflection on the near face, by transmission through it from the far face.
+// gloss is the waxy sheen on a leaf's upper face.
+fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: f32) -> vec3<f32> {
   let n = normalize(nrm);
-  let ndl = max(dot(n, F.sunDir), 0.0);
-  let lit = mix(ndl, sat(ndl * 0.45 + 0.55), leaf);
+  let nl = dot(n, F.sunDir);
   let sh = sunShadow(world) * cloudShade(world.xz, world.y);
   let hemi = n.y * 0.5 + 0.5;
-  let sky = vec3<f32>(0.34, 0.48, 0.70) * hemi;
+  let sky = vec3<f32>(0.34, 0.48, 0.70) * mix(hemi, 0.75, leaf);
   let ground = vec3<f32>(0.26, 0.19, 0.11) * (1.0 - hemi);
-  var light = F.sunCol * lit * sh * 1.2 + sky * 0.7 + ground * 0.4;
+  var light = F.sunCol * max(nl, 0.0) * sh * 1.2 + sky * 0.7 + ground * 0.4;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
     let absorb = exp(-depth * vec3<f32>(0.38, 0.08, 0.05));
@@ -462,14 +501,20 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32) -> vec3
   }
   if (F.under > 0.5) { light *= vec3<f32>(0.55, 0.82, 0.86); }
   var col = albedo * light;
-  let back = sat(dot(-n, F.sunDir));
-  col += albedo * vec3<f32>(0.72, 1.08, 0.34) * back * sh * leaf * 1.45;
-  if (world.y > -0.15 && world.y < 1.1) {
-    let V = normalize(F.camPos - world);
-    let H = normalize(V + F.sunDir);
-    let spec = pow(max(dot(n, H), 0.0), mix(56.0, 22.0, leaf));
-    let wet = (1.0 - sat(world.y / 0.7)) * (1.0 - leaf);
-    col += F.sunCol * spec * sh * (leaf * 0.04 + wet * 0.09);
+  // Light through the blade is yellower and more saturated than light off it.
+  col += albedo * vec3<f32>(1.25, 1.45, 0.3) * F.sunCol * max(-nl, 0.0) * sh * leaf;
+  let V = normalize(F.camPos - world);
+  let H = normalize(V + F.sunDir);
+  if (gloss > 0.0) {
+    let ndv = max(dot(n, V), 0.0);
+    let fr = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+    col += F.sunCol * pow(max(dot(n, H), 0.0), 36.0) * step(0.0, nl) * sh * gloss * 0.55;
+    col += vec3<f32>(0.34, 0.48, 0.70) * fr * gloss * 0.55;
+  }
+  if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
+    let spec = pow(max(dot(n, H), 0.0), 56.0);
+    let wet = 1.0 - sat(world.y / 0.7);
+    col += F.sunCol * spec * sh * wet * 0.09;
   }
   return applyFog(col, world);
 }
@@ -622,7 +667,7 @@ struct GeoV {
     let footT = distT * F.tanHalf * 2.0 / max(F.res.y, 1.0) / max(abs(F.camPos.y - in.world.y) / max(distT, 0.1), 0.08);
     washFoam = foamCover(in.world.xz, sh.foam * smoothstep(0.06, 0.0, sh.h) * 0.8, footT);
   }
-  var col = shade(in.world, n, alb, 0.0);
+  var col = shade(in.world, n, alb, 0.0, 0.0);
   // Wet sand is a mirror at a low angle. Dry sand never is.
   let Vt = normalize(F.camPos - in.world);
   let gloss = max(smoothstep(0.26, 0.02, in.world.y) * step(-0.02, in.world.y), washWet) * (1.0 - slope * 3.0);
@@ -702,12 +747,13 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
   var n = normalize(in.nrm);
   var alb = in.col;
-  let crown = in.kind > 2.5 && in.kind < 3.5;
-  let leafy = select(0.0, 1.0, in.kind > 1.5 && in.kind < 2.5);
-  if (crown) {
+  let Vv = normalize(F.camPos - in.world);
+  let kind = i32(in.kind + 0.5);
+  var leaf = 0.0;
+  var gloss = 0.0;
+  if (kind == 3) {
     // A leaf mass. Its outline is leaves and gaps, not the edge of a smooth lump,
     // and its surface is clumps catching the light at different angles.
-    let Vv = normalize(F.camPos - in.world);
     let rim = 1.0 - abs(dot(n, Vv));
     let dist = length(F.camPos - in.world);
     let p = in.world * mix(2.6, 0.9, sat(dist / 220.0));
@@ -718,14 +764,38 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
     alb *= 0.5 + 1.0 * leafN;
     let tilt = vec3<f32>(n2(p.xz * 1.9 + vec2<f32>(1.0, p.y)) - 0.5, n2(p.zy * 1.9 + vec2<f32>(4.0, p.x)) - 0.5, n2(p.yx * 1.9 + vec2<f32>(7.0, p.z)) - 0.5);
     n = normalize(n + tilt * 1.1);
-  } else if (dot(n, F.camPos - in.world) < 0.0) { n = -n; }
-  // Leaves are a dull, dark green. The saturated value is what reads as plastic.
-  alb = mix(alb, mix(vec3<f32>(dot(alb, vec3<f32>(0.3, 0.6, 0.1))), alb, 0.72) * 0.62, leafy);
-  var col = shade(in.world, n, alb, select(leafy, 0.3, crown));
-  let ground = sampleField(in.world.xz).x;
-  let above = in.world.y - ground;
-  if (above > 0.02 && above < 1.8) {
-    col *= mix(0.48, 1.0, smoothstep(0.02, 0.9, above));
+  } else if (kind == 2) {
+    // A blade. The eye may be looking at its waxy upper face or its paler underside.
+    let upper = dot(n, Vv) > 0.0;
+    if (!upper) {
+      n = -n;
+      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.6, 0.1))), 0.22) * 1.2;
+    }
+    let rib = smoothstep(0.32, 0.0, abs(in.uv.x));
+    alb = mix(alb, alb * 1.5 + vec3<f32>(0.025, 0.025, 0.0), rib * 0.55);
+    alb *= 0.9 + 0.1 * sin(in.uv.x * 11.0);
+    leaf = 1.0;
+    gloss = select(0.2, 1.0, upper);
+  } else {
+    if (dot(n, Vv) < 0.0) { n = -n; }
+    if (kind == 1) {
+      // Bark by height: the scar of each fallen frond is a ring, with fibre running up between them.
+      let wob = n2(vec2<f32>(in.uv.x * 7.0, in.uv.y * 0.8));
+      let ring = fract(in.uv.y * 8.5 + wob * 0.6);
+      let groove = smoothstep(0.0, 0.14, ring) * smoothstep(1.0, 0.86, ring);
+      let fibre = n2(vec2<f32>(in.uv.x * 110.0, in.uv.y * 5.0));
+      let blotch = n2(vec2<f32>(in.uv.x * 5.0 + 3.0, in.uv.y * 0.9));
+      alb *= (0.5 + 0.5 * groove) * (0.78 + 0.34 * fibre) * (0.75 + 0.5 * blotch);
+      alb = mix(alb, vec3<f32>(0.40, 0.42, 0.33), smoothstep(0.58, 0.85, blotch) * 0.35);
+      alb *= mix(0.62, 1.0, smoothstep(0.0, 1.4, in.uv.y));
+      n = normalize(n + vec3<f32>(0.0, (ring - 0.5) * 0.7 * groove, 0.0) + (fibre - 0.5) * 0.25 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
+    }
+  }
+  var col = shade(in.world, n, alb, select(leaf, 0.3, kind == 3), gloss);
+  // Where a trunk or a rock meets the ground, the ground hides the sky from it.
+  let above = in.world.y - sampleField(in.world.xz).x;
+  if (leaf < 0.5 && above < 0.6) {
+    col *= mix(0.6, 1.0, smoothstep(0.0, 0.6, above));
   }
   return vec4<f32>(col, 1.0);
 }
@@ -768,7 +838,7 @@ struct GrassV {
   if (in.kind > 0.5) { col = mix(vec3<f32>(0.04, 0.16, 0.09), vec3<f32>(0.18, 0.34, 0.16), in.uv.y); }
   let rib = smoothstep(0.08, 0.0, abs(in.uv.x - 0.5));
   col *= 0.82 + 0.22 * n2(in.world.xz * 1.6) - rib * 0.12;
-  return vec4<f32>(shade(in.world, in.nrm, col, 1.0), 1.0);
+  return vec4<f32>(shade(in.world, in.nrm, col, 1.0, 0.0), 1.0);
 }
 
 struct BirdV {
@@ -795,7 +865,7 @@ struct BirdV {
   return o;
 }
 @fragment fn fsBird(in: BirdV) -> @location(0) vec4<f32> {
-  return vec4<f32>(shade(in.world, in.nrm, in.col, 0.0), 1.0);
+  return vec4<f32>(shade(in.world, in.nrm, in.col, 0.0, 0.0), 1.0);
 }
 
 fn steepQ(i: i32) -> f32 {

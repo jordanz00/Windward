@@ -276,92 +276,139 @@ function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway) {
   m.tri(mL, tip, mR);
 }
 
-function makePalm(seed) {
-  const rnd = seeded(seed || 1);
+// A coconut palm, in metres, leaning along +x. Level 0 carries every leaflet. The
+// coarser levels keep fewer, wider leaflets on the same trunk and the same fronds,
+// so a palm keeps its shape as it recedes.
+function makePalm(seed, lod) {
+  const rnd = seeded(seed * 9973 + 17);
   const m = new Mesh();
-  const sides = 8, seg = 16;
-  const height = 0.94 + rnd() * 0.18;
-  const bend = (rnd() - 0.32) * 0.5;
-  const bendZ = (rnd() - 0.5) * 0.26;
-  const twist = rnd() * 6.28;
-  const rings = [];
-  for (let i = 0; i <= seg; i++) {
-    const t = i / seg;
-    const y = height * (t * 0.9 + t * t * 0.1);
-    const ox = Math.sin(t * 2.2) * bend * t;
-    const oz = bendZ * t * t;
-    const flare = t < 0.08 ? 1.65 - t * 6 : 1;
-    const collar = (t > 0.58 && (i & 1)) ? 1.2 : 1;
-    const r = (0.072 * (1 - t * 0.52) + 0.018) * flare * collar;
-    const scar = collar > 1 ? 0.7 : 1;
+  const add = (a, b, k) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+  const unit = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const H = 6.5 + rnd() * 5.5, lean = 0.1 + rnd() * rnd() * 0.65, topSway = 0.09;
+  const sides = [12, 7, 4][lod], rings = [36, 12, 5][lod];
+  // Trunk: out of the ground at an angle, then curving back up toward the light.
+  let P = [0, -0.2, 0];
+  let last = null;
+  for (let i = 0; i <= rings; i++) {
+    const t = i / rings, s = t * H;
+    const th = lean * (1 - 0.92 * Math.pow(t, 0.75));
+    const T = [Math.sin(th), Math.cos(th), 0], X = [Math.cos(th), -Math.sin(th), 0];
+    const r = 0.125 - 0.03 * t + 0.17 * Math.exp(-s / 0.45) + 0.06 * smooth01(0.92, 1, t);
     const row = [];
-    for (let k = 0; k < sides; k++) {
-      const a = k / sides * Math.PI * 2 + twist + t * 0.35;
-      const nx = Math.cos(a), nz = Math.sin(a);
-      const rib = 1 + 0.045 * Math.sin(k * 2.0 + i * 0.6);
-      const streak = 0.76 + 0.24 * (0.5 + 0.5 * Math.sin(k * 1.7 + seed));
-      const bark = 0.36 * scar * streak;
-      row.push(m.v(ox + nx * r * rib, y, oz + nz * r * rib, nx, 0.14, nz, bark, bark * 0.7, bark * 0.4, t * t * 0.045));
+    for (let k = 0; k <= sides; k++) {
+      const a = k / sides * 6.2832, ca = Math.cos(a), sa = Math.sin(a);
+      const nx = X[0] * ca, ny = X[1] * ca, nz = sa;
+      row.push(m.v(P[0] + nx * r, P[1] + ny * r, P[2] + nz * r, nx, ny, nz, 0.37, 0.34, 0.3, topSway * t * t, BARK, k / sides, s));
     }
-    rings.push(row);
+    if (last) for (let k = 0; k < sides; k++) { m.tri(last[k], row[k], last[k + 1]); m.tri(last[k + 1], row[k], row[k + 1]); }
+    last = row;
+    if (i < rings) P = add(P, T, H / rings);
   }
-  for (let i = 0; i < seg; i++) {
-    for (let k = 0; k < sides; k++) {
-      const a = rings[i][k], b = rings[i][(k + 1) % sides], c = rings[i + 1][k], d = rings[i + 1][(k + 1) % sides];
-      m.tri(a, c, b); m.tri(b, c, d);
-    }
-  }
-  const crownX = Math.sin(2.2) * bend, crownY = height, crownZ = bendZ;
-  const gap = rnd() * Math.PI * 2;
-  function frond(ang, len, lift, droop, leaf, green, sway0, dead) {
-    const dx = Math.cos(ang), dz = Math.sin(ang);
-    const sx = -dz, sz = dx;
-    const steps = dead ? 7 : 12;
+  const C = P;
+  const nf = 20 + ((rnd() * 7) | 0), nd = 1 + ((rnd() * 3) | 0);
+  const nseg = [18, 8, 4][lod], lseg = [4, 2, 2][lod];
+  for (let j = 0; j < nf + nd; j++) {
+    const dead = j >= nf;
+    // 0 has just opened at the top of the crown. 1 is about to fall.
+    const age = dead ? 1.1 : (j + rnd() * 0.7) / nf;
+    const az0 = j * 2.39996 + rnd() * 0.6;
+    const el0 = dead ? -1.2 - rnd() * 0.25 : 1.3 - Math.pow(age, 1.1) * 1.75 + (rnd() - 0.5) * 0.3;
+    const L = dead ? 2.6 + rnd() : 4.0 + 1.5 * Math.sin(Math.min(1, age * 1.25 + 0.1) * Math.PI) + rnd() * 0.5;
+    const droop = dead ? 0.15 : 0.55 + age * 0.7 + rnd() * 0.35;
+    const curl = (rnd() - 0.5) * 0.8, twist = (rnd() - 0.5) * 2.2 * (0.3 + age), tipSway = 0.2 + rnd() * 0.14;
+    const widthK = 0.024 + rnd() * 0.006, lenK = 0.95 + rnd() * 0.3, hang0 = rnd() * 0.3;
+    // Leaflets draw from their own stream, so every level builds the same fronds.
+    const fr = seeded(seed * 131 + j * 977 + 5);
+    // The rachis starts in the crown and bends over under its own weight, twisting as it goes.
     const pts = [];
-    for (let s = 0; s <= steps; s++) {
-      const t = s / steps;
-      const arch = Math.sin(t * Math.PI * lift) * (0.22 + len * 0.12) - t * t * droop;
-      pts.push([crownX + dx * t * len, crownY + arch, crownZ + dz * t * len, t]);
+    let p = [C[0] + Math.cos(az0) * 0.1, C[1] - 0.3 + (1 - Math.min(age, 1)) * 0.4, C[2] + Math.sin(az0) * 0.1];
+    for (let k = 0; k <= nseg; k++) {
+      const t = k / nseg;
+      const e = el0 - droop * Math.pow(t, 1.5), az = az0 + curl * t * t, ro = twist * t;
+      const ce = Math.cos(e), se = Math.sin(e), ca = Math.cos(az), sa = Math.sin(az);
+      const T = [ce * ca, se, ce * sa], S0 = [-sa, 0, ca], U0 = [-se * ca, ce, -se * sa];
+      const cr = Math.cos(ro), sr = Math.sin(ro);
+      const S = [S0[0] * cr + U0[0] * sr, S0[1] * cr + U0[1] * sr, S0[2] * cr + U0[2] * sr];
+      const U = [U0[0] * cr - S0[0] * sr, U0[1] * cr - S0[1] * sr, U0[2] * cr - S0[2] * sr];
+      pts.push({ p: p, T: T, S: S, U: U });
+      p = add(p, T, L / nseg);
     }
-    const rach = dead ? [0.4, 0.3, 0.14] : [0.22, 0.28, 0.1];
-    for (let s = 0; s < steps; s++) {
-      const a = pts[s], b = pts[s + 1];
-      const w = 0.01 * (1 - a[3] * 0.55);
-      const sway = sway0 * (0.06 + a[3] * a[3]);
-      const aL = m.v(a[0] + sx * w, a[1], a[2] + sz * w, dx, 0.7, dz, rach[0], rach[1], rach[2], sway);
-      const aR = m.v(a[0] - sx * w, a[1], a[2] - sz * w, dx, 0.7, dz, rach[0] * 0.8, rach[1] * 0.85, rach[2], sway);
-      const bL = m.v(b[0] + sx * w, b[1], b[2] + sz * w, dx, 0.7, dz, rach[0], rach[1], rach[2], sway + 0.04);
-      const bR = m.v(b[0] - sx * w, b[1], b[2] - sz * w, dx, 0.7, dz, rach[0] * 0.8, rach[1] * 0.85, rach[2], sway + 0.04);
-      m.tri(aL, bL, aR); m.tri(aR, bL, bR);
+    const rc = dead ? [0.3, 0.22, 0.12] : [0.27 - age * 0.05, 0.3 - age * 0.06, 0.1];
+    const ring = lod === 0 ? [[1, 0], [0, 1], [-1, 0], [0, -1]] : [[1, 0], [-1, 0]];
+    let prev = null;
+    for (let k = 0; k <= nseg; k++) {
+      const q = pts[k], t = k / nseg;
+      const w = 0.006 + 0.034 * (1 - t) + 0.05 * Math.max(0, 1 - t / 0.12), hgt = w * 0.55;
+      const row = ring.map((ab) => {
+        const o = add(add(q.p, q.S, ab[0] * w), q.U, ab[1] * hgt);
+        const n = lod === 0 ? add(add([0, 0, 0], q.S, ab[0]), q.U, ab[1]) : q.U;
+        return m.v(o[0], o[1], o[2], n[0], n[1], n[2], rc[0], rc[1], rc[2], topSway + tipSway * t * t, SOLID);
+      });
+      if (prev) for (let i = 0; i < (ring.length > 2 ? ring.length : 1); i++) {
+        const i1 = (i + 1) % ring.length;
+        m.tri(prev[i], row[i], prev[i1]); m.tri(prev[i1], row[i], row[i1]);
+      }
+      prev = row;
     }
-    for (let s = 1; s < steps; s++) {
-      const p = pts[s];
-      const bell = Math.sin(Math.min(p[3] * 1.05, 1) * Math.PI);
-      const ll = leaf * (0.22 + bell * 0.9) * (dead ? 0.45 : 1);
-      if (ll < 0.02) continue;
-      for (let side = -1; side <= 1; side += 2) {
-        const bias = side < 0 ? 0.78 + rnd() * 0.2 : 0.95 + rnd() * 0.12;
-        const spread = 0.78 + p[3] * 0.2;
-        const dirx = dx * (0.18 - p[3] * 0.08) + sx * side * spread;
-        const dirz = dz * (0.18 - p[3] * 0.08) + sz * side * spread;
-        const diry = 0.06 - droop * (0.2 + p[3] * 0.7);
-        const tone = dead
-          ? [0.38 + rnd() * 0.08, 0.28, 0.12]
-          : [green[0] * (0.72 + rnd() * 0.4), green[1] * (0.78 + rnd() * 0.28), green[2] * (0.65 + rnd() * 0.4)];
-        addLeaflet(m, p[0], p[1], p[2], dirx, diry, dirz, ll * bias, (dead ? 0.02 : 0.028) + bell * 0.016, tone, sway0 * (0.4 + p[3]));
+    const per = Math.max(3, Math.round(L * [13, 4.4, 1.6][lod]));
+    const W = widthK * [1, 2.8, 7][lod] * (dead ? 0.6 : 1);
+    const lift = dead ? -0.2 : 0.45 - age * 0.6;
+    const hang = dead ? 2.5 : 0.25 + age * 1.5 + hang0;
+    const young = sat(1 - age / 0.3), old = sat((age - 0.72) / 0.28);
+    const green = dead ? [0.3, 0.22, 0.1] : [
+      0.085 + young * 0.085 + old * 0.11, 0.185 + young * 0.085 + old * 0.02, 0.045 + young * 0.015 + old * 0.015];
+    for (let side = -1; side <= 1; side += 2) {
+      for (let i = 0; i < per; i++) {
+        const u = (i + 0.5 + (fr() - 0.5) * 0.6) / per, t = 0.14 + u * 0.86;
+        const f = Math.min(nseg - 1e-4, t * nseg), k0 = f | 0, A = pts[k0];
+        const T = A.T;
+        // Short at the base of the frond, longest a third of the way out, short again at the tip.
+        const len = (dead ? 0.5 : lenK) * Math.pow(Math.sin(Math.PI * (0.08 + 0.9 * Math.pow(u, 0.6))), 0.75) * (1 - 0.25 * u) * (0.82 + fr() * 0.36);
+        const phi = 1.2 - u * 0.65 + (fr() - 0.5) * 0.3, lu = lift + (fr() - 0.5) * 0.35;
+        const cp = Math.cos(phi), sp = Math.sin(phi) * side;
+        const d = unit([T[0] * cp + A.S[0] * sp + A.U[0] * lu, T[1] * cp + A.S[1] * sp + A.U[1] * lu, T[2] * cp + A.S[2] * sp + A.U[2] * lu]);
+        const hg = hang * (0.8 + fr() * 0.4);
+        // Darker inside the crown, where the sky is hidden by the fronds above.
+        const tone = (0.8 + fr() * 0.4) * (0.5 + 0.5 * smooth01(0.2, 2.4, t * L)) * (1 - 0.22 * Math.min(1, age));
+        const sw0 = topSway + tipSway * t * t;
+        const B = pts[k0 + 1].p, fk = f - k0;
+        let q = [A.p[0] + (B[0] - A.p[0]) * fk, A.p[1] + (B[1] - A.p[1]) * fk, A.p[2] + (B[2] - A.p[2]) * fk];
+        let pl = -1, pr = -1;
+        for (let k = 0; k <= lseg; k++) {
+          const s = k / lseg;
+          const dir = unit([d[0], d[1] - hg * Math.pow(s, 1.3), d[2]]);
+          let n = cross(T, dir);
+          n = Math.hypot(n[0], n[1], n[2]) < 0.05 ? A.U : unit([n[0] * side, n[1] * side, n[2] * side]);
+          const a = unit(cross(n, dir));
+          const w = W * Math.min(1, 0.4 + s * 4) * Math.pow(1 - Math.pow(s, 2.2), 0.8);
+          const brown = old * s * s * 0.7;
+          const cr = (green[0] * (1 - brown) + 0.3 * brown) * tone, cg = (green[1] * (1 - brown) + 0.2 * brown) * tone, cb = (green[2] * (1 - brown) + 0.07 * brown) * tone;
+          const sw = sw0 + 0.07 * s;
+          if (k === lseg) {
+            const tip = m.v(q[0], q[1], q[2], n[0], n[1], n[2], cr, cg, cb, sw, LEAF, 0, 1);
+            m.tri(pl, tip, pr);
+          } else {
+            // The blade is folded along its midrib like a shallow roof.
+            const l = m.v(q[0] + a[0] * w, q[1] + a[1] * w, q[2] + a[2] * w, n[0] + a[0] * 0.35, n[1] + a[1] * 0.35, n[2] + a[2] * 0.35, cr, cg, cb, sw, LEAF, 1, s);
+            const r = m.v(q[0] - a[0] * w, q[1] - a[1] * w, q[2] - a[2] * w, n[0] - a[0] * 0.35, n[1] - a[1] * 0.35, n[2] - a[2] * 0.35, cr, cg, cb, sw, LEAF, -1, s);
+            if (pl >= 0) { m.tri(pl, l, pr); m.tri(pr, l, r); }
+            pl = l; pr = r;
+          }
+          q = add(q, dir, len / lseg);
+        }
       }
     }
   }
-  const living = 9 + (seed % 4);
-  for (let f = 0; f < living; f++) {
-    const ang = f * 2.399963 + rnd() * 0.12;
-    const around = Math.abs(Math.atan2(Math.sin(ang - gap), Math.cos(ang - gap)));
-    if (around < 0.42 && rnd() < 0.75) continue;
-    const age = rnd();
-    frond(ang, 0.82 + rnd() * 0.26, 0.5 + rnd() * 0.22, 0.28 + age * 0.38, 0.24 + rnd() * 0.07, [0.09, 0.36, 0.07], 0.32 + rnd() * 0.22, false);
+  if (lod < 2) {
+    const nuts = 4 + ((rnd() * 7) | 0);
+    for (let i = 0; i < nuts; i++) {
+      const a = rnd() * 6.283, rr = 0.2 + rnd() * 0.12, from = m.sway.length;
+      const nut = icosphere(1, 0.115 + rnd() * 0.03, rnd() < 0.6 ? [0.2, 0.27, 0.07] : [0.3, 0.24, 0.1]);
+      appendMesh(m, nut, C[0] + Math.cos(a) * rr, C[1] - 0.45 - rnd() * 0.3, C[2] + Math.sin(a) * rr, rnd() * 6, 1, null, 1.25);
+      for (let k = from; k < m.sway.length; k++) m.sway[k] = topSway;
+    }
   }
-  frond(rnd() * 6.28, 0.26, 1.2, 0.02, 0.11, [0.2, 0.48, 0.13], 0.1, false);
-  frond(gap, 0.48, 0.15, 0.8, 0.09, [0.4, 0.3, 0.14], 0.18, true);
   return m;
 }
 
@@ -1458,7 +1505,8 @@ async function main() {
         { binding: 6, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 7, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 8, visibility: FS, texture: { sampleType: 'float' } },
-        { binding: 9, visibility: FS, sampler: { type: 'filtering' } }
+        { binding: 9, visibility: FS, sampler: { type: 'filtering' } },
+        { binding: 10, visibility: FS, texture: { sampleType: 'depth' } }
       ]
     });
     const simLayout = device.createBindGroupLayout({
@@ -1699,7 +1747,12 @@ async function main() {
     const pick = (ids, x, z) => ids[Math.abs(Math.floor(x * 7.3 + z * 3.1)) % ids.length];
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
     const rockIds = protoSet([4, 11, 23, 37, 52, 68], makeRock, 1.3);
-    const palmIds = protoSet([3, 8, 21, 34], makePalm, 1.5);
+    const palmIds = [3, 8, 21].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 9, [30, 110]));
+    // A palm leans the way the ground falls, toward the open light over the water.
+    const leanYaw = (x, z) => {
+      const gx = fieldSample(world, x + 3, z) - fieldSample(world, x - 3, z), gz = fieldSample(world, x, z + 3) - fieldSample(world, x, z - 3);
+      return Math.atan2(-gz, -gx) + (rnd() - 0.5) * 1.4;
+    };
     const shrubIds = protoSet([5, 9, 14], makeShrub, 0.5);
     const canopyIds = protoSet([6, 13], makeCanopy, 1.1);
     const fernIds = protoSet([7, 12, 19], makeFern, 0.8);
@@ -1726,7 +1779,7 @@ async function main() {
       const h = fieldSample(world, x, z);
       if (h < 0.4 || h > 4.5) continue;
       const tint = [0.9 + rnd() * 0.16, 0.92 + rnd() * 0.14, 0.84 + rnd() * 0.16];
-      scatter.add(pick(palmIds, x, z), x, h, z, rnd() * 6.28, 7.4 + rnd() * 2.8, tint, 0.88 + rnd() * 0.28);
+      scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), 0.85 + rnd() * 0.3, tint, 0.92 + rnd() * 0.2);
       palms++;
     }
     for (let i = 0; i < (q.palms + q.broad) * 20 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget || ferns < fernBudget || canopies < canopyBudget); i++) {
@@ -1738,7 +1791,7 @@ async function main() {
       const clump = vnoise(x * 0.012, z * 0.012);
       const tint = [0.86 + rnd() * 0.22, 0.9 + rnd() * 0.18, 0.84 + rnd() * 0.2];
       if (palms < q.palms && h > 0.6 && h < 5.5 && s < 0.32 && clump > 0.42) {
-        scatter.add(pick(palmIds, x, z), x, h, z, rnd() * 6.28, 6.6 + rnd() * 3.4, tint, 0.86 + rnd() * 0.3);
+        scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), 0.8 + rnd() * 0.4, tint, 0.9 + rnd() * 0.25);
         palms++;
       } else if (shrubs < shrubBudget && h > 0.35 && h < 2.4 && s < 0.36 && clump > 0.36) {
         scatter.add(pick(shrubIds, x, z), x, h, z, rnd() * 6.28, 1.8 + rnd() * 1.5, tint, 0.7 + rnd() * 0.5);
@@ -1839,8 +1892,9 @@ async function main() {
       return;
     }
     mark('wgsl');
-    const uf = new Float32Array(176);
-    const ur = new Float32Array(176);
+    const uf = new Float32Array(192);
+    const ur = new Float32Array(192);
+    const un = new Float32Array(192);
     for (let i = 0; i < 8; i++) {
       const w = WAVES[i];
       const L = Math.hypot(w[0], w[1]) || 1;
@@ -1849,8 +1903,9 @@ async function main() {
     }
     ur.set(uf);
 
-    const ubuf = device.createBuffer({ size: 704, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const rbuf = device.createBuffer({ size: 704, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const ubuf = device.createBuffer({ size: 768, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 768, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const nbuf = device.createBuffer({ size: 768, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const htex = device.createTexture({
       size: [q.hres, q.hres],
@@ -1924,6 +1979,20 @@ async function main() {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
     const shadowView = shadowTex.createView();
+    // A second, tight shadow map around the eye. The island map has 33 cm texels,
+    // which cannot hold the shadow of a leaflet. This one has 2.5 cm texels.
+    const NEAR_R = 26, NEAR_RES = 2048;
+    const nearView = device.createTexture({
+      size: [NEAR_RES, NEAR_RES], format: 'depth32float',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    }).createView();
+    const nearPass = {
+      colorAttachments: [],
+      depthStencilAttachment: { view: nearView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
+    };
+    const NEARVP = new Float32Array(16);
+    const bgUBN = device.createBindGroup({ layout: ubLayout, entries: [{ binding: 0, resource: { buffer: nbuf } }] });
+    let nearDraws = [];
     // The sky panorama. Sizes match SKYW and SKYH in the shader.
     const SKYW = 1536, SKYH = 384, SKY_STRIPS = 16;
     const skyView = device.createTexture({
@@ -2049,7 +2118,8 @@ async function main() {
           { binding: 6, resource: shoreSim.stateView },
           { binding: 7, resource: shoreSim.wetView },
           { binding: 8, resource: skyView },
-          { binding: 9, resource: skySamp }
+          { binding: 9, resource: skySamp },
+          { binding: 10, resource: nearView }
         ]
       });
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
@@ -2116,6 +2186,7 @@ async function main() {
     let showHint = 0;
     let shoreWarm = 110;
 
+    const nearC = [0, 0, 0];
     function fillCam(arr, eyeX, eyeY, eyeZ, cyaw, cpitch, clipBelow, underFlag) {
       cameraVectors(cyaw, cpitch, fwd, right, up);
       const eye = [eyeX, eyeY, eyeZ];
@@ -2157,6 +2228,18 @@ async function main() {
       ortho(P, -340, 340, -260, 300, 6, 620);
       matmul(P, V, SHVP);
       arr.set(SHVP, 156);
+      // The near box sits ahead of the eye and moves in whole texels, so its edges do not crawl.
+      const hx = fwd[0], hz = fwd[2], hl = Math.hypot(hx, hz) || 1;
+      let ncx = eyeX + hx / hl * NEAR_R * 0.55, ncy = Math.max(eyeY - 1.5, 0), ncz = eyeZ + hz / hl * NEAR_R * 0.55;
+      const tex = NEAR_R * 2 / NEAR_RES;
+      const pa = ncx * srx + ncy * sry + ncz * srz, pb = ncx * sux + ncy * suy + ncz * suz;
+      const da = Math.round(pa / tex) * tex - pa, db = Math.round(pb / tex) * tex - pb;
+      ncx += srx * da + sux * db; ncy += sry * da + suy * db; ncz += srz * da + suz * db;
+      nearC[0] = ncx; nearC[1] = ncy; nearC[2] = ncz;
+      viewFrom([ncx + lx * 120, ncy + ly * 120, ncz + lz * 120], [srx, sry, srz], [sux, suy, suz], [sfx, sfy, sfz], V);
+      ortho(P, -NEAR_R, NEAR_R, -NEAR_R, NEAR_R, 1, 240);
+      matmul(P, V, NEARVP);
+      arr.set(NEARVP, 172);
       const over = wp.mood[1];
       arr[60] = 0.73 * (1 - over * 0.4) + over * 0.52;
       arr[61] = 0.79 * (1 - over * 0.35) + over * 0.54;
@@ -2326,7 +2409,13 @@ async function main() {
         reflDraws = scatter.collect(instArr, instEnd, RVP, camX, -camY, camZ, 1e9, 1);
         instEnd = reflDraws.end;
       }
+      // What stands near enough to throw a shadow into the near box.
+      nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.6, 0);
+      instEnd = nearDraws.end;
       if (instEnd) device.queue.writeBuffer(instB, 0, instArr, 0, instEnd * ISTRIDE);
+      // The same frame data with the near matrix in the shadow slot, for the near shadow pass.
+      un.set(uf); un.set(NEARVP, 156);
+      device.queue.writeBuffer(nbuf, 0, un);
 
       if (q.birds) {
         for (let i = 0; i < q.birds; i++) {
@@ -2435,6 +2524,14 @@ async function main() {
         spass.drawIndexed(terrain.idx.length);
         drawMeshes(spass, pipes.shadowMesh, bgUB, instFarB, farDraws);
         spass.end();
+      }
+      {
+        const np = enc.beginRenderPass(nearPass);
+        np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
+        np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
+        np.drawIndexed(terrain.idx.length);
+        drawMeshes(np, pipes.shadowMesh, bgUBN, instB, nearDraws);
+        np.end();
       }
       if (uf[86] > 0.5) {
         reflPass.colorAttachments[0].view = reflTex.createView();
