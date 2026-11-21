@@ -787,7 +787,9 @@ fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
-  let uv = in.clip.xy / vec2<f32>(SKYW, SKYH);
+  // Each bake looks through a different point of its texel, and the bakes are blended, so
+  // an edge finer than a row of the panorama comes out soft instead of as alternate rows.
+  let uv = (in.clip.xy + vec2<f32>(fract(F.time * 61.7), fract(F.time * 37.3)) - 0.5) / vec2<f32>(SKYW, SKYH);
   let az = (uv.x - 0.5) * 6.2831853;
   let el = uv.y * uv.y * (1.5708 + SKY_E0) - SKY_E0;
   let rd = vec3<f32>(cos(el) * cos(az), sin(el), cos(el) * sin(az));
@@ -817,15 +819,24 @@ struct SkyBake { @location(0) c: vec4<f32> }
     // Long strides through clear air. Where the ray enters a cloud the surface is found
     // by bisection and the short steps are counted from there, so the samples sit at
     // the same depths under the surface for every texel and leave no banding or grain.
-    var t = t0;
+    // The strides through clear air land on the same columns of sky for every row of the
+    // panorama, or looking up on the same levels, so a small cloud is found by every row
+    // that crosses it or by none, and does not come out in stripes.
+    let ch = sqrt(1.0 - sinE * sinE);
+    let level = ch > sinE;
+    let gs = select(0.05 / sinE, 0.05 / ch, level);
+    let g0 = select(t0, 0.0, level);
+    var t = g0 + ceil((t0 - g0) / gs) * gs;
     var tp = t0;
     var inside = false;
-    for (var i = 0; i < 150; i++) {
+    for (var i = 0; i < 230; i++) {
       if (t > t0 + big * 20.0 || T < 0.02) { break; }
       let p = org + dir * t;
       if (!inside) {
-        if (cloudCover(p.xz) < -0.12) { tp = t; t += ds * 3.0; continue; }
-        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t += ds; continue; }
+        let g = gs * select(1.0, 2.0, t * ch > 4.0);
+        let nx = g0 + (floor((t - g0) / g + 0.001) + 1.0) * g;
+        if (cloudCover(p.xz) < -0.12) { tp = t; t = nx + 2.0 * g; continue; }
+        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t = nx; continue; }
         var a = tp;
         var b = t;
         for (var k = 0; k < 5; k++) {
@@ -837,7 +848,7 @@ struct SkyBake { @location(0) c: vec4<f32> }
         continue;
       }
       let d = cloudAt(p, 1.0);
-      if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
+      if (d <= 0.004) { inside = false; tp = t; t = g0 + (floor((t - g0) / gs + 0.001) + 1.0) * gs; continue; }
       var ls = cloudAt(p + F.sunDir * 0.06, 1.0) * 0.1;
       ls += cloudAt(p + F.sunDir * 0.22, 0.0) * 0.2;
       ls += cloudAt(p + F.sunDir * 0.6, 0.0) * 0.5;
@@ -1009,7 +1020,10 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let nl = dot(n, F.sunDir);
   let sh = sunShadow(world) * cloudShade(world.xz, world.y);
   let hemi = n.y * 0.5 + 0.5;
-  let sky = F.amb.rgb * mix(hemi, 0.75, leaf);
+  // Under the forest the crowns hide half the sky from the ground, the trunks and the low leaves.
+  let fld = sampleField(world.xz);
+  let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz)) * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
+  let sky = F.amb.rgb * mix(hemi, 0.75, leaf) * (1.0 - 0.3 * roof);
   let ground = vec3<f32>(0.26, 0.19, 0.11) * F.amb.w * (1.0 - hemi);
   var light = F.sunCol * max(nl, 0.0) * sh * 1.2 + sky * 0.7 + ground * 0.4;
   if (world.y < 0.05) {
@@ -1276,7 +1290,8 @@ struct GeoV {
   var col = shade(in.world, n, alb, 0.0, 0.0);
   // Wet sand is a mirror at a low angle. Dry sand never is.
   let Vt = normalize(F.camPos - in.world);
-  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * step(-0.02, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
+  // Sand a trough has left bare is as wet as sand gets, though it lies below the waterline.
+  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * smoothstep(-0.9, -0.35, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
   if (gloss > 0.01 && F.under < 0.5) {
     let nw = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.8));
     let fr = 0.02 + 0.98 * pow(1.0 - max(dot(nw, Vt), 0.0), 5.0);
@@ -1376,7 +1391,8 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   var o: MeshV;
   o.world = meshPlace(in);
   o.nrm = spinY(normalize(in.n / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
-  o.col = in.c * in.i2.rgb;
+  // A tree's own tint is in its leaves. Its bark stays close to bark.
+  o.col = in.c * mix(in.i2.rgb, vec3<f32>(dot(in.i2.rgb, vec3<f32>(0.333))), select(0.0, 0.8, in.kind > 8.5));
   o.kind = in.kind;
   o.uv = in.uv;
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
@@ -1393,6 +1409,27 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
   o.clip = F.shadowVP * vec4<f32>(meshPlace(in), 1.0);
   return o;
 }
+// Leaves lying over a surface: the nearest of a scatter of leaves, each longer than it is
+// wide and turned its own way. Returns its distance (a leaf's edge is near 0.45), the
+// distance across it from its midrib, and two numbers that are its own.
+fn leafCells(q: vec2<f32>) -> vec4<f32> {
+  let c = floor(q);
+  var best = 9.0;
+  var id = vec2<f32>(0.0);
+  var across = 0.0;
+  for (var j = -1; j <= 1; j++) {
+    for (var i = -1; i <= 1; i++) {
+      let g = c + vec2<f32>(f32(i), f32(j));
+      let h = hash22(g);
+      let d = g + 0.15 + 0.7 * h - q;
+      let a = h.x * 6.2832;
+      let e = vec2<f32>(d.x * cos(a) + d.y * sin(a), (d.y * cos(a) - d.x * sin(a)) * 1.9);
+      let l = dot(e, e);
+      if (l < best) { best = l; id = h; across = e.y; }
+    }
+  }
+  return vec4<f32>(sqrt(best), across, id);
+}
 @fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
   var n = normalize(in.nrm);
@@ -1402,18 +1439,37 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
   var leaf = 0.0;
   var gloss = 0.0;
   if (kind == 3) {
-    // A leaf mass. Its outline is leaves and gaps, not the edge of a smooth lump,
-    // and its surface is clumps catching the light at different angles.
+    // A leaf mass. Its surface is leaves, each lying its own way with shade between them,
+    // and its outline is leaves and gaps. Through a gap the far side of the crown shows, dark.
+    let back = dot(n, Vv) < 0.0;
     let rim = 1.0 - abs(dot(n, Vv));
     let dist = length(F.camPos - in.world);
-    let p = in.world * mix(2.6, 0.9, sat(dist / 220.0));
-    let a = n2(p.xz + vec2<f32>(p.y * 0.83, p.y * 0.41));
-    let b = n2(p.xz * 2.9 + vec2<f32>(p.y * 2.1, 3.0));
-    let leafN = a * 0.62 + b * 0.38;
-    if (leafN < rim * rim * 1.05 - 0.1) { discard; }
-    alb *= 0.5 + 1.0 * leafN;
-    let tilt = vec3<f32>(n2(p.xz * 1.9 + vec2<f32>(1.0, p.y)) - 0.5, n2(p.zy * 1.9 + vec2<f32>(4.0, p.x)) - 0.5, n2(p.yx * 1.9 + vec2<f32>(7.0, p.z)) - 0.5);
-    n = normalize(n + tilt * 1.1);
+    let an = abs(n);
+    var pq = in.world.xz;
+    if (an.x > an.y && an.x > an.z) { pq = in.world.zy; } else if (an.z > an.y) { pq = in.world.xy; }
+    let near = 1.0 - smoothstep(30.0, 85.0, dist);
+    // Clumps a metre across at any distance; single leaves once they are big enough to see.
+    let B = leafCells(pq * 0.85 + 17.0);
+    let mB = smoothstep(0.56, 0.38, B.x);
+    var cover = mB;
+    var tone = mix(0.42, 0.62 + 0.75 * B.w, mB);
+    var tilt = (vec3<f32>(B.z, B.y + 0.5, B.w) - 0.5) * 0.8;
+    if (near > 0.01) {
+      let A = leafCells(pq * 3.3);
+      let mA = smoothstep(0.64, 0.5, A.x);
+      cover = mix(cover, max(mA, mB * 0.35), near);
+      tone = mix(tone, mix(0.3, 0.72 + 0.55 * A.w, mA) * (0.72 + 0.5 * B.w), near);
+      tilt = mix(tilt, (vec3<f32>(A.z, A.y + 0.5, A.w) - 0.5) * 1.5, near * mA);
+      // A leaf is paler along its midrib, and each is its own green, some toward yellow.
+      alb = mix(alb, alb * vec3<f32>(1.4, 1.2, 0.6), near * mA * A.z * A.z * 0.5);
+      alb *= 1.0 + 0.35 * near * mA * smoothstep(0.1, 0.0, abs(A.y));
+      // Only a leaf turned up to the sky shines with it; from underneath a crown is matt.
+      gloss = 0.3 * near * mA * sat(n.y * 2.0);
+    }
+    if (cover < rim * rim * 1.25 - 0.12 + 0.35 * smoothstep(0.6, 0.85, n2(pq * 0.37 + 5.0))) { discard; }
+    alb *= tone;
+    if (back) { n = -n; alb *= 0.4; gloss = 0.0; }
+    n = normalize(n + tilt);
   } else if (kind == 2) {
     // A blade. The eye may be looking at its waxy upper face or its paler underside.
     let upper = dot(n, Vv) > 0.0;
@@ -1441,6 +1497,16 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
       alb = mix(alb, vec3<f32>(0.40, 0.42, 0.33), smoothstep(0.58, 0.85, blotch) * 0.35);
       alb *= mix(0.62, 1.0, smoothstep(0.0, 1.4, in.uv.y));
       n = normalize(n + vec3<f32>(0.0, (ring - 0.5) * 0.7 * groove, 0.0) + (fibre - 0.5) * 0.25 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
+    }
+    if (kind == 9) {
+      // Bark of a forest tree: furrows running up the trunk, plates between them, lichen in patches.
+      let wy = in.world.y * 1.3;
+      let fur = n2(vec2<f32>(in.uv.x * 44.0 + n2(vec2<f32>(in.uv.x * 9.0, wy * 0.5)) * 2.0, wy));
+      let plate = n2(vec2<f32>(in.uv.x * 13.0, wy * 3.1));
+      let blotch = n2(vec2<f32>(in.uv.x * 5.0 + 3.0, wy * 1.1)) * 0.7 + n2(vec2<f32>(in.uv.x * 17.0, wy * 3.7)) * 0.3;
+      alb *= (0.42 + 0.58 * smoothstep(0.28, 0.5, fur)) * (0.7 + 0.6 * plate);
+      alb = mix(alb, vec3<f32>(0.27, 0.28, 0.24), smoothstep(0.6, 0.8, blotch) * 0.4);
+      n = normalize(n + (fur - 0.5) * 0.9 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
     }
     if (kind == 8) {
       // Coral. uv.x says which: 0 branches, 1 a boulder with a maze of grooves, 2 a table, 3 soft tissue.
@@ -1555,25 +1621,43 @@ struct BirdV {
   @location(1) nrm: vec3<f32>,
   @location(2) col: vec3<f32>,
 }
-@vertex fn vsBird(@location(0) p: vec3<f32>, @location(1) wing: f32, @location(2) inst: vec4<f32>) -> BirdV {
+@vertex fn vsBird(@builtin(instance_index) ii: u32, @location(0) p: vec3<f32>, @location(1) wing: f32, @location(2) inst: vec4<f32>) -> BirdV {
   var lp = p;
-  let glide = sat(sin(F.time * 0.21 + inst.z * 0.15));
-  let flap = sin(F.time * (3.4 + abs(inst.y) * 0.02) + inst.x) * wing * mix(0.15, 1.0, glide);
-  lp.y += abs(lp.x) * flap;
-  lp.z -= abs(wing) * 0.04 * (1.0 - glide);
+  let id = f32(ii);
+  // A few beats, then a glide on set wings. Each bird keeps its own time.
+  let beat = smoothstep(-0.1, 0.35, sin(F.time * (0.31 + fract(id * 0.37) * 0.22) + id * 2.1));
+  let ph = F.time * (5.4 + fract(id * 0.61) * 1.8) + id * 1.9;
+  // The hand of the wing trails the arm through the beat, so the wing bends instead of hinging like a board.
+  let arm = mix(0.1, sin(ph) * 0.55 + 0.08, beat);
+  let hand = mix(-0.06, sin(ph - 1.1) * 0.6 - 0.1, beat);
+  let a = abs(wing);
+  let d = abs(lp.x) - 0.04;
+  let inner = min(d, 0.21);
+  let outer = max(d - 0.21, 0.0);
+  if (a > 0.5) {
+    lp.y += inner * sin(arm) + outer * sin(arm + hand);
+    lp.x = sign(lp.x) * (0.04 + inner * cos(arm) + outer * cos(arm + hand));
+    // The wing sweeps back a little on the upstroke.
+    lp.z -= outer * 0.25 * beat * sat(cos(ph));
+  }
+  // Lean into the turn.
+  lp.y += lp.x * sin(F.time * 0.19 + id * 1.7) * 0.42;
   let s = sin(inst.w); let c = cos(inst.w);
-  let x = lp.x * c - lp.z * s;
-  let z = lp.x * s + lp.z * c;
+  let x = lp.x * s + lp.z * c;
+  let z = lp.z * s - lp.x * c;
   var w = vec3<f32>(inst.x + x, inst.y + lp.y, inst.z + z);
   var o: BirdV;
   o.world = w;
   o.nrm = vec3<f32>(0.0, 1.0, 0.0);
-  o.col = mix(vec3<f32>(0.92, 0.93, 0.9), vec3<f32>(0.75, 0.78, 0.82), abs(wing));
+  // White body, grey mantle, black wingtips.
+  o.col = mix(mix(vec3<f32>(0.9, 0.91, 0.89), vec3<f32>(0.6, 0.63, 0.67), sat(a)), vec3<f32>(0.07), smoothstep(0.4, 0.5, abs(p.x)));
   o.clip = F.viewProj * vec4<f32>(w, 1.0);
   return o;
 }
 @fragment fn fsBird(in: BirdV) -> @location(0) vec4<f32> {
-  return vec4<f32>(shade(in.world, in.nrm, in.col, 0.0, 0.0), 1.0);
+  // Seen from below, a bird shows its shaded underside.
+  let below = step(F.camPos.y, in.world.y);
+  return vec4<f32>(shade(in.world, vec3<f32>(0.0, 1.0 - 2.0 * below, 0.0), mix(in.col, vec3<f32>(0.8, 0.81, 0.8), below * 0.6), 0.0, 0.0), 1.0);
 }
 
 ${FISH_WGSL}
@@ -1893,6 +1977,9 @@ fn warp(t: f32) -> f32 {
   // The spectral tile adds the wind sea. Its height fades before the mesh gets coarse.
   let near = smoothstep(460.0, 70.0, dist);
   w.y += shapeField(xz).x * near * mix(0.25, 1.0, field.y);
+  // A trough cannot dig below the sand. Over a shoal the surface stays a film above the bed.
+  let bedW = sampleField(w.xz).x;
+  if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05, 0.0)); }
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -6097,7 +6184,7 @@ function lookYP(dx, dy, dz) {
 }
 
 // Vertex kinds. The shader lights each one differently.
-const SOLID = 0, BARK = 1, LEAF = 2, CROWN = 3, ROCK = 4;
+const SOLID = 0, BARK = 1, LEAF = 2, CROWN = 3, ROCK = 4, WOOD = 9;
 function Mesh() { this.pos = []; this.nrm = []; this.col = []; this.sway = []; this.kind = []; this.uv = []; this.idx = []; }
 Mesh.prototype.v = function (x, y, z, nx, ny, nz, r, g, b, s, kind, u, v) {
   const i = this.pos.length / 3;
@@ -6351,24 +6438,29 @@ function makePalm(seed, lod) {
   return m;
 }
 
-function makeFern(seed) {
+// A fern: fronds arching out of one crown, each a stalk with a row of pinnae down either
+// side, longest in the middle. The coarse level keeps fewer fronds and pinnae.
+function makeFern(seed, lod) {
   const rnd = seeded(seed || 2);
   const m = new Mesh();
-  const n = 6 + (seed % 3);
+  const n = lod ? 6 + (seed % 3) : 10 + (seed % 4);
+  const steps = lod ? 7 : 15;
   for (let i = 0; i < n; i++) {
     const ang = i / n * Math.PI * 2 + rnd() * 0.5;
     const dx = Math.cos(ang), dz = Math.sin(ang);
     const sx = -dz, sz = dx;
-    const len = 0.42 + rnd() * 0.22;
-    const steps = 7;
+    // The young fronds in the middle stand up; the old ones outside lie over.
+    const up = lod ? 1 : 0.55 + 1.1 * rnd();
+    const len = (0.42 + rnd() * 0.22) * (lod ? 1 : 1.25 - 0.3 * up);
+    const col0 = [0.07 + rnd() * 0.04, 0.27 + rnd() * 0.1, 0.07];
+    const at = (t) => [dx * t * len, (Math.sin(t * 1.4) * 0.16 - t * t * 0.05) * up * (lod ? 1 : 1.5), dz * t * len];
+    if (!lod) for (let s = 0; s < 5; s++) { const a = at(s / 5), b = at((s + 1) / 5); addLeaflet(m, a[0], a[1], a[2], b[0] - a[0], b[1] - a[1] + 0.012, b[2] - a[2], len / 4.4, 0.004, [0.13, 0.17, 0.06], 0.3 + s * 0.2); }
     for (let s = 1; s < steps; s++) {
-      const t = s / steps;
-      const y = Math.sin(t * 1.4) * 0.16 - t * t * 0.05;
-      const x = dx * t * len, z = dz * t * len;
-      const bell = Math.sin(t * Math.PI);
-      const col = [0.08 + rnd() * 0.04, 0.32 + rnd() * 0.1, 0.08];
+      const t = s / steps, p = at(t);
+      const bell = Math.pow(Math.sin(Math.min(1, t * 1.15) * Math.PI), 0.7);
+      const col = [col0[0] + rnd() * 0.02, col0[1] + rnd() * 0.05, col0[2]];
       for (let side = -1; side <= 1; side += 2) {
-        addLeaflet(m, x, y, z, dx * 0.2 + sx * side, 0.15 - t * 0.2, dz * 0.2 + sz * side, 0.08 + bell * 0.1, 0.012, col, 0.45 + t);
+        addLeaflet(m, p[0], p[1], p[2], dx * 0.3 + sx * side, 0.12 - t * 0.25, dz * 0.3 + sz * side, 0.07 + bell * 0.1, lod ? 0.012 : 0.015, col, 0.45 + t);
       }
     }
   }
@@ -6428,10 +6520,10 @@ function makeShrub(seed) {
   return m;
 }
 
-function makeRock(seed) {
-  // A boulder is a lump that has lost pieces along planes. Cutting the sphere and
-  // shading each face on its own gives edges, where a smoothed sphere gives a dome.
-  const src = icosphere(2, 1, [0.4, 0.4, 0.4]);
+function makeRock(seed, lod) {
+  // A boulder is a lump that has lost pieces along planes, and has then had its edges
+  // worn round: the cuts give it faces, the shared normals take the knife edge off them.
+  const src = icosphere(lod ? 2 : 3, 1, [0.4, 0.4, 0.4]);
   const sd = (seed | 0) || 1;
   const rnd = seeded(sd * 7 + 3);
   const planes = [];
@@ -6457,30 +6549,27 @@ function makeRock(seed) {
     y = (y + src.nrm[i * 3 + 1] * fine) * (y < 0 ? 0.45 : 0.8);
     P[i * 3] = x; P[i * 3 + 1] = y; P[i * 3 + 2] = z;
   }
-  const m = new Mesh();
+  const N = new Float32Array(n * 3);
   for (let f = 0; f < src.idx.length; f += 3) {
-    const ia = src.idx[f], ib = src.idx[f + 1], ic = src.idx[f + 2];
-    const ax = P[ia * 3], ay = P[ia * 3 + 1], az = P[ia * 3 + 2];
-    const bx = P[ib * 3], by = P[ib * 3 + 1], bz = P[ib * 3 + 2];
-    const cx = P[ic * 3], cy = P[ic * 3 + 1], cz = P[ic * 3 + 2];
-    let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
-    let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
-    let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    const nl = Math.hypot(nx, ny, nz) || 1;
-    nx /= nl; ny /= nl; nz /= nl;
-    const my = (ay + by + cy) / 3, mx = (ax + bx + cx) / 3, mz = (az + bz + cz) / 3;
+    const ia = src.idx[f] * 3, ib = src.idx[f + 1] * 3, ic = src.idx[f + 2] * 3;
+    const ux = P[ib] - P[ia], uy = P[ib + 1] - P[ia + 1], uz = P[ib + 2] - P[ia + 2];
+    const wx = P[ic] - P[ia], wy = P[ic + 1] - P[ia + 1], wz = P[ic + 2] - P[ia + 2];
+    const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+    for (const k of [ia, ib, ic]) { N[k] += nx; N[k + 1] += ny; N[k + 2] += nz; }
+  }
+  const m = new Mesh();
+  for (let i = 0; i < n; i++) {
+    const mx = P[i * 3], my = P[i * 3 + 1], mz = P[i * 3 + 2];
+    const nl = Math.hypot(N[i * 3], N[i * 3 + 1], N[i * 3 + 2]) || 1, ny = N[i * 3 + 1] / nl;
     // Bedding lines, weathering on top, a dark tide stain at the foot.
     const strata = 0.84 + 0.16 * Math.sin(my * 11 + vnoise(mx * 2.1 + sd, mz * 2.1) * 5);
     const patch = 0.8 + 0.4 * vnoise(mx * 3.3 + sd, mz * 3.3 + my * 2.7);
     const top = ny > 0.55 ? vnoise(mx * 4 + 9, mz * 4) : 0;
     const foot = 1 - 0.45 * smooth01(0.05, -0.3, my);
     const k = strata * patch * foot;
-    const r = 0.31 * k * (1 - top * 0.2), g = 0.285 * k * (1 + top * 0.08), b = 0.25 * k * (1 - top * 0.25);
-    const va = m.v(ax, ay, az, nx, ny, nz, r, g, b, 0, ROCK);
-    const vb = m.v(bx, by, bz, nx, ny, nz, r, g, b, 0, ROCK);
-    const vc = m.v(cx, cy, cz, nx, ny, nz, r, g, b, 0, ROCK);
-    m.tri(va, vb, vc);
+    m.v(mx, my, mz, N[i * 3] / nl, ny, N[i * 3 + 2] / nl, 0.31 * k * (1 - top * 0.2), 0.285 * k * (1 + top * 0.08), 0.25 * k * (1 - top * 0.25), 0, ROCK);
   }
+  for (let f = 0; f < src.idx.length; f += 3) m.tri(src.idx[f], src.idx[f + 1], src.idx[f + 2]);
   return m;
 }
 
@@ -6495,32 +6584,66 @@ function forestMask(x, z, h, grad) {
   return smooth01(1.9, 4.4, h) * (1 - smooth01(0.55, 1.0, grad)) * smooth01(-0.62, -0.12, forestNoise(x, z));
 }
 
-// A forest tree seen from outside: a trunk and a crown of overlapping leaf masses.
-// The shader breaks the outline of each mass into leaves.
-function makeTree(seed) {
-  const sd = (seed | 0) || 1;
-  const rnd = seeded(sd * 13 + 5);
-  const m = new Mesh();
-  const th = 0.42 + rnd() * 0.2;
-  const lean = (rnd() - 0.5) * 0.12;
-  const trunk = cylinder(5, 3, 0.04 + rnd() * 0.012, 0.022, th + 0.12, [0.17, 0.13, 0.09], 0.015);
-  appendMesh(m, trunk, 0, 0, 0, rnd() * 3, 1, null, 1);
-  const lobes = 4 + (Math.abs(sd) % 4);
-  const spread = 0.16 + rnd() * 0.12;
-  const hue = rnd();
+// A limb: a tube along a line of points, tapering, with wood for a surface. flare swells
+// the foot into buttress roots.
+function addLimb(m, pts, r0, r1, sides, col, sway0, sway1, flare) {
+  const n = pts.length, rows = [];
+  let len = 0;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], a = pts[Math.max(i - 1, 0)], b = pts[Math.min(i + 1, n - 1)];
+    let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2];
+    const tl = Math.hypot(tx, ty, tz) || 1;
+    tx /= tl; ty /= tl; tz /= tl;
+    const rx = Math.abs(tz) > 0.9 ? 1 : 0, rz = 1 - rx;
+    let ux = ty * rz, uy = tz * rx - tx * rz, uz = -ty * rx;
+    const ul = Math.hypot(ux, uy, uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    const vx = ty * uz - tz * uy, vy = tz * ux - tx * uz, vz = tx * uy - ty * ux;
+    if (i) len += Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1], p[2] - pts[i - 1][2]);
+    const t = i / (n - 1), r = r0 + (r1 - r0) * t, row = [];
+    for (let k = 0; k <= sides; k++) {
+      const ang = k / sides * 6.2832, c = Math.cos(ang), sn = Math.sin(ang);
+      const nx = ux * c + vx * sn, ny = uy * c + vy * sn, nz = uz * c + vz * sn;
+      const rr = r * (1 + (flare ? flare * Math.pow(1 - t, 5) * (0.5 + Math.max(0, Math.cos(ang * 3 + flare * 40))) : 0));
+      row.push(m.v(p[0] + nx * rr, p[1] + ny * rr, p[2] + nz * rr, nx, ny, nz, col[0], col[1], col[2], sway0 + (sway1 - sway0) * t, WOOD, k / sides, len));
+    }
+    rows.push(row);
+  }
+  for (let i = 0; i < n - 1; i++) for (let k = 0; k < sides; k++) { const a = rows[i][k], b = rows[i][k + 1], c = rows[i + 1][k], d = rows[i + 1][k + 1]; m.tri(a, c, b); m.tri(b, c, d); }
+}
+
+// A forest tree: a buttressed trunk that bows, limbs that rise and then reach out, and a
+// spreading crown of leaf masses, one at the end of each limb. The shader turns the surface
+// of each mass into leaves. Three levels of detail share the same shape.
+function makeTree(seed, lod) {
+  const sd = (seed | 0) || 1, rnd = seeded(sd * 13 + 5), m = new Mesh();
+  const th = 0.4 + rnd() * 0.22, lean = (rnd() - 0.5) * 0.14, bow = (rnd() - 0.5) * 0.07, r0 = 0.024 + rnd() * 0.011;
+  const bark = [0.21 + rnd() * 0.05, 0.17 + rnd() * 0.04, 0.125 + rnd() * 0.03];
+  const at = (t) => [lean * t * t + bow * Math.sin(t * 3.1416), th * t, bow * 0.6 * Math.sin(t * 2.2)];
+  const rings = [7, 4, 2][lod], pts = [];
+  for (let i = 0; i <= rings; i++) pts.push(at(Math.pow(i / rings, 1.6)));
+  if (lod === 2) pts.push([lean, th + 0.22, 0]);
+  const flare = 0.7 + rnd() * 0.9;
+  addLimb(m, pts, r0, r0 * 0.6, [9, 6, 4][lod], bark, 0, 0.012, lod < 2 ? flare : 0);
+  const lobes = 5 + (Math.abs(sd) % 4), spread = 0.2 + rnd() * 0.12, hue = rnd();
   for (let i = 0; i < lobes; i++) {
-    const blob = icosphere(1, 1, [0.1, 0.1, 0.1]);
-    const n = blob.pos.length / 3;
+    const blob = icosphere(lod ? 1 : 2, 1, [0.1, 0.1, 0.1]), n = blob.pos.length / 3;
     const ang = i * 2.399 + rnd() * 0.8;
-    const rr = i === 0 ? 0 : spread * (0.55 + rnd() * 0.7);
-    const size = (i === 0 ? 0.3 : 0.2) + rnd() * 0.1;
-    const cy = th + (i === 0 ? 0.16 : rnd() * 0.16) + size * 0.3;
+    const rr = i === 0 ? 0 : spread * (0.6 + rnd() * 0.7);
+    const size = (i === 0 ? 0.27 : 0.18) + rnd() * 0.09;
+    const cy = th + (i === 0 ? 0.17 : rnd() * 0.15) + size * 0.3;
     const cx = Math.cos(ang) * rr + lean, cz = Math.sin(ang) * rr;
-    const flat = 0.58 + rnd() * 0.2;
+    const flat = 0.5 + rnd() * 0.2;
+    if (lod < 2) {
+      const s0 = at(i === 0 ? 1 : 0.68 + rnd() * 0.3), e = [cx, cy - size * flat * 0.2, cz], q = [];
+      const c = [s0[0] + (e[0] - s0[0]) * 0.25, s0[1] + (e[1] - s0[1]) * 0.8, s0[2] + (e[2] - s0[2]) * 0.25];
+      for (let k = 0; k <= 3; k++) { const t = k / 3, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), d = t * t; q.push([s0[0] * a + c[0] * b + e[0] * d, s0[1] * a + c[1] * b + e[1] * d, s0[2] * a + c[2] * b + e[2] * d]); }
+      addLimb(m, q, r0 * (i === 0 ? 0.6 : 0.36), r0 * 0.13, [5, 4][lod], bark, 0.012, 0.03, 0);
+    }
     for (let v = 0; v < n; v++) {
       const x = blob.pos[v * 3], y = blob.pos[v * 3 + 1], z = blob.pos[v * 3 + 2];
-      const lump = 0.8 + 0.45 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9);
-      const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.6 : flat), pz = z * lump * size;
+      const lump = 0.72 + 0.4 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9) + 0.22 * vnoise(x * 5.3 + i * 7.7, z * 5.3 + y * 4.1 + sd);
+      const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.55 : flat), pz = z * lump * size;
       blob.pos[v * 3] = px + cx; blob.pos[v * 3 + 1] = py + cy; blob.pos[v * 3 + 2] = pz + cz;
       // Lit leaves on top, the shaded inside of the crown underneath.
       const up = Math.max(0, Math.min(1, y * 0.5 + 0.5));
@@ -7294,23 +7417,52 @@ function makeAudio() {
     setTimeout(drip, 40 + Math.random() * 260 / Math.max(wetness, 0.1));
   };
   drip();
-  function chirp(kind) {
+  // Birds. A singer keeps a phrase of its own: the same notes in the same order every time,
+  // a little faster or slower, from the same place, the way a bird repeats its song.
+  const note = (t, f0, f1, len, peak, pan, type, trill) => {
+    const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
+    o.type = type; p.pan.value = pan;
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + len);
+    if (trill) {
+      const v = ac.createOscillator(), vg = ac.createGain();
+      v.frequency.value = trill; vg.gain.value = f0 * 0.09; v.connect(vg); vg.connect(o.frequency); v.start(t); v.stop(t + len + 0.05);
+    }
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + Math.min(0.03, len * 0.3));
+    g.gain.setValueAtTime(peak, t + len * 0.55); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    o.connect(g); g.connect(p); p.connect(master); o.start(t); o.stop(t + len + 0.05);
+  };
+  const R = (a, b) => a + Math.random() * (b - a);
+  const singers = [0, 0, 0, 1, 1, 2, 2, 3].map((kind) => {
+    const ph = [];
+    if (kind === 0) {
+      // A warbler: a run of short slurred notes.
+      for (let k = 0, t = 0, n = 4 + ((Math.random() * 4) | 0); k < n; k++) { const f = R(2400, 5200), len = R(0.05, 0.13); ph.push([t, f, f * R(0.7, 1.4), len, 0]); t += len + R(0.03, 0.09); }
+    } else if (kind === 1) {
+      // A dove: three soft low notes, the middle one long.
+      const f = R(470, 560);
+      ph.push([0, f, f * 1.07, 0.22, 0], [0.36, f * 1.12, f, 0.5, 0], [1.02, f, f * 0.94, 0.3, 0]);
+    } else if (kind === 2) {
+      // A trill held on one pitch after two lead-in notes.
+      const f = R(3000, 4200);
+      ph.push([0, f * 0.8, f * 0.9, 0.07, 0], [0.12, f * 0.9, f, 0.07, 0], [0.26, f, f * R(0.96, 1.04), R(0.5, 1.1), R(14, 22)]);
+    } else {
+      // A gull over the water: a string of falling cries, each a little lower.
+      for (let k = 0, n = 3 + ((Math.random() * 4) | 0); k < n; k++) ph.push([k * 0.38, 1650 - k * 45, 950 - k * 30, 0.27, 31]);
+    }
+    return { kind: kind, ph: ph, pan: R(-0.85, 0.85), far: R(0.3, 1) };
+  });
+  function sing(b, again) {
     if (!api.alive || muted) return;
-    const t = ac.currentTime;
-    const o = ac.createOscillator();
-    const g = ac.createGain();
-    const p = ac.createStereoPanner();
-    p.pan.value = Math.random() * 1.6 - 0.8;
-    const f0 = kind === 1 ? 700 + Math.random() * 400 : 1600 + Math.random() * 1600;
-    o.type = 'sine';
-    o.frequency.setValueAtTime(f0, t);
-    o.frequency.exponentialRampToValueAtTime(Math.max(180, f0 * (0.55 + Math.random() * 0.8)), t + 0.09 + Math.random() * 0.08);
-    const peak = kind === 1 ? 0.03 : 0.045;
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(peak, t + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16 + Math.random() * 0.22);
-    o.connect(g); g.connect(p); p.connect(master);
-    o.start(t); o.stop(t + 0.55);
+    // Gulls belong to the shore, songbirds to the trees.
+    if (b.kind === 3 ? api.shoreAmt < 0.25 : false) return;
+    const t = ac.currentTime + 0.03, pace = R(0.92, 1.1), tune = R(0.985, 1.015);
+    const peak = [0.03, 0.05, 0.022, 0.03][b.kind] * b.far;
+    for (const n of b.ph) note(t + n[0] * pace, n[1] * tune, n[2] * tune, n[3] * pace, peak, b.pan, b.kind === 3 ? 'triangle' : 'sine', n[4]);
+    if (b.far > 0.7) api.hush = 0.25;
+    const end = (b.ph[b.ph.length - 1][0] + 0.6) * pace;
+    // It sings its phrase a few times over, and sometimes another of its kind answers.
+    if (again > 0) setTimeout(() => sing(b, again - 1), (end + R(0.7, 2.2)) * 1000);
+    else if (Math.random() < 0.35) { const o = singers.filter((x) => x.kind === b.kind && x !== b)[0]; if (o) setTimeout(() => sing(o, 0), (end + R(0.6, 2)) * 1000); }
   }
   function crash() {
     if (!api.alive || muted) return;
@@ -7338,11 +7490,8 @@ function makeAudio() {
   later(() => {
     // Birds sing most at first light, less through the day, and not in rain or at night.
     if (Math.random() > api.birds) return;
-    const kind = Math.random() < 0.3 ? 1 : 0;
-    if (kind) api.hush = 0.25;
-    chirp(kind);
-    if (Math.random() < 0.4) setTimeout(() => chirp(kind), 160 + Math.random() * 420);
-  }, 2.2, 8.5);
+    sing(singers[(Math.random() * singers.length) | 0], (Math.random() * 3) | 0);
+  }, 3.5, 11);
   later(crash, 4.0, 12.0);
   try {
     score = createScore(ac, under);
@@ -7847,7 +7996,7 @@ async function main() {
     const scatter = new Scatter();
     const pick = (ids, x, z) => ids[Math.abs(Math.floor(x * 7.3 + z * 3.1)) % ids.length];
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
-    const rockIds = protoSet([4, 11, 23, 37, 52, 68], makeRock, 1.3);
+    const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [45]));
     const palmIds = [3, 8, 21].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 9, [30, 110]));
     // A palm leans the way the ground falls, toward the open light over the water.
     const leanYaw = (x, z) => {
@@ -7856,7 +8005,7 @@ async function main() {
     };
     const shrubIds = protoSet([5, 9, 14], makeShrub, 0.5);
     const canopyIds = protoSet([6, 13], makeCanopy, 1.1);
-    const fernIds = protoSet([7, 12, 19], makeFern, 0.8);
+    const fernIds = [7, 12, 19].map((sd) => scatter.proto([makeFern(sd, 0), makeFern(sd, 1)], 0.8, [26]));
     const broadIds = protoSet([2, 15, 28], makeBroad, 0.9);
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
     const fernBudget = Math.max(10, (q.broad * 0.55) | 0);
@@ -7931,7 +8080,7 @@ async function main() {
       if (plantFlower(x, z)) n++;
     }
     // The interior is forest. Crowns touch, with clearings where the mask opens.
-    const treeIds = protoSet([31, 48, 65, 82, 99, 116, 133, 150, 167], makeTree, 0.75);
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 0.75, [55, 170]));
     let trees = 0;
     for (let i = 0; i < q.forest * 30 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
@@ -7945,6 +8094,27 @@ async function main() {
       const tint = [0.8 + rnd() * 0.45, 0.82 + rnd() * 0.36, 0.75 + rnd() * 0.5];
       scatter.add(treeIds[(rnd() * treeIds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, 0.85 + rnd() * 0.4);
       trees++;
+    }
+    // The understorey grows in drifts: ferns where litter collects under the trees and along
+    // the edge of the scrub, low shrubs among them. Half the drifts start
+    // near the main beach, where they are seen from close by.
+    // Its own dice, so everything planted after it stays where it was.
+    const under = q.broad * 5;
+    for (let c = 0, n = 0, rnd = mulberry32(0xFE2A5); c < under * 6 && n < under; c++) {
+      const close = c % 2 === 0;
+      const cx = close ? beach.x + (rnd() - 0.5) * 150 : (rnd() - 0.5) * 450, cz = close ? beach.z + (rnd() - 0.5) * 150 : (rnd() - 0.5) * 390;
+      const ch = fieldSample(world, cx, cz);
+      if (ch < 2.6 || ch > 16) continue;
+      if (forestMask(cx, cz, ch, fieldSlope(world, cx, cz)) < 0.15 && vnoise(cx * 0.03 + 4, cz * 0.03) < 0.6) continue;
+      const k = 4 + ((rnd() * 7) | 0), rad = 1.2 + rnd() * 3.2;
+      for (let j = 0; j < k && n < under; j++) {
+        const a = rnd() * 6.28, r = rad * Math.sqrt(rnd()), x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r, h = fieldSample(world, x, z);
+        if (h < 2.4 || fieldSlope(world, x, z) > 0.4) continue;
+        const tint = [0.8 + rnd() * 0.3, 0.85 + rnd() * 0.25, 0.8 + rnd() * 0.25], u = rnd();
+        if (u < 0.78) scatter.add(fernIds[(rnd() * fernIds.length) | 0], x, h - 0.03, z, rnd() * 6.28, 1.2 + rnd() * 1.4, tint, 0.7 + rnd() * 0.5);
+        else scatter.add(shrubIds[(rnd() * shrubIds.length) | 0], x, h, z, rnd() * 6.28, 1.6 + rnd() * 1.4, tint, 0.7 + rnd() * 0.5);
+        n++;
+      }
     }
     for (let i = 0; i < q.rocks * 20 && rocks < q.rocks; i++) {
       const x = (rnd() - 0.5) * 500;
@@ -8370,7 +8540,7 @@ async function main() {
     let ftI = 0, ftN = 0, frames = 0, adaptLeft = 3, ready = false;
     let showHint = 0;
     let shoreWarm = 110;
-    let fishCam = null;
+    let fishCam = null, birdNear = 0;
 
     const nearC = [0, 0, 0];
     function fillCam(arr, eyeX, eyeY, eyeZ, cyaw, cpitch, clipBelow, underFlag) {
@@ -8662,6 +8832,8 @@ async function main() {
           birdData[i * 4 + 1] = y;
           birdData[i * 4 + 2] = z;
           birdData[i * 4 + 3] = hd;
+          // Capture only: bird=<metres> flies the first three past the camera.
+          if (birdNear && i < 3) birdData.set([camX + Math.sin(yaw) * birdNear + Math.cos(yaw) * (i - 1) * 1.3, camY + 0.3 * i, camZ - Math.cos(yaw) * birdNear + Math.sin(yaw) * (i - 1) * 1.3, yaw + [0, 0.9, -2.2][i]], i * 4);
         }
         device.queue.writeBuffer(birdInstB, 0, birdData);
       }
@@ -8916,6 +9088,7 @@ async function main() {
         camX += Math.sin(yaw) * num('fwd') + Math.cos(yaw) * num('side');
         camZ += -Math.cos(yaw) * num('fwd') + Math.sin(yaw) * num('side');
         if (qstr.has('up')) { fly = true; camY += num('up'); }
+        birdNear = num('bird');
         // fish=<species> frames one fish (fd under 1.6 m) or its school; calm stops them minding the camera;
         // warm runs the animals for that many seconds first.
         fishLife.calm = qstr.has('calm');

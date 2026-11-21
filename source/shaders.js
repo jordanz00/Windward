@@ -322,7 +322,9 @@ fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
-  let uv = in.clip.xy / vec2<f32>(SKYW, SKYH);
+  // Each bake looks through a different point of its texel, and the bakes are blended, so
+  // an edge finer than a row of the panorama comes out soft instead of as alternate rows.
+  let uv = (in.clip.xy + vec2<f32>(fract(F.time * 61.7), fract(F.time * 37.3)) - 0.5) / vec2<f32>(SKYW, SKYH);
   let az = (uv.x - 0.5) * 6.2831853;
   let el = uv.y * uv.y * (1.5708 + SKY_E0) - SKY_E0;
   let rd = vec3<f32>(cos(el) * cos(az), sin(el), cos(el) * sin(az));
@@ -352,15 +354,24 @@ struct SkyBake { @location(0) c: vec4<f32> }
     // Long strides through clear air. Where the ray enters a cloud the surface is found
     // by bisection and the short steps are counted from there, so the samples sit at
     // the same depths under the surface for every texel and leave no banding or grain.
-    var t = t0;
+    // The strides through clear air land on the same columns of sky for every row of the
+    // panorama, or looking up on the same levels, so a small cloud is found by every row
+    // that crosses it or by none, and does not come out in stripes.
+    let ch = sqrt(1.0 - sinE * sinE);
+    let level = ch > sinE;
+    let gs = select(0.05 / sinE, 0.05 / ch, level);
+    let g0 = select(t0, 0.0, level);
+    var t = g0 + ceil((t0 - g0) / gs) * gs;
     var tp = t0;
     var inside = false;
-    for (var i = 0; i < 150; i++) {
+    for (var i = 0; i < 230; i++) {
       if (t > t0 + big * 20.0 || T < 0.02) { break; }
       let p = org + dir * t;
       if (!inside) {
-        if (cloudCover(p.xz) < -0.12) { tp = t; t += ds * 3.0; continue; }
-        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t += ds; continue; }
+        let g = gs * select(1.0, 2.0, t * ch > 4.0);
+        let nx = g0 + (floor((t - g0) / g + 0.001) + 1.0) * g;
+        if (cloudCover(p.xz) < -0.12) { tp = t; t = nx + 2.0 * g; continue; }
+        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t = nx; continue; }
         var a = tp;
         var b = t;
         for (var k = 0; k < 5; k++) {
@@ -372,7 +383,7 @@ struct SkyBake { @location(0) c: vec4<f32> }
         continue;
       }
       let d = cloudAt(p, 1.0);
-      if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
+      if (d <= 0.004) { inside = false; tp = t; t = g0 + (floor((t - g0) / gs + 0.001) + 1.0) * gs; continue; }
       var ls = cloudAt(p + F.sunDir * 0.06, 1.0) * 0.1;
       ls += cloudAt(p + F.sunDir * 0.22, 0.0) * 0.2;
       ls += cloudAt(p + F.sunDir * 0.6, 0.0) * 0.5;
@@ -544,7 +555,10 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let nl = dot(n, F.sunDir);
   let sh = sunShadow(world) * cloudShade(world.xz, world.y);
   let hemi = n.y * 0.5 + 0.5;
-  let sky = F.amb.rgb * mix(hemi, 0.75, leaf);
+  // Under the forest the crowns hide half the sky from the ground, the trunks and the low leaves.
+  let fld = sampleField(world.xz);
+  let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz)) * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
+  let sky = F.amb.rgb * mix(hemi, 0.75, leaf) * (1.0 - 0.3 * roof);
   let ground = vec3<f32>(0.26, 0.19, 0.11) * F.amb.w * (1.0 - hemi);
   var light = F.sunCol * max(nl, 0.0) * sh * 1.2 + sky * 0.7 + ground * 0.4;
   if (world.y < 0.05) {
@@ -811,7 +825,8 @@ struct GeoV {
   var col = shade(in.world, n, alb, 0.0, 0.0);
   // Wet sand is a mirror at a low angle. Dry sand never is.
   let Vt = normalize(F.camPos - in.world);
-  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * step(-0.02, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
+  // Sand a trough has left bare is as wet as sand gets, though it lies below the waterline.
+  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * smoothstep(-0.9, -0.35, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
   if (gloss > 0.01 && F.under < 0.5) {
     let nw = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.8));
     let fr = 0.02 + 0.98 * pow(1.0 - max(dot(nw, Vt), 0.0), 5.0);
@@ -911,7 +926,8 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   var o: MeshV;
   o.world = meshPlace(in);
   o.nrm = spinY(normalize(in.n / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
-  o.col = in.c * in.i2.rgb;
+  // A tree's own tint is in its leaves. Its bark stays close to bark.
+  o.col = in.c * mix(in.i2.rgb, vec3<f32>(dot(in.i2.rgb, vec3<f32>(0.333))), select(0.0, 0.8, in.kind > 8.5));
   o.kind = in.kind;
   o.uv = in.uv;
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
@@ -928,6 +944,27 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
   o.clip = F.shadowVP * vec4<f32>(meshPlace(in), 1.0);
   return o;
 }
+// Leaves lying over a surface: the nearest of a scatter of leaves, each longer than it is
+// wide and turned its own way. Returns its distance (a leaf's edge is near 0.45), the
+// distance across it from its midrib, and two numbers that are its own.
+fn leafCells(q: vec2<f32>) -> vec4<f32> {
+  let c = floor(q);
+  var best = 9.0;
+  var id = vec2<f32>(0.0);
+  var across = 0.0;
+  for (var j = -1; j <= 1; j++) {
+    for (var i = -1; i <= 1; i++) {
+      let g = c + vec2<f32>(f32(i), f32(j));
+      let h = hash22(g);
+      let d = g + 0.15 + 0.7 * h - q;
+      let a = h.x * 6.2832;
+      let e = vec2<f32>(d.x * cos(a) + d.y * sin(a), (d.y * cos(a) - d.x * sin(a)) * 1.9);
+      let l = dot(e, e);
+      if (l < best) { best = l; id = h; across = e.y; }
+    }
+  }
+  return vec4<f32>(sqrt(best), across, id);
+}
 @fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
   var n = normalize(in.nrm);
@@ -937,18 +974,37 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
   var leaf = 0.0;
   var gloss = 0.0;
   if (kind == 3) {
-    // A leaf mass. Its outline is leaves and gaps, not the edge of a smooth lump,
-    // and its surface is clumps catching the light at different angles.
+    // A leaf mass. Its surface is leaves, each lying its own way with shade between them,
+    // and its outline is leaves and gaps. Through a gap the far side of the crown shows, dark.
+    let back = dot(n, Vv) < 0.0;
     let rim = 1.0 - abs(dot(n, Vv));
     let dist = length(F.camPos - in.world);
-    let p = in.world * mix(2.6, 0.9, sat(dist / 220.0));
-    let a = n2(p.xz + vec2<f32>(p.y * 0.83, p.y * 0.41));
-    let b = n2(p.xz * 2.9 + vec2<f32>(p.y * 2.1, 3.0));
-    let leafN = a * 0.62 + b * 0.38;
-    if (leafN < rim * rim * 1.05 - 0.1) { discard; }
-    alb *= 0.5 + 1.0 * leafN;
-    let tilt = vec3<f32>(n2(p.xz * 1.9 + vec2<f32>(1.0, p.y)) - 0.5, n2(p.zy * 1.9 + vec2<f32>(4.0, p.x)) - 0.5, n2(p.yx * 1.9 + vec2<f32>(7.0, p.z)) - 0.5);
-    n = normalize(n + tilt * 1.1);
+    let an = abs(n);
+    var pq = in.world.xz;
+    if (an.x > an.y && an.x > an.z) { pq = in.world.zy; } else if (an.z > an.y) { pq = in.world.xy; }
+    let near = 1.0 - smoothstep(30.0, 85.0, dist);
+    // Clumps a metre across at any distance; single leaves once they are big enough to see.
+    let B = leafCells(pq * 0.85 + 17.0);
+    let mB = smoothstep(0.56, 0.38, B.x);
+    var cover = mB;
+    var tone = mix(0.42, 0.62 + 0.75 * B.w, mB);
+    var tilt = (vec3<f32>(B.z, B.y + 0.5, B.w) - 0.5) * 0.8;
+    if (near > 0.01) {
+      let A = leafCells(pq * 3.3);
+      let mA = smoothstep(0.64, 0.5, A.x);
+      cover = mix(cover, max(mA, mB * 0.35), near);
+      tone = mix(tone, mix(0.3, 0.72 + 0.55 * A.w, mA) * (0.72 + 0.5 * B.w), near);
+      tilt = mix(tilt, (vec3<f32>(A.z, A.y + 0.5, A.w) - 0.5) * 1.5, near * mA);
+      // A leaf is paler along its midrib, and each is its own green, some toward yellow.
+      alb = mix(alb, alb * vec3<f32>(1.4, 1.2, 0.6), near * mA * A.z * A.z * 0.5);
+      alb *= 1.0 + 0.35 * near * mA * smoothstep(0.1, 0.0, abs(A.y));
+      // Only a leaf turned up to the sky shines with it; from underneath a crown is matt.
+      gloss = 0.3 * near * mA * sat(n.y * 2.0);
+    }
+    if (cover < rim * rim * 1.25 - 0.12 + 0.35 * smoothstep(0.6, 0.85, n2(pq * 0.37 + 5.0))) { discard; }
+    alb *= tone;
+    if (back) { n = -n; alb *= 0.4; gloss = 0.0; }
+    n = normalize(n + tilt);
   } else if (kind == 2) {
     // A blade. The eye may be looking at its waxy upper face or its paler underside.
     let upper = dot(n, Vv) > 0.0;
@@ -976,6 +1032,16 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
       alb = mix(alb, vec3<f32>(0.40, 0.42, 0.33), smoothstep(0.58, 0.85, blotch) * 0.35);
       alb *= mix(0.62, 1.0, smoothstep(0.0, 1.4, in.uv.y));
       n = normalize(n + vec3<f32>(0.0, (ring - 0.5) * 0.7 * groove, 0.0) + (fibre - 0.5) * 0.25 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
+    }
+    if (kind == 9) {
+      // Bark of a forest tree: furrows running up the trunk, plates between them, lichen in patches.
+      let wy = in.world.y * 1.3;
+      let fur = n2(vec2<f32>(in.uv.x * 44.0 + n2(vec2<f32>(in.uv.x * 9.0, wy * 0.5)) * 2.0, wy));
+      let plate = n2(vec2<f32>(in.uv.x * 13.0, wy * 3.1));
+      let blotch = n2(vec2<f32>(in.uv.x * 5.0 + 3.0, wy * 1.1)) * 0.7 + n2(vec2<f32>(in.uv.x * 17.0, wy * 3.7)) * 0.3;
+      alb *= (0.42 + 0.58 * smoothstep(0.28, 0.5, fur)) * (0.7 + 0.6 * plate);
+      alb = mix(alb, vec3<f32>(0.27, 0.28, 0.24), smoothstep(0.6, 0.8, blotch) * 0.4);
+      n = normalize(n + (fur - 0.5) * 0.9 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
     }
     if (kind == 8) {
       // Coral. uv.x says which: 0 branches, 1 a boulder with a maze of grooves, 2 a table, 3 soft tissue.
@@ -1090,25 +1156,43 @@ struct BirdV {
   @location(1) nrm: vec3<f32>,
   @location(2) col: vec3<f32>,
 }
-@vertex fn vsBird(@location(0) p: vec3<f32>, @location(1) wing: f32, @location(2) inst: vec4<f32>) -> BirdV {
+@vertex fn vsBird(@builtin(instance_index) ii: u32, @location(0) p: vec3<f32>, @location(1) wing: f32, @location(2) inst: vec4<f32>) -> BirdV {
   var lp = p;
-  let glide = sat(sin(F.time * 0.21 + inst.z * 0.15));
-  let flap = sin(F.time * (3.4 + abs(inst.y) * 0.02) + inst.x) * wing * mix(0.15, 1.0, glide);
-  lp.y += abs(lp.x) * flap;
-  lp.z -= abs(wing) * 0.04 * (1.0 - glide);
+  let id = f32(ii);
+  // A few beats, then a glide on set wings. Each bird keeps its own time.
+  let beat = smoothstep(-0.1, 0.35, sin(F.time * (0.31 + fract(id * 0.37) * 0.22) + id * 2.1));
+  let ph = F.time * (5.4 + fract(id * 0.61) * 1.8) + id * 1.9;
+  // The hand of the wing trails the arm through the beat, so the wing bends instead of hinging like a board.
+  let arm = mix(0.1, sin(ph) * 0.55 + 0.08, beat);
+  let hand = mix(-0.06, sin(ph - 1.1) * 0.6 - 0.1, beat);
+  let a = abs(wing);
+  let d = abs(lp.x) - 0.04;
+  let inner = min(d, 0.21);
+  let outer = max(d - 0.21, 0.0);
+  if (a > 0.5) {
+    lp.y += inner * sin(arm) + outer * sin(arm + hand);
+    lp.x = sign(lp.x) * (0.04 + inner * cos(arm) + outer * cos(arm + hand));
+    // The wing sweeps back a little on the upstroke.
+    lp.z -= outer * 0.25 * beat * sat(cos(ph));
+  }
+  // Lean into the turn.
+  lp.y += lp.x * sin(F.time * 0.19 + id * 1.7) * 0.42;
   let s = sin(inst.w); let c = cos(inst.w);
-  let x = lp.x * c - lp.z * s;
-  let z = lp.x * s + lp.z * c;
+  let x = lp.x * s + lp.z * c;
+  let z = lp.z * s - lp.x * c;
   var w = vec3<f32>(inst.x + x, inst.y + lp.y, inst.z + z);
   var o: BirdV;
   o.world = w;
   o.nrm = vec3<f32>(0.0, 1.0, 0.0);
-  o.col = mix(vec3<f32>(0.92, 0.93, 0.9), vec3<f32>(0.75, 0.78, 0.82), abs(wing));
+  // White body, grey mantle, black wingtips.
+  o.col = mix(mix(vec3<f32>(0.9, 0.91, 0.89), vec3<f32>(0.6, 0.63, 0.67), sat(a)), vec3<f32>(0.07), smoothstep(0.4, 0.5, abs(p.x)));
   o.clip = F.viewProj * vec4<f32>(w, 1.0);
   return o;
 }
 @fragment fn fsBird(in: BirdV) -> @location(0) vec4<f32> {
-  return vec4<f32>(shade(in.world, in.nrm, in.col, 0.0, 0.0), 1.0);
+  // Seen from below, a bird shows its shaded underside.
+  let below = step(F.camPos.y, in.world.y);
+  return vec4<f32>(shade(in.world, vec3<f32>(0.0, 1.0 - 2.0 * below, 0.0), mix(in.col, vec3<f32>(0.8, 0.81, 0.8), below * 0.6), 0.0, 0.0), 1.0);
 }
 
 ${FISH_WGSL}
@@ -1428,6 +1512,9 @@ fn warp(t: f32) -> f32 {
   // The spectral tile adds the wind sea. Its height fades before the mesh gets coarse.
   let near = smoothstep(460.0, 70.0, dist);
   w.y += shapeField(xz).x * near * mix(0.25, 1.0, field.y);
+  // A trough cannot dig below the sand. Over a shoal the surface stays a film above the bed.
+  let bedW = sampleField(w.xz).x;
+  if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05, 0.0)); }
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
