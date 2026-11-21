@@ -1199,7 +1199,7 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
   let ripple = caustic(in.world.xz) * 2.2 * smoothstep(-0.3, 0.5, n.y);
   let hemi = n.y * 0.5 + 0.5;
   let above = in.world.y - sampleField(in.world.xz).x;
-  let amb = (vec3<f32>(0.34, 0.48, 0.70) * 0.7 * mix(0.3, 1.0, hemi)
+  let amb = (F.amb.rgb * 0.7 * mix(0.3, 1.0, hemi)
     + vec3<f32>(0.42, 0.40, 0.30) * (1.0 - hemi) * 0.5 * exp(-max(above, 0.0) * 0.6)) * absorb * tint
     + waterFill(depth) * (0.7 + 0.3 * hemi);
   var col = alb * (sun * (max(nl, 0.0) * 1.2 + ripple) + amb);

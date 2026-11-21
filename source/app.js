@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 3, drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 3, drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 4, drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -956,7 +956,7 @@ function waveY(world, x, z, time) {
     const len = w[3] / frq;
     const k = Math.PI * 2 / len;
     const feel = 1 - smooth01(len * 0.08, len * 0.45, D);
-    let As = w[2] * wp.amp * damp * (1 + feel * 0.85);
+    let As = w[2] * wp.amp * env.sea * damp * (1 + feel * 0.85);
     if (i < 2) As *= 1 - 0.74 * smooth01(2, 9, D);
     if (i >= 4) As *= wp.cx;
     const Q = Math.min(w[4] + feel * 0.45, 1.05);
@@ -1137,6 +1137,8 @@ function bindStudio() {
     nav.append(b);
   });
   $('placebtn').addEventListener('click', () => document.body.classList.toggle('places-open'));
+  $('hourbtn').addEventListener('click', () => stepHour(false));
+  $('skybtn').addEventListener('click', () => stepWeather(false));
   $('walkbtn').addEventListener('click', () => {
     trip = null;
     orbit = false;
@@ -1261,8 +1263,98 @@ function makeAudio() {
   const api = {
     ac: ac, master: master, under: under,
     surf: surf.gain, hiss: hiss.gain, wind: wind.gain, insects: insects.gain,
-    shoreAmt: 0.4, alive: true
+    shoreAmt: 0.4, alive: true, hush: 1, birds: 1
   };
+  // ---- What lives in the air, by ear. Nothing here is a loop: each singer keeps its own
+  // time, and how many are singing follows the hour, the rain, the wind and the trees.
+  // A rasp: a band of noise beaten at a steady rate, which is how a cicada's tymbal and a
+  // dragonfly's wings both make their sound.
+  const rasp = (band, q, beatHz, depth, to) => {
+    const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = band; f.Q.value = q;
+    const beat = ac.createGain(); beat.gain.value = 1 - depth;
+    const o = ac.createOscillator(); o.type = 'square'; o.frequency.value = beatHz;
+    const od = ac.createGain(); od.gain.value = depth; o.connect(od); od.connect(beat.gain);
+    const g = ac.createGain(); g.gain.value = 0;
+    const p = ac.createStereoPanner(); p.pan.value = Math.random() * 1.6 - 0.8;
+    src.connect(f); f.connect(beat); beat.connect(g); g.connect(p); p.connect(to);
+    src.start(0, Math.random() * 20); o.start();
+    return g.gain;
+  };
+  const bus = () => { const g = ac.createGain(); g.gain.value = 0; g.connect(master); return g; };
+  const cicadas = bus(), crickets = bus(), chorus = bus();
+  for (let i = 0; i < 4; i++) {
+    // Each cicada sings in bouts of its own length, swelling in and dying away.
+    const g = rasp(4300 + Math.random() * 3200, 14, 110 + Math.random() * 120, 0.5, cicadas);
+    const bout = () => {
+      if (!api.alive) return;
+      const t = ac.currentTime, len = 4 + Math.random() * 10, peak = 0.4 + Math.random() * 0.6;
+      g.cancelScheduledValues(t); g.setValueAtTime(0.0001, t);
+      g.exponentialRampToValueAtTime(peak, t + 1.5 + Math.random() * 2);
+      g.setValueAtTime(peak, t + len); g.exponentialRampToValueAtTime(0.0001, t + len + 2.5);
+      setTimeout(bout, (len + 3 + Math.random() * 9) * 1000);
+    };
+    setTimeout(bout, Math.random() * 8000);
+  }
+  for (let i = 0; i < 6; i++) {
+    // Each cricket has its own pitch, its own number of pulses to a chirp and its own pace,
+    // and now and then stops to listen.
+    const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
+    o.frequency.value = 4100 + Math.random() * 1300; g.gain.value = 0; p.pan.value = Math.random() * 1.8 - 0.9;
+    o.connect(g); g.connect(p); p.connect(crickets); o.start();
+    const loud = 0.15 + Math.random() * 0.5, n = 2 + ((Math.random() * 3) | 0), gap = 0.45 + Math.random() * 0.9;
+    const call = () => {
+      if (!api.alive) return;
+      const t = ac.currentTime + 0.02;
+      for (let k = 0; k < n; k++) { const a = t + k * 0.034; g.gain.setValueAtTime(0, a); g.gain.linearRampToValueAtTime(loud, a + 0.006); g.gain.linearRampToValueAtTime(0, a + 0.02); }
+      setTimeout(call, (gap * (0.9 + Math.random() * 0.25) + (Math.random() < 0.06 ? 2 + Math.random() * 6 : 0)) * 1000);
+    };
+    setTimeout(call, Math.random() * 3000);
+  }
+  // The far chorus after dark: thousands of small singers heard as one shimmer.
+  rasp(6200, 5, 38, 0.6, chorus).value = 1;
+  const rain = bed('highpass', 1500, 0.3), patter = bed('bandpass', 420, 0.5), rustle = bed('highpass', 2800, 0.3);
+  const hum = (type, f) => {
+    const o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
+    o.type = type; o.frequency.value = f; lp.type = 'lowpass'; lp.frequency.value = f * 5; g.gain.value = 0;
+    o.connect(lp); lp.connect(g); g.connect(master); o.start();
+    return { g: g.gain, f: o.frequency };
+  };
+  // Wings close to the ear: a bee's drone, a mosquito's whine, the dry rattle of a dragonfly.
+  const bee = hum('sawtooth', 210), mosq = hum('triangle', 590), dfly = rasp(700, 1.2, 33, 0.9, master);
+  let wetness = 0, woods = 0;
+  // s: heat, dark, low (sun), dawn, rain, gust in m/s, wood 0..1, alt, under, heard.
+  api.air = (s) => {
+    const m = muted ? 0 : 1, dry = 1 - Math.min(1, s.rain * 3), up = Math.exp(-Math.max(s.alt, 0) * 0.04) * (s.under ? 0 : 1);
+    const near = (d, r) => (d == null ? 0 : Math.pow(Math.max(0, 1 - d / r), 2));
+    const ease = (p, v) => { p.value += (v - p.value) * 0.15; };
+    cicadas.gain.value = m * 0.05 * s.heat * dry * (0.25 + 0.75 * s.wood) * up * api.hush;
+    crickets.gain.value = m * 0.045 * s.dark * dry * (0.4 + 0.6 * s.wood) * up;
+    chorus.gain.value = m * 0.03 * Math.max(s.dark, s.low * 0.5) * dry * up;
+    rain.gain.value = m * 0.1 * s.rain * (s.under ? 0.15 : 1);
+    patter.gain.value = m * 0.09 * s.rain * s.rain * (s.under ? 0.3 : 1);
+    rustle.gain.value = m * 0.03 * Math.min(2, s.gust * s.gust / 30) * (0.3 + 0.7 * s.wood) * up;
+    ease(bee.g, m * 0.05 * near(s.heard.bee, 1.2)); bee.f.value = 205 + 18 * Math.sin(ac.currentTime * 11);
+    ease(mosq.g, m * 0.02 * near(s.heard.mosquito, 1));
+    ease(dfly, m * 0.07 * near(s.heard.dragonfly, 1.2));
+    // Cicadas go quiet when a bird calls close by, and take a while to start again.
+    api.hush += (1 - api.hush) * 0.004;
+    api.birds = (1 - s.dark) * dry * (0.5 + s.dawn);
+    wetness = s.rain; woods = s.wood;
+  };
+  // Single drops off the leaves, heard one at a time under trees in light rain.
+  const drip = () => {
+    if (!api.alive) return;
+    if (!muted && wetness > 0.03 && Math.random() < 0.3 + woods) {
+      const t = ac.currentTime, src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(), p = ac.createStereoPanner();
+      src.buffer = burst; f.type = 'bandpass'; f.frequency.value = 2500 + Math.random() * 4000; f.Q.value = 6; p.pan.value = Math.random() * 2 - 1;
+      g.gain.setValueAtTime(0.02 + Math.random() * 0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03 + Math.random() * 0.04);
+      src.connect(f); f.connect(g); g.connect(p); p.connect(master);
+      src.start(t, Math.random()); src.stop(t + 0.1);
+    }
+    setTimeout(drip, 40 + Math.random() * 260 / Math.max(wetness, 0.1));
+  };
+  drip();
   function chirp(kind) {
     if (!api.alive || muted) return;
     const t = ac.currentTime;
@@ -1305,7 +1397,10 @@ function makeAudio() {
     }, wait);
   }
   later(() => {
+    // Birds sing most at first light, less through the day, and not in rain or at night.
+    if (Math.random() > api.birds) return;
     const kind = Math.random() < 0.3 ? 1 : 0;
+    if (kind) api.hush = 0.25;
     chirp(kind);
     if (Math.random() < 0.4) setTimeout(() => chirp(kind), 160 + Math.random() * 420);
   }, 2.2, 8.5);
@@ -1330,6 +1425,16 @@ const K = Object.create(null);
 ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight'].forEach((c) => { K[c] = 0; });
 let lookX = 0, lookY = 0, dragging = false, touchN = 0;
 
+// T moves the clock to the next part of the day. R changes the weather, which then stays
+// until R is pressed again past the end of the list, where the island takes it back.
+function stepHour(back) { envNextStop(back); showCaption(envLabel()); }
+function stepWeather(back) {
+  const names = Object.keys(WEATHER), i = names.indexOf(env.wx) + (back ? -1 : 1);
+  env.auto = i < 0 || i >= names.length;
+  envSet(names[(i + names.length) % names.length], false);
+  env.hold = env.auto ? 240 : 1e9;
+  showCaption(envLabel());
+}
 function bootKeys() {
   addEventListener('keydown', (e) => {
     if (K[e.code] != null) { K[e.code] = 1; e.preventDefault(); }
@@ -1354,6 +1459,8 @@ function bootKeys() {
       openMenu();
     }
     if (e.code === 'KeyC' && mode === 2) $('watchbtn').click();
+    if (e.code === 'KeyT' && mode > 0) stepHour(e.shiftKey);
+    if (e.code === 'KeyR' && mode > 0) stepWeather(e.shiftKey);
     if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goSpot(e.code.charCodeAt(5) - 49);
   });
   addEventListener('keyup', (e) => { if (K[e.code] != null) K[e.code] = 0; });
@@ -1499,14 +1606,14 @@ async function main() {
         { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
         { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 2, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 3, visibility: FS, texture: { sampleType: 'depth' } },
-        { binding: 4, visibility: FS, sampler: { type: 'comparison' } },
+        { binding: 3, visibility: VS | FS, texture: { sampleType: 'depth' } },
+        { binding: 4, visibility: VS | FS, sampler: { type: 'comparison' } },
         { binding: 5, visibility: VS | FS, buffer: { type: 'uniform' } },
         { binding: 6, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 7, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 8, visibility: FS, texture: { sampleType: 'float' } },
-        { binding: 9, visibility: FS, sampler: { type: 'filtering' } },
-        { binding: 10, visibility: FS, texture: { sampleType: 'depth' } }
+        { binding: 8, visibility: VS | FS, texture: { sampleType: 'float' } },
+        { binding: 9, visibility: VS | FS, sampler: { type: 'filtering' } },
+        { binding: 10, visibility: VS | FS, texture: { sampleType: 'depth' } }
       ]
     });
     const simLayout = device.createBindGroupLayout({
@@ -1523,16 +1630,21 @@ async function main() {
         { binding: 3, visibility: FS, sampler: { type: 'filtering' } },
         { binding: 4, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 5, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 6, visibility: FS, texture: { sampleType: 'unfilterable-float' } }
+        { binding: 6, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 7, visibility: FS, texture: { sampleType: 'float' } }
       ]
     });
     const blitLayout = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: VS | FS, buffer: { type: 'uniform' } },
         { binding: 1, visibility: FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 2, visibility: FS, texture: { sampleType: 'depth' } }
+        { binding: 2, visibility: FS, texture: { sampleType: 'depth' } },
+        { binding: 3, visibility: FS, texture: { sampleType: 'float' } },
+        { binding: 4, visibility: FS, sampler: { type: 'filtering' } }
       ]
     });
+    // The air pass reads the scene's depth and nothing else from the second group.
+    const airLayout = device.createBindGroupLayout({ entries: [{ binding: 1, visibility: FS, texture: { sampleType: 'depth' } }] });
     const geoPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout] });
     const skyPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout] });
     const waterPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, waterLayout] });
@@ -1610,6 +1722,25 @@ async function main() {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: depthOn('depth32float', true, 'less')
     });
+    const bugBuffers = [meshBuffers[0], { arrayStride: BUG_STRIDE * 4, stepMode: 'instance', attributes: [6, 7, 8, 9, 10, 11].map((l, i) => ({ shaderLocation: l, offset: i * 16, format: 'float32x4' })) }];
+    // Insects go straight onto the finished frame, after the water, so a clear wing over the
+    // lagoon is a film over the lagoon and not a hole in it.
+    pipe('bug', {
+      layout: geoPL,
+      vertex: { module: mod, entryPoint: 'vsBug', buffers: bugBuffers },
+      fragment: { module: mod, entryPoint: 'fsBug', targets: [{ format: format, blend: {
+        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+      } }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: depthOn('depth24plus', true, 'less')
+    });
+    pipe('shadowBug', {
+      layout: skyPL,
+      vertex: { module: mod, entryPoint: 'vsShadowBug', buffers: bugBuffers },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: shadowBias
+    });
     pipe('shadowFish', {
       layout: skyPL,
       vertex: { module: mod, entryPoint: 'vsShadowFish', buffers: meshBuffers },
@@ -1664,6 +1795,23 @@ async function main() {
       // behind the sand it is running over. Trees and cliffs are still rejected
       // in the fragment shader.
       depthStencil: depthOn('depth24plus', false, 'always')
+    });
+    const airPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, airLayout] });
+    pipe('drops', {
+      layout: airPL,
+      vertex: { module: mod, entryPoint: 'vsDrops' },
+      fragment: { module: mod, entryPoint: 'fsDrops', targets: [{ format: format, blend: {
+        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+      } }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: depthOn('depth24plus', false, 'less')
+    });
+    pipe('air', {
+      layout: airPL,
+      vertex: { module: mod, entryPoint: 'vsSky' },
+      fragment: { module: mod, entryPoint: 'fsAir', targets: [{ format: sceneFmt }] },
+      primitive: { topology: 'triangle-list' }
     });
     pipe('blit', {
       layout: blitPL,
@@ -1821,6 +1969,28 @@ async function main() {
         broads++;
       }
     }
+    // Flowering shrubs, in the open where the sun reaches: behind the beach, by the lagoon,
+    // and along the edge of the forest. Every blossom is somewhere a bee or a butterfly can go.
+    const blooms = [], perch = [];
+    const flowerIds = [0, 1, 2, 3, 4, 5].map((sd) => { const f = makeFlowerShrub(sd + 1, 0); return { id: scatter.proto([f.mesh, makeFlowerShrub(sd + 1, 1).mesh], 1.3, [16]), blooms: f.blooms }; });
+    const plantFlower = (x, z) => {
+      const h = fieldSample(world, x, z);
+      if (h < 0.7 || h > 9 || fieldSlope(world, x, z) > 0.35) return false;
+      const f = flowerIds[(rnd() * flowerIds.length) | 0], rot = rnd() * 6.28, sc = 0.9 + rnd() * 0.5, c = Math.cos(rot), s = Math.sin(rot), B = f.blooms;
+      scatter.add(f.id, x, h - 0.02, z, rot, sc, [0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2], 1);
+      for (let i = 0; i < B.length; i += 6) {
+        blooms.push(x + (B[i] * c - B[i + 2] * s) * sc, h - 0.02 + B[i + 1] * sc, z + (B[i] * s + B[i + 2] * c) * sc, B[i + 3] * c - B[i + 4] * s, B[i + 3] * s + B[i + 4] * c);
+        perch.push(x, z, sc, scatter.kind.length - 1, B[i + 5]);
+      }
+      return true;
+    };
+    for (let i = 0; i < 6; i++) { const back = 9.5 + (i % 3) * 2.2, along = (i - 2.5) * 4.6; plantFlower(rowOx + rowInX * back + rowSideX * along, rowOz + rowInZ * back + rowSideZ * along); }
+    for (let i = 0, n = 0; i < 40 && n < 4; i++) { const a = rnd() * 6.28, r = 3 + rnd() * 6; if (plantFlower(lagoon.x + Math.cos(a) * r, lagoon.z + Math.sin(a) * r)) n++; }
+    for (let i = 0, n = 0; i < 3000 && n < q.broad; i++) {
+      const x = (rnd() - 0.5) * 450, z = (rnd() - 0.5) * 390, h = fieldSample(world, x, z);
+      if (h < 2.2 || vnoise(x * 0.02 + 9, z * 0.02) < 0.52 || forestMask(x, z, h, fieldSlope(world, x, z)) > 0.45) continue;
+      if (plantFlower(x, z)) n++;
+    }
     // The interior is forest. Crowns touch, with clearings where the mask opens.
     const treeIds = protoSet([31, 48, 65, 82, 99, 116, 133, 150, 167], makeTree, 0.75);
     let trees = 0;
@@ -1864,6 +2034,15 @@ async function main() {
     scatter.add(scatter.proto([makeSkiff()], 2), beach.x + 3.5, beach.h, beach.z + 1.2, byaw - 0.5 + Math.PI * 0.5, 1.15, null, 1);
     scatter.add(scatter.proto([icosphere(1, 0.28, [0.75, 0.08, 0.06])], 0.4), lagoon.x + 16, 0.12, lagoon.z + 4, 0, 1, null, 1.15);
     const reef = plantReef(world, scatter, q);
+    // How open each plant stands to the trade wind: full on the windward shore, less in the
+    // lee of high ground, and less again for the small things under the forest.
+    for (let o = 0; o < scatter.data.length; o += ISTRIDE) {
+      const x = scatter.data[o], y = scatter.data[o + 1], z = scatter.data[o + 2];
+      let lee = 0;
+      for (const d of [14, 32, 60]) lee = Math.max(lee, (fieldSample(world, x - 0.94 * d, z - 0.35 * d) - y - 1.5) / d);
+      scatter.data[o + 6] = Math.max(0.3, 1 - lee * 4) * (y > 2 && scatter.data[o + 4] < 3 ? 0.6 : 1);
+    }
+    for (let i = 3; i < perch.length; i += 5) perch[i] = scatter.data[perch[i] * ISTRIDE + 6];
     scatter.finish();
     const fishLife = new FishLife(world, reef, q, stackList);
     const fishPack = packMeshes(fishMeshes());
@@ -1929,9 +2108,9 @@ async function main() {
       return;
     }
     mark('wgsl');
-    const uf = new Float32Array(192);
-    const ur = new Float32Array(192);
-    const un = new Float32Array(192);
+    const uf = new Float32Array(224);
+    const ur = new Float32Array(224);
+    const un = new Float32Array(224);
     for (let i = 0; i < 8; i++) {
       const w = WAVES[i];
       const L = Math.hypot(w[0], w[1]) || 1;
@@ -1940,9 +2119,9 @@ async function main() {
     }
     ur.set(uf);
 
-    const ubuf = device.createBuffer({ size: 768, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const rbuf = device.createBuffer({ size: 768, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const nbuf = device.createBuffer({ size: 768, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const ubuf = device.createBuffer({ size: 896, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 896, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const nbuf = device.createBuffer({ size: 896, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const htex = device.createTexture({
       size: [q.hres, q.hres],
@@ -2010,6 +2189,12 @@ async function main() {
     const birdInstB = device.createBuffer({ size: Math.max(16, birdData.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     const fishVB = upload(fishPack.vert, GPUBufferUsage.VERTEX);
     const fishIB = upload(fishPack.idx, GPUBufferUsage.INDEX);
+    const bugLife = new BugLife(world, blooms, perch);
+    const bugPack = packMeshes(bugMeshes());
+    const bugVB = upload(bugPack.vert, GPUBufferUsage.VERTEX), bugIB = upload(bugPack.idx, GPUBufferUsage.INDEX);
+    const bugArr = new Float32Array(bugLife.agents.length * BUG_STRIDE);
+    const bugInstB = device.createBuffer({ size: bugArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    let bugDraws = [], bugCam = null, sunView = 0, sunTurn = 0;
     const fishArr = new Float32Array(Math.max(1, fishLife.n) * ISTRIDE);
     const fishInstB = device.createBuffer({ size: fishArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     let fishDraws = [];
@@ -2090,7 +2275,7 @@ async function main() {
       colorAttachments: [],
       depthStencilAttachment: { view: shadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
     };
-    let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null;
+    let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null, airTex = null, bgAir = null;
     const READ = qstr.has('read');
     let readTex = null, readDepth = null, readBuf = null, readBpr = 0;
     let bgGeoSet = [null, null], bgGeoR, bgUB, bgUBR, bgBlit, bgWater;
@@ -2124,6 +2309,7 @@ async function main() {
       device.queue.submit([enc0.finish()]);
     }
 
+    const airPass = { colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] };
     function destroyTex(t) { if (t) t.destroy(); }
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, q.dpr);
@@ -2135,13 +2321,14 @@ async function main() {
       }
       canvas.width = w; canvas.height = h;
       context.configure({ device: device, format: format, alphaMode: 'opaque' });
-      destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth);
+      destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth); destroyTex(airTex);
       sceneTex = device.createTexture({ size: [w, h], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
       sceneDepth = device.createTexture({ size: [w, h], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
       swapDepth = device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
       const rw = Math.max(2, w >> 1), rh = Math.max(2, h >> 1);
       reflTex = device.createTexture({ size: [rw, rh], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
       reflDepth = device.createTexture({ size: [rw, rh], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      airTex = device.createTexture({ size: [rw, rh], format: sceneFmt, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
       viewW = w; viewH = h;
       if (READ) {
         if (readTex) readTex.destroy();
@@ -2152,7 +2339,9 @@ async function main() {
         readDepth = device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
         readBuf = device.createBuffer({ size: readBpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       }
-      const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView();
+      const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView(), av = airTex.createView();
+      airPass.colorAttachments[0].view = av;
+      bgAir = device.createBindGroup({ layout: airLayout, entries: [{ binding: 1, resource: sd }] });
       const geoGroup = (buf, view) => device.createBindGroup({
         layout: geoLayout,
         entries: [
@@ -2176,7 +2365,9 @@ async function main() {
       bgBlit = device.createBindGroup({ layout: blitLayout, entries: [
         { binding: 0, resource: { buffer: ubuf } },
         { binding: 1, resource: sv },
-        { binding: 2, resource: sd }
+        { binding: 2, resource: sd },
+        { binding: 3, resource: av },
+        { binding: 4, resource: samp }
       ] });
       bgWater = device.createBindGroup({ layout: waterLayout, entries: [
         { binding: 0, resource: sv },
@@ -2185,7 +2376,8 @@ async function main() {
         { binding: 3, resource: samp },
         { binding: 4, resource: cascades[0].view },
         { binding: 5, resource: cascades[1].view },
-        { binding: 6, resource: cascades[2].view }
+        { binding: 6, resource: cascades[2].view },
+        { binding: 7, resource: av }
       ] });
     }
     resize();
@@ -2228,6 +2420,12 @@ async function main() {
     const fov = 60 * Math.PI / 180;
     const near = 0.08, far = 36000;
     let time = parseFloat(qstr.get('t') || '2.5') || 0;
+    envLight(0);
+    env.cloud = [Math.cos(0.36) * 0.00855 * time, Math.sin(0.36) * 0.00855 * time];
+    // Captures hold the hour and the weather still unless asked to let them run.
+    if (qstr.has('shot') || qstr.has('studio')) { env.run = env.auto = qstr.has('flow'); }
+    if (qstr.has('tod')) env.hour = parseFloat(qstr.get('tod')) || ENV_H0;
+    if (qstr.has('wx')) { envSet(qstr.get('wx'), true); env.auto = false; }
     let last = performance.now();
     const ft = new Float32Array(40);
     let ftI = 0, ftN = 0, frames = 0, adaptLeft = 3, ready = false;
@@ -2245,25 +2443,21 @@ async function main() {
       invert(VP, INV);
       arr.set(VP, 0); arr.set(INV, 16);
       arr[48] = eyeX; arr[49] = eyeY; arr[50] = eyeZ; arr[51] = time;
-      const ca = Math.cos(wp.sunAng), sa = Math.sin(wp.sunAng);
-      const sx = SUN[0] * ca - SUN[2] * sa;
-      const sz = SUN[0] * sa + SUN[2] * ca;
-      const sl = Math.hypot(sx, SUN[1], sz) || 1;
-      arr[52] = sx / sl; arr[53] = SUN[1] / sl; arr[54] = sz / sl; arr[55] = underFlag;
-      arr[56] = 1.08 * wp.sun; arr[57] = 0.98 * wp.sun; arr[58] = 0.84 * wp.sun; arr[59] = 0.92;
+      arr[55] = underFlag;
       arr[60] = 0.73; arr[61] = 0.79; arr[62] = 0.84; arr[63] = Math.tan(fov * 0.5);
       arr[64] = right[0]; arr[65] = right[1]; arr[66] = right[2]; arr[67] = viewW / viewH;
       arr[68] = up[0]; arr[69] = up[1]; arr[70] = up[2]; arr[71] = clipBelow;
       arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;
       arr[79] = q.clouds;
       arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0;
-      arr[128] = wp.amp; arr[129] = wp.spd; arr[130] = wp.frq; arr[131] = wp.dir;
+      arr[128] = wp.amp * env.sea; arr[129] = wp.spd; arr[130] = wp.frq; arr[131] = wp.dir;
       arr[132] = wp.rough; arr[133] = wp.refl; arr[134] = wp.refr; arr[135] = wp.alpha;
       arr[136] = wp.sun; arr[137] = wp.sky; arr[138] = wp.layers; arr[139] = wp.paused;
       arr[140] = wp.deep[0]; arr[141] = wp.deep[1]; arr[142] = wp.deep[2]; arr[143] = wp.depthK;
       arr[144] = wp.shal[0]; arr[145] = wp.shal[1]; arr[146] = wp.shal[2]; arr[147] = wp.rip;
       arr[148] = simOx; arr[149] = simOz; arr[150] = simDomain; arr[151] = wp.cx;
-      arr[152] = wp.mood[0]; arr[153] = wp.mood[1]; arr[154] = wp.mood[2]; arr[155] = wp.mood[3];
+      arr[152] = wp.mood[0]; arr[153] = env.cover; arr[154] = env.haze; arr[155] = wp.mood[3];
+      envWrite(arr, 188, wp.sunAng, wp.sun);
       // Sun-space matrix. The light sits up-sun of the island and looks back down its own rays.
       const lx = arr[52], ly = arr[53], lz = arr[54];
       const sfx = -lx, sfy = -ly, sfz = -lz;
@@ -2322,7 +2516,7 @@ async function main() {
         if (sum / ftN > 0.028 && q.scale > 0.45) { q.scale = Math.max(0.45, q.scale * 0.8); adaptLeft--; resize(); }
       }
 
-      const wantUnder = camY < waveY(world, camX, camZ, time) - 0.05 ? 1 : 0;
+      envStep(dt, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
 
       if (mode === 0 && !qstr.has('shot')) {
         const a = time * 0.045;
@@ -2442,6 +2636,22 @@ async function main() {
         yaw = lp[0]; pitch = lp[1] + fishCam.tilt;
       }
 
+      bugLife.update(dt, time, camX, camY, camZ);
+      if (bugCam && bugCam.a) {
+        // A capture framing: close to one insect, from the side the sun is on, looking at it.
+        const a = bugCam.a, S = bugLife.sites.bloom, on = BUGS[a.sp].site === 'bloom' && a.site >= 0;
+        // Something at a blossom is looked at from in front of the blossom.
+        const q0 = (on ? Math.atan2(S[a.site + 4], S[a.site + 3]) : Math.atan2(env.key[2], env.key[0]) + wp.sunAng) + bugCam.turn;
+        camX = a.x + Math.cos(q0) * bugCam.d; camZ = a.z + Math.sin(q0) * bugCam.d; camY = a.y + bugCam.up + bugCam.d * (on ? 0.6 : 0.25);
+        const lp = lookYP(a.x - camX, a.y - camY, a.z - camZ);
+        yaw = lp[0]; pitch = lp[1] + bugCam.tilt;
+      }
+      if (sunView) {
+        // A capture framing: face the light, pitched up by this much of its height.
+        const az = Math.atan2(env.key[2], env.key[0]) + wp.sunAng + sunTurn, hl = Math.hypot(env.key[0], env.key[2]);
+        const lp = lookYP(Math.cos(az) * hl, env.key[1] * sunView, Math.sin(az) * hl);
+        yaw = lp[0]; pitch = lp[1];
+      }
       const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
       // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
       const eyeH = Math.max(camY, 0.4);
@@ -2492,6 +2702,8 @@ async function main() {
       fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 44 : 30, fishPack.ranges);
       if (fishDraws.end) device.queue.writeBuffer(fishInstB, 0, fishArr, 0, fishDraws.end * ISTRIDE);
 
+      bugDraws = under ? [] : bugLife.collect(bugArr, uf, camX, camY, camZ, uf[63] * 2 / viewH, bugPack.ranges);
+      if (bugDraws.end) device.queue.writeBuffer(bugInstB, 0, bugArr, 0, bugDraws.end * BUG_STRIDE);
       if (q.birds) {
         for (let i = 0; i < q.birds; i++) {
           let x = birdMeta[i * 4], z = birdMeta[i * 4 + 1], hd = birdMeta[i * 4 + 2];
@@ -2571,10 +2783,12 @@ async function main() {
         // The whole sky at once the first time. After the sun or the weather moves it is
         // replaced a quarter at a time, then each bake is blended into the last so the
         // march's sampling noise averages away. After that, one strip a frame.
-        const key = wp.sunAng * 7 + wp.mood[1] * 3 + wp.mood[2];
+        // A slow change, the clock or a cloud bank building, is followed a strip at a time.
+        const key = wp.sunAng * 7 + env.hour * 2 + env.cover * 3 + env.haze;
         let strips = 8;
         if (skyFor === null) strips = SKY_STRIPS;
-        if (key !== skyFor) { skyFor = key; skyFresh = SKY_STRIPS; skySettle = 24; }
+        if (skyFor === null || Math.abs(key - skyFor) > 0.03) { skyFresh = SKY_STRIPS; skySettle = 24; }
+        skyFor = key;
         const fresh = skyFresh > 0;
         if (fresh) skyFresh -= strips;
         else if (skySettle > 0) skySettle--;
@@ -2591,8 +2805,9 @@ async function main() {
         }
         bp.end();
       }
-      if (shadowFor !== wp.sunAng) {
-        shadowFor = wp.sunAng;
+      // The island's shadow map is redrawn when the light has moved half a degree.
+      if (!shadowFor || uf[52] * shadowFor[0] + uf[53] * shadowFor[1] + uf[54] * shadowFor[2] < 0.99996) {
+        shadowFor = [uf[52], uf[53], uf[54]];
         const spass = enc.beginRenderPass(shadowPass);
         spass.setPipeline(pipes.shadowTerrain); spass.setBindGroup(0, bgUB);
         spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
@@ -2607,6 +2822,7 @@ async function main() {
         np.drawIndexed(terrain.idx.length);
         drawMeshes(np, pipes.shadowMesh, bgUBN, instB, nearDraws);
         if (fishDraws.length) drawMeshes2(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
+        if (bugDraws.length) drawMeshes2(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
         np.end();
       }
       if (uf[86] > 0.5) {
@@ -2621,6 +2837,12 @@ async function main() {
       const sp = enc.beginRenderPass(scenePass);
       drawWorld(sp, bgUB, geoNow, true, mainDraws);
       sp.end();
+      {
+        const ap = enc.beginRenderPass(airPass);
+        ap.setPipeline(pipes.air); ap.setBindGroup(0, geoNow); ap.setBindGroup(1, bgAir);
+        ap.draw(3);
+        ap.end();
+      }
 
       const drawSwap = (colorView, depthView) => {
         swapPass.colorAttachments[0].view = colorView;
@@ -2633,6 +2855,17 @@ async function main() {
         pass.setPipeline(pipes.shore);
         pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
         pass.drawIndexed(shoreMesh.idx.length);
+        if (bugDraws.length) drawMeshes2(pass, pipes.bug, geoNow, bugVB, bugIB, bugInstB, bugDraws);
+        if (!under) {
+          // Spray always, where waves break; rain and its splashes by how hard it is falling;
+          // motes by how much the damp air and the low sun have to show.
+          pass.setPipeline(pipes.drops); pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgAir);
+          pass.draw(6, 2304, 0, 60000);
+          const rain = Math.round(env.v[1] * q.drops);
+          if (rain > 20) { pass.draw(6, rain, 0, 0); pass.draw(6, rain >> 2, 0, 20000); }
+          const motes = Math.round(q.drops * 0.2 * Math.min(1, env.humid + env.mist) * (1 - env.night));
+          if (motes > 20) pass.draw(6, motes, 0, 40000);
+        }
         pass.end();
       };
       if (READ && readTex) drawSwap(readTex.createView(), readDepth.createView());
@@ -2687,8 +2920,17 @@ async function main() {
         audio.shoreAmt = nearBreak;
         audio.surf.gain.value = (muted ? 0 : 0.16) * shore * (under ? 0.25 : 1);
         audio.hiss.gain.value = (muted ? 0 : 0.045) * nearBreak * (under ? 0.1 : 1);
-        audio.wind.gain.value = (muted ? 0 : 0.05) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.3 : 0.8);
-        audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1);
+        // The same gust that is bending the plants here, by ear.
+        const gust = env.speed * (0.4 + 1.4 * vnoise((camX - env.gustOff[0]) * 0.018, (camZ - env.gustOff[1]) * 0.018) * env.v[5]);
+        const sy = env.sun[1], dark = smooth01(0.1, -0.08, sy);
+        audio.wind.gain.value = (muted ? 0 : 0.05) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.3 : 0.8) * (0.35 + 0.65 * gust * gust / 20);
+        audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2));
+        audio.air({
+          heat: smooth01(0.15, 0.6, sy) * (1 - 0.7 * env.cover), dark: dark, low: smooth01(0.4, 0.1, sy) * (1 - dark),
+          dawn: smooth01(5, 6, env.hour) * (1 - smooth01(7.5, 9, env.hour)), rain: env.v[1], gust: gust,
+          wood: land > 1.2 ? Math.max(0, Math.min(1, forestMask(camX, camZ, land, fieldSlope(world, camX, camZ)) * 1.5)) : 0,
+          alt: camY - Math.max(land, 0) - 1.7, under: under, heard: bugLife.heard
+        });
         audio.under.frequency.value = under ? 380 : 16000;
       }
       if (showHint > 0) {
@@ -2731,6 +2973,7 @@ async function main() {
         // Framing offsets for captures: turn, tilt, step forward or sideways, rise.
         const num = (k) => parseFloat(qstr.get(k) || '0') || 0;
         yaw += num('dyaw'); pitch += num('dpitch');
+        sunView = num('sunview'); sunTurn = num('dyaw');
         camX += Math.sin(yaw) * num('fwd') + Math.cos(yaw) * num('side');
         camZ += -Math.cos(yaw) * num('fwd') + Math.sin(yaw) * num('side');
         if (qstr.has('up')) { fly = true; camY += num('up'); }
@@ -2746,6 +2989,31 @@ async function main() {
           }
         }
         for (let k = 0; k < num('warm') * 20; k++) fishLife.update(0.05, time + k * 0.05, camX, camY, camZ);
+        // shade=<height> stands the camera in the shadow of the nearest palm's crown, taken
+        // to be that many metres up, so the light has to come through the fronds.
+        if (qstr.has('shade')) {
+          envStep(0, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
+          let best = 0, bd = 1e9;
+          for (let i = 0; i < scatter.n; i++) if (palmIds.includes(scatter.kind[i])) { const d = Math.hypot(scatter.data[i * ISTRIDE] - camX, scatter.data[i * ISTRIDE + 2] - camZ); if (d < bd) { bd = d; best = i * ISTRIDE; } }
+          const D = scatter.data, az = Math.atan2(env.key[2], env.key[0]) + wp.sunAng, hl = Math.hypot(env.key[0], env.key[2]);
+          const t = ((num('shade') || 8.5) * D[best + 4] - 1.6) / env.key[1];
+          camX = D[best] - Math.cos(az) * hl * t; camZ = D[best + 2] - Math.sin(az) * hl * t; camY = Math.max(fieldSample(world, camX, camZ), 0) + 1.6;
+          fly = true;
+        }
+        // bug=<kind> frames the nearest one from bd metres, in state bst if given; bwarm runs
+        // the insects for that many seconds first so they are in the middle of something.
+        if (qstr.has('bug')) {
+          envStep(0, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
+          bugLife.calm = true;
+          // bat=<n> first walks the camera to the n-th place that kind lives.
+          const hab = bugLife.sites[(BUGS.find((b) => b.id === qstr.get('bug')) || BUGS[0]).site];
+          if (qstr.has('bat') && hab.length) { const k = ((num('bat') * 37) % (hab.length / 5) | 0) * 5; camX = hab[k] + 1.5; camZ = hab[k + 2] + 1.5; camY = Math.max(fieldSample(world, camX, camZ), 0) + 1.6; }
+          for (let k = 0; k < (num('bwarm') || 8) * 30; k++) bugLife.update(1 / 30, time + k / 30, camX, camY, camZ);
+          const st = qstr.has('bst') ? num('bst') : null;
+          bugCam = { a: bugLife.find(qstr.get('bug'), st) || bugLife.find(qstr.get('bug'), null), d: num('bd') || 0.3, turn: num('turn'), up: num('fup'), tilt: num('tilt') };
+          if (bugCam.a) { fly = true; if (qstr.has('hold')) { bugCam.a.t = 1e3; bugCam.a.pin = true; } }
+          console.log('DBG bug ' + JSON.stringify(bugLife.lvl) + ' sites ' + Object.keys(bugLife.sites).map((k) => k + ':' + bugLife.sites[k].length / 5).join(' ') + ' found ' + (bugCam.a ? [bugCam.a.x, bugCam.a.y, bugCam.a.z, bugCam.a.st].join(',') : 'none'));
+        }
       }
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';

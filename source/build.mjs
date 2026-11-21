@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
-const js = [read('island.js'), read('shaders.js'), read('ocean.js'), read('shore.js'), read('score.js'), read('fish.js'), read('app.js')].join('\n');
+const js = [read('island.js'), read('shaders.js'), read('ocean.js'), read('shore.js'), read('score.js'), read('fish.js'), read('env.js'), read('insects.js'), read('app.js')].join('\n');
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -23,7 +23,7 @@ ${css}
 <div id="panel">
   <p class="kicker">A leeward coast</p>
   <h1>Windward</h1>
-  <p class="lead">A coast drawn when the page opens. Clear water in the lagoon, swell offshore, weather that changes when you travel. Nothing to tune. Click the water and watch it answer.</p>
+  <p class="lead">A coast drawn when the page opens. Clear water in the lagoon, swell offshore, a day that passes and weather that comes and goes. Nothing to tune. Click the water and watch it answer.</p>
   <button id="go" hidden>Enter</button>
   <div id="load"><div id="track"><div id="bar"></div></div><p id="status">Reading the chart</p></div>
   <p id="fail" hidden></p>
@@ -37,6 +37,7 @@ ${css}
     <b>Places</b><span>Lagoon, ocean, cove, lake, storm, reef, pool</span>
     <b>Walk</b><span>Step onto the sand. WASD, Q to dive, F to fly.</span>
     <b>Watch</b><span>Hide the interface. C does the same.</span>
+    <b>Day</b><span>The hours pass on their own. T moves to the next part of the day, R changes the weather.</span>
     <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
     <b>Music</b><span>N quiets the score. [ and ] set how present it is.</span>
     <b>Esc</b><span>This card</span>
@@ -48,6 +49,8 @@ ${css}
   <button id="placebtn" type="button">Places</button>
   <button id="walkbtn" type="button">Walk</button>
   <button id="watchbtn" type="button">Watch</button>
+  <button id="hourbtn" type="button">Hour</button>
+  <button id="skybtn" type="button">Weather</button>
   <button id="musicbtn" type="button" aria-pressed="true">Music</button>
 </div>
 <div id="caption"></div>
