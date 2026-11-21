@@ -77,7 +77,7 @@ Nothing is allocated per frame on purpose: the uniform buffer, the bird list, an
 
 For captures, `?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
 
-Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, and still 1.2 s with the reef and the fish. The built page is 319 KB, 98 KB gzipped; the reef and fish are 67 KB of that. Frame rate on real GPUs has not been measured.
+Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, and 1.2 to 1.5 s across runs with the reef and the fish (building their meshes adds about 0.1 s). The built page is 319 KB, 98 KB gzipped; the reef and fish are 67 KB of that. Frame rate on real GPUs has not been measured.
 
 ## License
 
