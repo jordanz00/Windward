@@ -320,16 +320,16 @@ function makePalm(seed, lod) {
     if (i < rings) P = add(P, T, H / rings);
   }
   const C = P;
-  const nf = 20 + ((rnd() * 7) | 0), nd = 1 + ((rnd() * 3) | 0);
-  const nseg = [18, 8, 4][lod], lseg = [4, 2, 2][lod];
+  const nf = 24 + ((rnd() * 8) | 0), nd = 2 + ((rnd() * 3) | 0);
+  const nseg = [20, 8, 4][lod], lseg = [6, 3, 2][lod];
   for (let j = 0; j < nf + nd; j++) {
     const dead = j >= nf;
     // 0 has just opened at the top of the crown. 1 is about to fall.
     const age = dead ? 1.1 : (j + rnd() * 0.7) / nf;
     const az0 = j * 2.39996 + rnd() * 0.6;
-    const el0 = dead ? -1.2 - rnd() * 0.25 : 1.3 - Math.pow(age, 1.1) * 1.75 + (rnd() - 0.5) * 0.3;
-    const L = dead ? 2.6 + rnd() : 4.0 + 1.5 * Math.sin(Math.min(1, age * 1.25 + 0.1) * Math.PI) + rnd() * 0.5;
-    const droop = dead ? 0.15 : 0.55 + age * 0.7 + rnd() * 0.35;
+    const el0 = dead ? -1.2 - rnd() * 0.25 : 1.15 - Math.pow(age, 1.05) * 1.85 + (rnd() - 0.5) * 0.22;
+    const L = dead ? 2.6 + rnd() : 4.2 + 1.6 * Math.sin(Math.min(1, age * 1.25 + 0.1) * Math.PI) + rnd() * 0.45;
+    const droop = dead ? 0.15 : 0.7 + age * 0.85 + rnd() * 0.3;
     const curl = (rnd() - 0.5) * 0.8, twist = (rnd() - 0.5) * 2.2 * (0.3 + age), tipSway = 0.2 + rnd() * 0.14;
     const widthK = 0.024 + rnd() * 0.006, lenK = 0.95 + rnd() * 0.3, hang0 = rnd() * 0.3;
     // Leaflets draw from their own stream, so every level builds the same fronds.
@@ -365,10 +365,12 @@ function makePalm(seed, lod) {
       }
       prev = row;
     }
-    const per = Math.max(3, Math.round(L * [13, 4.4, 1.6][lod]));
-    const W = widthK * [1, 2.8, 7][lod] * (dead ? 0.6 : 1);
-    const lift = dead ? -0.2 : 0.45 - age * 0.6;
-    const hang = dead ? 2.5 : 0.25 + age * 1.5 + hang0;
+    // Close to, the leaflets must fill the silhouette: denser, wider, and overlapping so the
+    // crown is a mass of leaves, not a starburst of flat blades.
+    const per = Math.max(3, Math.round(L * [18, 5.2, 1.6][lod]));
+    const W = widthK * [1.35, 3.0, 7][lod] * (dead ? 0.6 : 1);
+    const lift = dead ? -0.2 : 0.35 - age * 0.55;
+    const hang = dead ? 2.5 : 0.35 + age * 1.65 + hang0;
     const young = sat(1 - age / 0.3), old = sat((age - 0.72) / 0.28);
     const green = dead ? [0.3, 0.22, 0.1] : [
       0.085 + young * 0.085 + old * 0.11, 0.185 + young * 0.085 + old * 0.02, 0.045 + young * 0.015 + old * 0.015];
@@ -403,9 +405,10 @@ function makePalm(seed, lod) {
             const tip = m.v(q[0], q[1], q[2], n[0], n[1], n[2], cr, cg, cb, sw, LEAF, 0, 1);
             m.tri(pl, tip, pr);
           } else {
-            // The blade is folded along its midrib like a shallow roof.
-            const l = m.v(q[0] + a[0] * w, q[1] + a[1] * w, q[2] + a[2] * w, n[0] + a[0] * 0.35, n[1] + a[1] * 0.35, n[2] + a[2] * 0.35, cr, cg, cb, sw, LEAF, 1, s);
-            const r = m.v(q[0] - a[0] * w, q[1] - a[1] * w, q[2] - a[2] * w, n[0] - a[0] * 0.35, n[1] - a[1] * 0.35, n[2] - a[2] * 0.35, cr, cg, cb, sw, LEAF, -1, s);
+            // Folded along the midrib: a real leaflet is a shallow V, not a flat card.
+            const fold = 0.55 + 0.2 * s;
+            const l = m.v(q[0] + a[0] * w, q[1] + a[1] * w, q[2] + a[2] * w, n[0] + a[0] * fold, n[1] + a[1] * fold, n[2] + a[2] * fold, cr, cg, cb, sw, LEAF, 1, s);
+            const r = m.v(q[0] - a[0] * w, q[1] - a[1] * w, q[2] - a[2] * w, n[0] - a[0] * fold, n[1] - a[1] * fold, n[2] - a[2] * fold, cr, cg, cb, sw, LEAF, -1, s);
             if (pl >= 0) { m.tri(pl, l, pr); m.tri(pr, l, r); }
             pl = l; pr = r;
           }

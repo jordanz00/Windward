@@ -980,19 +980,19 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     if (back) { n = -n; alb *= 0.4; gloss = 0.0; }
     n = normalize(n + tilt);
   } else if (kind == 2) {
-    // A blade. The eye may be looking at its waxy upper face or its paler underside.
+    // A blade. Upper face is duller than a plastic sheen; underside is paler and takes more sky.
     let upper = dot(n, Vv) > 0.0;
     if (!upper) {
       n = -n;
-      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.6, 0.1))), 0.22) * 1.2;
+      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.6, 0.1))), 0.28) * 1.25;
     }
-    let rib = smoothstep(0.32, 0.0, abs(in.uv.x));
-    alb = mix(alb, alb * 1.5 + vec3<f32>(0.025, 0.025, 0.0), rib * 0.55);
-    alb *= 0.9 + 0.1 * sin(in.uv.x * 11.0);
-    leaf = 1.0;
-    gloss = select(0.2, 1.0, upper);
-    // Seagrass is not waxed.
-    if (in.world.y < -0.1) { gloss *= 0.2; }
+    let rib = smoothstep(0.28, 0.0, abs(in.uv.x));
+    alb = mix(alb, alb * 1.35 + vec3<f32>(0.02, 0.02, 0.0), rib * 0.45);
+    alb *= 0.88 + 0.12 * sin(in.uv.x * 9.0 + in.uv.y * 3.0);
+    // More light through the blade, less hard wax — a real leaflet is a film, not a painted card.
+    leaf = select(1.15, 0.95, upper);
+    gloss = select(0.08, 0.35, upper);
+    if (in.world.y < -0.1) { gloss *= 0.2; leaf *= 0.5; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
     if (kind == 1) {
