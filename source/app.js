@@ -644,26 +644,29 @@ function makeRock(seed, lod) {
   const sd = (seed | 0) || 1;
   const rnd = seeded(sd * 7 + 3);
   const planes = [];
-  const count = 7 + (Math.abs(sd) % 4);
+  const count = 9 + (Math.abs(sd) % 5);
   for (let i = 0; i < count; i++) {
-    const a = rnd() * 6.283, py = rnd() * 1.5 - 0.3;
+    const a = rnd() * 6.283, py = rnd() * 1.7 - 0.45;
     const l = Math.hypot(1, py);
-    planes.push([Math.cos(a) / l, py / l, Math.sin(a) / l, 0.48 + rnd() * 0.38]);
+    planes.push([Math.cos(a) / l, py / l, Math.sin(a) / l, 0.38 + rnd() * 0.48]);
   }
+  // Stretch axes so rocks are not sphere-derived blobs.
+  const ax = 0.75 + rnd() * 0.55, ay = 0.55 + rnd() * 0.5, az = 0.7 + rnd() * 0.6;
   const n = src.pos.length / 3;
   const P = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
-    let x = src.pos[i * 3], y = src.pos[i * 3 + 1], z = src.pos[i * 3 + 2];
-    const lump = 1 + (vnoise(x * 1.6 + sd, z * 1.6 + y * 1.3) - 0.5) * 0.55;
+    let x = src.pos[i * 3] * ax, y = src.pos[i * 3 + 1] * ay, z = src.pos[i * 3 + 2] * az;
+    const lump = 1 + (vnoise(x * 1.6 + sd, z * 1.6 + y * 1.3) - 0.5) * 0.7;
     x *= lump; y *= lump; z *= lump;
     for (let k = 0; k < planes.length; k++) {
       const pl = planes[k];
       const d = x * pl[0] + y * pl[1] + z * pl[2] - pl[3];
       if (d > 0) { x -= pl[0] * d; y -= pl[1] * d; z -= pl[2] * d; }
     }
-    const fine = (vnoise(x * 6.5 + sd, z * 6.5 + y * 5.1) - 0.5) * 0.07;
-    x += src.nrm[i * 3] * fine; z += src.nrm[i * 3 + 2] * fine;
-    y = (y + src.nrm[i * 3 + 1] * fine) * (y < 0 ? 0.45 : 0.8);
+    const fine = (vnoise(x * 6.5 + sd, z * 6.5 + y * 5.1) - 0.5) * 0.09;
+    const chip = (vnoise(x * 14 + sd * 3, z * 14 + y * 11) - 0.55) * 0.05;
+    x += src.nrm[i * 3] * (fine + chip); z += src.nrm[i * 3 + 2] * (fine + chip);
+    y = (y + src.nrm[i * 3 + 1] * (fine + chip)) * (y < 0 ? 0.42 : 0.78);
     P[i * 3] = x; P[i * 3 + 1] = y; P[i * 3 + 2] = z;
   }
   const N = new Float32Array(n * 3);
@@ -684,7 +687,12 @@ function makeRock(seed, lod) {
     const top = ny > 0.55 ? vnoise(mx * 4 + 9, mz * 4) : 0;
     const foot = 1 - 0.45 * smooth01(0.05, -0.3, my);
     const k = strata * patch * foot;
-    m.v(mx, my, mz, N[i * 3] / nl, ny, N[i * 3 + 2] / nl, 0.31 * k * (1 - top * 0.2), 0.285 * k * (1 + top * 0.08), 0.25 * k * (1 - top * 0.25), 0, ROCK);
+    // Mute chroma — weathered volcanic rock, not painted grey plastic.
+    const lichen = top * (0.5 + 0.5 * vnoise(mx * 7 + 2, mz * 7));
+    m.v(mx, my, mz, N[i * 3] / nl, ny, N[i * 3 + 2] / nl,
+      0.26 * k * (1 - top * 0.18) * (1 - lichen * 0.15),
+      0.24 * k * (1 + top * 0.06 + lichen * 0.12),
+      0.21 * k * (1 - top * 0.22) * (1 - lichen * 0.08), 0, ROCK);
   }
   for (let f = 0; f < src.idx.length; f += 3) m.tri(src.idx[f], src.idx[f + 1], src.idx[f + 2]);
   return m;

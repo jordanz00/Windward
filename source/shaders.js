@@ -227,11 +227,15 @@ fn sampleField(xz: vec2<f32>) -> vec2<f32> {
 }
 
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
-  // Linear HDR in, filmic curve out. Soft shoulder keeps glitter and cloud rims from clipping hard.
+  // Photographic filmic curve: soft shoulder, restrained midtone chroma (not game HDR punch).
   let x = max(c, vec3<f32>(0.0)) * F.exposure;
   let y = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
-  let soft = y / (1.0 + max(y - 0.92, vec3<f32>(0.0)) * 0.35);
-  return pow(clamp(soft, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
+  let soft = y / (1.0 + max(y - 0.88, vec3<f32>(0.0)) * 0.55);
+  // Pull saturation slightly in the midtones — real photos are less candy than game lighting.
+  let luma = dot(soft, vec3<f32>(0.2126, 0.7152, 0.0722));
+  let mid = smoothstep(0.05, 0.2, luma) * (1.0 - smoothstep(0.55, 0.92, luma));
+  let photo = mix(soft, vec3<f32>(luma), mid * 0.14);
+  return pow(clamp(photo, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
 }
 
 // ---- Sky. One panorama holds the air and the clouds. It is baked a strip at a time
@@ -737,9 +741,11 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let sunTerm = mix(max(nl, 0.0), sat(nl * 0.5 + 0.5) * max(nl, 0.0), 0.35);
   // Warm key on lit faces; sky fill stays cooler so golden hour is directional, not a filter.
   let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.18, 0.95, 0.72), gold * sunTerm);
-  var light = F.sunCol * keyTint * sunTerm * sh * 1.12 + sky * mix(0.85, 0.95, gold) + ground * 0.5;
+  // Harder lit/shade contrast (photographic) — shade is not a flat fill.
+  let shadeK = mix(0.55, 1.0, sh) * mix(0.72, 1.0, sunTerm * 0.65 + 0.35);
+  var light = F.sunCol * keyTint * sunTerm * sh * 1.05 + sky * mix(0.72, 0.88, gold) * shadeK + ground * 0.42;
   // Canopy/cliff bounce: litter green-brown under trees, cooler rock bounce on cliffs.
-  light += mix(vec3<f32>(0.18, 0.22, 0.1), vec3<f32>(0.28, 0.24, 0.18), gold) * F.amb.w * ev.b * (0.35 + 0.4 * (1.0 - hemi));
+  light += mix(vec3<f32>(0.16, 0.2, 0.09), vec3<f32>(0.26, 0.22, 0.16), gold) * F.amb.w * ev.b * (0.3 + 0.35 * (1.0 - hemi));
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
     // Sun energy attenuated along the beam path through water (Abyssal sunE).
@@ -748,29 +754,32 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
     if (world.y < -0.04) {
       let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
       let cau = caustic(world.xz);
-      light += F.sunCol * max(nl, 0.0) * sh * (cau * 3.4 - 0.12 * k) * absorb;
+      // Softer caustic peaks — photographic underwater light, not disco sparkle.
+      light += F.sunCol * max(nl, 0.0) * sh * (cau * 2.6 - 0.1 * k) * absorb;
     }
   }
   if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
   // Rain and dew: bark and soil soak dark, a leaf only deepens, and both take a film that shines.
   let wet = F.wx.y * step(0.05, world.y) * (1.0 - F.under);
-  var col = albedo * mix(1.0, mix(0.6, 0.86, leaf), wet) * light;
+  // Shade desaturates albedo slightly — real foliage/soil lose chroma in open shade.
+  let albShade = mix(albedo, vec3<f32>(dot(albedo, vec3<f32>(0.3, 0.55, 0.15))), (1.0 - sunTerm * sh) * 0.22);
+  var col = albShade * mix(1.0, mix(0.6, 0.86, leaf), wet) * light;
   let V = normalize(F.camPos - world);
-  // Thin-leaf transmission: yellower through-light + soft rim when backlit.
+  // Thin-leaf transmission: yellower through-light + soft rim when backlit (restrained).
   let trans = max(-nl, 0.0) * leaf;
-  col += albedo * vec3<f32>(1.38, 1.58, 0.32) * F.sunCol * trans * sh * (0.9 + 0.35 * leaf);
-  col += albedo * F.sunCol * pow(sat(1.0 - abs(dot(n, V))), 2.8) * trans * sh * 0.28;
+  col += albShade * vec3<f32>(1.28, 1.48, 0.3) * F.sunCol * trans * sh * (0.75 + 0.3 * leaf);
+  col += albShade * F.sunCol * pow(sat(1.0 - abs(dot(n, V))), 3.0) * trans * sh * 0.18;
   let H = normalize(V + F.sunDir);
   // A wet leaf glints in the sun; wet bark and soil are mostly just dark. The sky shows in
   // a wet face only if the face is turned up to it, not round the edge of every shape.
-  let sheen = max(gloss, wet * mix(0.1, 0.55, leaf));
+  let sheen = max(gloss, wet * mix(0.08, 0.42, leaf));
   if (sheen > 0.0) {
     let ndv = max(dot(n, V), 0.0);
-    let fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
-    // Tighter specular on leaves; wet bark still glints modestly.
-    let hard = mix(mix(48.0, 96.0, leaf), 70.0, wet);
-    col += F.sunCol * pow(max(dot(n, H), 0.0), hard) * step(0.0, nl) * sh * sheen * mix(0.32, 0.58, leaf);
-    col += skyLook(reflect(-V, n), 0.0) * fr * max(gloss * 0.7, wet * mix(0.06, 0.18, leaf) * sat(n.y * 1.5)) * 0.35;
+    let fr = 0.025 + 0.9 * pow(1.0 - ndv, 5.0);
+    // Softer specular — avoid plastic game highlights.
+    let hard = mix(mix(36.0, 72.0, leaf), 58.0, wet);
+    col += F.sunCol * pow(max(dot(n, H), 0.0), hard) * step(0.0, nl) * sh * sheen * mix(0.22, 0.4, leaf);
+    col += skyLook(reflect(-V, n), 0.0) * fr * max(gloss * 0.55, wet * mix(0.04, 0.12, leaf) * sat(n.y * 1.5)) * 0.28;
   }
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let spec = pow(max(dot(n, H), 0.0), 56.0);
@@ -834,10 +843,12 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   let wet = smoothstep(0.2, 0.0, y);
   sandC = mix(sandC, sandC * vec3<f32>(0.62, 0.66, 0.66), wet * 0.7);
   if (y < 0.05) { sandC = mix(vec3<f32>(0.70, 0.64, 0.50), sandC, sat(-y * 0.4 + 0.3)); }
-  var grassC = mix(vec3<f32>(0.075, 0.13, 0.04), vec3<f32>(0.19, 0.22, 0.085), m);
-  grassC *= 0.78 + 0.36 * n2(xz * 0.22);
-  grassC = mix(grassC, vec3<f32>(0.38, 0.36, 0.15), smoothstep(3.5, 0.9, y) * 0.32);
+  var grassC = mix(vec3<f32>(0.07, 0.115, 0.038), vec3<f32>(0.16, 0.19, 0.075), m);
+  grassC *= 0.78 + 0.32 * n2(xz * 0.22);
+  grassC = mix(grassC, vec3<f32>(0.32, 0.3, 0.13), smoothstep(3.5, 0.9, y) * 0.28);
   grassC = mix(grassC, grassC * 0.72, smoothstep(0.55, 0.85, n2(xz * 1.4)) * 0.45);
+  // Pull chroma — tropical turf in photos is duller than game “lush green.”
+  grassC = mix(grassC, vec3<f32>(dot(grassC, vec3<f32>(0.3, 0.55, 0.15))), 0.18);
   // Under the trees the ground is leaf litter in shade, not lawn.
   let forest = smoothstep(1.9, 4.4, y) * (1.0 - smoothstep(0.12, 0.29, slope)) * smoothstep(-0.62, -0.12, forestNoise(xz));
   let litter = mix(vec3<f32>(0.035, 0.045, 0.022), vec3<f32>(0.075, 0.062, 0.035), n2(xz * 0.9));
@@ -1215,9 +1226,9 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     // Midrib V-fold in the shading normal — leaflets read as cupped blades, not flat cards.
     let side = sign(in.uv.x + 1e-4);
     n = normalize(n + side * cross(n, vec3<f32>(0.0, 1.0, 0.0)) * (0.18 + 0.22 * (1.0 - rib)) * select(-0.4, 1.0, upper));
-    // More transmission toward the tip; less wax — thin film, not painted plastic.
-    leaf = select(1.55, 0.72, upper) * (0.85 + 0.35 * in.uv.y);
-    gloss = select(0.015, 0.1 + 0.1 * rib, upper);
+    // Transmission toward the tip; dull wax — thin film, not painted plastic.
+    leaf = select(1.35, 0.65, upper) * (0.85 + 0.3 * in.uv.y);
+    gloss = select(0.01, 0.06 + 0.06 * rib, upper);
     if (in.world.y < -0.1) { gloss *= 0.15; leaf *= 0.45; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }

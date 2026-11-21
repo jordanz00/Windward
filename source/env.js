@@ -69,12 +69,12 @@ function envLight(cover) {
   env.gold = gold;
   const dayK = smooth01(-0.1, 0.4, sy), low = 1 - smooth01(0, 0.35, sy);
   if (day) {
-    // HDR solar radiance: midday is bright but not clipped; low sun keeps glitter headroom.
-    const rad = (1.55 + 0.95 * dayK) * (1 - 0.62 * cover) * (1 + 0.28 * gold);
+    // Photographic key: midday restrained; golden hour warm without clipping highlights.
+    const rad = (1.35 + 0.82 * dayK) * (1 - 0.58 * cover) * (1 + 0.32 * gold);
     env.keyCol = [
-      1.12 * tr[0] * up * rad * (1 + 0.55 * gold),
-      0.98 * tr[1] * up * rad * (1 + 0.08 * gold),
-      0.78 * tr[2] * up * rad * (1 - 0.42 * gold)
+      1.08 * tr[0] * up * rad * (1 + 0.58 * gold),
+      0.96 * tr[1] * up * rad * (1 + 0.1 * gold),
+      0.8 * tr[2] * up * rad * (1 - 0.38 * gold)
     ];
   } else {
     env.keyCol = [0.55 * mk, 0.7 * mk, mk];
