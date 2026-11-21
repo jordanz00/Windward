@@ -630,8 +630,8 @@ return mix(ab, cd, f.y);
 }
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
 let x = max(c, vec3<f32>(0.0)) * F.exposure;
-let y = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-return pow(y, vec3<f32>(0.4545));
+let y = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+return pow(clamp(y, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
 }
 const SKYW: f32 = 1536.0;
 const SKYH: f32 = 384.0;
@@ -688,36 +688,59 @@ return 20.0 * (sR * bR * pR + sM * bM * pM);
 fn cloudDrift() -> vec2<f32> {
 return fract(F.windOff.xy / 48.0) * 48.0;
 }
+fn cloudMix() -> vec4<f32> {
+let cover = sat(F.mood.y);
+let rain = sat(F.wx.x);
+let humid = sat(F.wx.w);
+var cumu = mix(0.9, 0.22, cover) * (1.0 - 0.55 * rain);
+var tower = mix(0.06, 0.55, smoothstep(0.12, 0.72, cover)) * (0.45 + 0.55 * humid) + rain * 0.5;
+var cirrus = mix(0.4, 0.06, cover) * (1.0 - rain);
+var strato = smoothstep(0.4, 0.92, cover) * (0.5 + 0.5 * humid);
+let s = max(cumu + tower + cirrus + strato, 1e-3);
+return vec4<f32>(cumu, tower, cirrus, strato) / s;
+}
 fn cloudCover(p: vec2<f32>) -> f32 {
 let pd = p + cloudDrift();
-let warp = (vec2<f32>(n2(pd * 0.28 + vec2<f32>(3.1, 0.0)), n2(pd * 0.28 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.4;
+let m = cloudMix();
+let warp = (vec2<f32>(n2(pd * 0.22 + vec2<f32>(3.1, 0.0)), n2(pd * 0.22 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.8;
 let q = pd + warp;
-let large = n2(q * 1.15) * 0.7 + n2(q * 2.4 + vec2<f32>(4.0, 9.0)) * 0.3;
-let mid = n2(q * 4.6 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 8.1 + vec2<f32>(8.0, 2.0)) * 0.45;
-let c = large * (0.58 + 0.42 * mid) * (0.7 + 0.45 * n2(pd * 0.07 + vec2<f32>(5.0, 2.0)));
-let thr = 0.70 - 0.40 * sat(F.mood.y) - 0.34 * smoothstep(0.45, 0.95, F.mood.y);
-return (c - thr) / (1.0 - thr);
+let cell = n2(q * 1.05) * 0.68 + n2(q * 2.35 + vec2<f32>(4.0, 9.0)) * 0.32;
+let billow = n2(q * 4.4 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 7.8 + vec2<f32>(8.0, 2.0)) * 0.45;
+let cumu = cell * (0.55 + 0.45 * billow) * (0.72 + 0.4 * n2(pd * 0.06 + vec2<f32>(5.0, 2.0)));
+let tw = n2(q * 0.48 + vec2<f32>(11.0, 3.0)) * 0.7 + n2(q * 1.7 + vec2<f32>(2.0, 8.0)) * 0.3;
+let tower = tw * (0.5 + 0.5 * n2(q * 3.2 + vec2<f32>(6.0, 1.0)));
+let r = vec2<f32>(q.x * 0.42 + q.y * 0.11, -q.x * 0.08 + q.y * 0.95);
+let cirrus = n2(r * 1.9) * 0.55 + n2(r * 4.8 + vec2<f32>(3.0, 7.0)) * 0.3 + n2(r * 11.0) * 0.15;
+let strato = n2(q * 0.62) * 0.5 + n2(q * 1.55 + vec2<f32>(4.0, 2.0)) * 0.35 + n2(q * 3.8) * 0.15;
+let c = cumu * m.x + tower * m.y + cirrus * m.z + strato * m.w;
+let thr = 0.68 - 0.38 * sat(F.mood.y) - 0.32 * smoothstep(0.45, 0.95, F.mood.y);
+return (c - thr) / max(1.0 - thr, 0.08);
 }
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
 let amt = cloudCover(p.xz);
 if (amt <= 0.0) { return 0.0; }
-let thick = 0.12 + 1.05 * pow(sat(amt), 0.55);
-let h = (p.y - CLOUD_BASE) / thick;
-if (h < 0.0 || h > 1.0) { return 0.0; }
-let base = smoothstep(0.0, 0.08, h);
-let dome = 1.0 - pow(h, 1.65);
-var d = base * dome * sat(amt * 4.6);
+let m = cloudMix();
+let thick = 0.1 + (0.55 * m.x + 1.35 * m.y + 0.22 * m.z + 0.4 * m.w) * pow(sat(amt), 0.5);
+let baseY = CLOUD_BASE + 0.55 * m.z - 0.06 * m.w;
+let h = (p.y - baseY) / max(thick, 0.08);
+if (h < -0.05 || h > 1.15) { return 0.0; }
+let hh = clamp(h, 0.0, 1.0);
+let base = smoothstep(0.0, mix(0.06, 0.14, m.w), hh);
+let dome = mix(1.0 - pow(hh, mix(1.35, 2.1, m.y)), 1.0 - abs(hh - 0.35) * 1.6, m.w);
+let wispy = mix(dome, exp(-pow((hh - 0.55) * 3.2, 2.0)), m.z);
+var d = base * wispy * sat(amt * mix(3.8, 5.2, m.y));
 if (fine > 0.5) {
 let w = p + vec3<f32>(cloudDrift().x, 0.0, cloudDrift().y);
-let large = n3(w * 2.4);
-let mid = n3(w * 6.8 + vec3<f32>(4.0, 1.0, 7.0));
-let fineN = n3(w * 18.0 + vec3<f32>(2.0, 9.0, 5.0)) * 0.55 + n3(w * 42.0 + vec3<f32>(8.0, 3.0, 1.0)) * 0.45;
-let b = large * 0.45 + mid * 0.35 + fineN * 0.2;
-d -= sat(0.5 + (b - 0.5) * 3.2) * (0.18 + 0.95 * h * h);
+let large = n3(w * 2.2);
+let mid = n3(w * 6.2 + vec3<f32>(4.0, 1.0, 7.0));
+let fineN = n3(w * 15.0 + vec3<f32>(2.0, 9.0, 5.0));
+let b = large * 0.45 + mid * 0.38 + fineN * 0.17;
+let erode = sat(0.5 + (b - 0.5) * 3.4) * (0.14 + 0.9 * hh * hh * (0.6 + 0.8 * m.y));
+d -= erode * (1.0 - 0.35 * m.z);
 } else {
-d -= 0.22 + 0.28 * h;
+d -= 0.18 + 0.26 * hh;
 }
-return sat(d * 1.85);
+return sat(d * 1.9);
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
@@ -738,9 +761,11 @@ let ds = big / 7.0;
 let dayK = smoothstep(-0.04, 0.1, F.sunTrue.y);
 let sunAim = mix(F.moon.xyz, F.sunTrue.xyz, dayK);
 let mu = dot(rd, normalize(sunAim + vec3<f32>(1e-5, 1e-5, 0.0)));
-let sunL = F.sunCol * 1.35 * dayK * (1.0 + 1.6 * pow(sat(mu), 6.0));
+let gold = sat(F.day.w);
+let sunWarm = mix(vec3<f32>(1.0), vec3<f32>(1.35, 0.95, 0.62), gold);
+let sunL = F.sunCol * sunWarm * 1.55 * dayK * (1.0 + 2.2 * pow(sat(mu), 5.0) + 1.1 * gold);
 let moonL = F.amb.rgb * vec3<f32>(0.55, 0.62, 0.78) * (1.0 - dayK) * (0.35 + 0.65 * F.moon.w);
-let skyL = F.amb.rgb * vec3<f32>(0.88, 0.83, 0.8);
+let skyL = F.amb.rgb * mix(vec3<f32>(0.88, 0.83, 0.8), vec3<f32>(0.55, 0.62, 0.95), gold * 0.55);
 var C = vec3<f32>(0.0);
 var tm = 0.0;
 var wsum = 0.0;
@@ -773,10 +798,11 @@ var ls = cloudAt(p + lightDir * 0.06, 1.0) * 0.1;
 ls += cloudAt(p + lightDir * 0.22, 0.0) * 0.2;
 ls += cloudAt(p + lightDir * 0.6, 0.0) * 0.5;
 let hK = sat((p.y - CLOUD_BASE) / 1.3);
-let sunT = exp(-ls * 13.0);
-let phase = 0.75 + 0.55 * pow(sat(mu), 4.0);
-let L = sunL * (sunT * 0.9 * phase + 0.12 * exp(-ls * 1.4))
-+ skyL * (0.28 + 0.72 * hK)
+let sunT = exp(-ls * 12.0);
+let phase = 0.7 + 0.65 * pow(sat(mu), 3.5);
+let silver = pow(sat(mu), 8.0) * sunT * (1.0 - d * 0.65) * (0.55 + 0.9 * gold);
+let L = sunL * (sunT * 0.95 * phase + 0.1 * exp(-ls * 1.3) + silver * 1.4)
++ skyL * (0.22 + 0.55 * hK + 0.28 * (1.0 - hK))
 + moonL * (0.45 + 0.55 * hK);
 let al = 1.0 - exp(-d * ds * 34.0);
 C += T * al * L;
@@ -802,7 +828,9 @@ var col = s.rgb;
 let over = sat(F.mood.y);
 col += F.disc.rgb * pow(sat(mu), 2200.0) * 18.0 * (1.0 - over) * s.a * disc;
 let warmK = sat(F.mood.x) * (1.0 - F.sunTrue.w);
-col = mix(col, col * vec3<f32>(1.08, 0.97, 0.9) + vec3<f32>(0.04, 0.02, 0.0) * F.amb.w, warmK * 0.55);
+let goldK = sat(F.day.w) * (1.0 - F.sunTrue.w);
+col = mix(col, col * vec3<f32>(1.08, 0.97, 0.9) + vec3<f32>(0.04, 0.02, 0.0) * F.amb.w, warmK * 0.4);
+col = mix(col, col * vec3<f32>(1.12, 0.96, 0.82) + vec3<f32>(0.06, 0.02, 0.0), goldK * (1.0 - up) * 0.65);
 col = mix(col, vec3<f32>(0.98, 1.0, 1.04) * dot(F.amb.rgb, vec3<f32>(0.37, 0.55, 0.23)) * (0.45 + 0.7 * up), over * 0.82);
 return col * max(F.lit.y, 0.0);
 }
@@ -822,7 +850,7 @@ let dayK = smoothstep(-0.02, 0.08, F.sunTrue.y);
 let sy = max(F.sunTrue.y, 0.08);
 let up = (CLOUD_BASE * 1000.0 + 250.0 - y) / sy;
 let amt = cloudCover((xz + F.sunTrue.xz * up) * 0.001);
-let shade = mix(1.0, mix(0.42, 0.06, sat(F.mood.y * 1.3)), smoothstep(0.0, 0.3, amt));
+let shade = mix(1.0, mix(0.48, 0.08, sat(F.mood.y * 1.25)), smoothstep(-0.05, 0.35, amt));
 return mix(1.0, shade, dayK);
 }
 fn waterHaze(dy: f32) -> vec3<f32> {
@@ -853,16 +881,31 @@ return airMix(col, d / max(dist, 1e-3), dist);
 }
 fn caustic(xz: vec2<f32>) -> f32 {
 let depth = max(-sampleField(xz).x, 0.12);
-let surf = xz - F.sunDir.xz * (depth / max(F.sunDir.y, 0.3));
-let bend = vec2<f32>(n2(surf * 0.7 + vec2<f32>(F.time * 0.11, 0.0)), n2(surf * 0.7 + vec2<f32>(5.2, F.time * 0.09))) - 0.5;
-let cell = mix(1.5, 0.55, sat(depth / 5.0));
-let p = (surf + bend * 1.4) * cell;
-let e1 = laceCell(p, F.time * 1.3);
-let e2 = laceCell(p * 1.83 + vec2<f32>(5.3, 2.1), F.time * 1.7);
-let l1 = 1.0 - smoothstep(0.0, 0.11, e1);
-let l2 = 1.0 - smoothstep(0.0, 0.13, e2);
-let net = l1 * l1 * 0.75 + l2 * l2 * 0.4;
-return net * exp(-depth * 0.32) * smoothstep(0.03, 0.35, depth) * 0.5;
+if (depth < 0.02 || F.sunDir.y < 0.04) { return 0.0; }
+let sy = max(F.sunDir.y, 0.18);
+let surf = xz - F.sunDir.xz * (depth / sy);
+let t = F.time;
+let b1 = vec2<f32>(
+n2(surf * 0.48 + vec2<f32>(t * 0.08, 1.2)),
+n2(surf * 0.48 + vec2<f32>(4.1, t * 0.07))
+) - 0.5;
+let b2 = vec2<f32>(
+n2(surf * 1.65 + vec2<f32>(t * 0.22, 2.4)),
+n2(surf * 1.65 + vec2<f32>(3.3, t * 0.19))
+) - 0.5;
+let bend = b1 * 1.7 + b2 * 0.95;
+let focus = sat(length(bend) * 2.0);
+let cell = mix(1.35, 0.42, sat(depth / 6.0));
+let p1 = (surf + bend * depth * 0.55) * cell * 0.55;
+let p2 = (surf + bend * depth * 0.9) * cell * 1.7 + vec2<f32>(3.1, 1.7);
+let e1 = laceCell(p1, t * 0.85);
+let e2 = laceCell(p2, t * 1.55);
+let l1 = 1.0 - smoothstep(0.0, 0.1, e1);
+let l2 = 1.0 - smoothstep(0.0, 0.12, e2);
+let net = l1 * l1 * (0.55 + 0.55 * focus) + l2 * l2 * 0.45;
+let lit = cloudShade(xz, 0.0);
+let day = smoothstep(0.02, 0.12, F.sunTrue.y);
+return net * exp(-depth * 0.28) * smoothstep(0.02, 0.28, depth) * lit * day * 0.72;
 }
 fn shadowAt(p: vec3<f32>) -> f32 {
 let steps = i32(F.steps);
@@ -920,15 +963,18 @@ let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(wo
 let open = 1.0 - 0.55 * roof;
 let sky = skyIrradiance(n) * mix(mix(0.45, 1.0, hemi), 0.9, leaf) * open;
 let ground = vec3<f32>(0.42, 0.34, 0.22) * F.amb.w * (1.0 - hemi) * open;
+let gold = sat(F.day.w);
 let sunTerm = mix(max(nl, 0.0), sat(nl * 0.5 + 0.5) * max(nl, 0.0), 0.35);
-var light = F.sunCol * sunTerm * sh * 1.05 + sky * 0.85 + ground * 0.55;
+let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.18, 0.95, 0.72), gold * sunTerm);
+var light = F.sunCol * keyTint * sunTerm * sh * 1.12 + sky * mix(0.85, 0.95, gold) + ground * 0.5;
 if (world.y < 0.05) {
 let depth = max(-world.y, 0.0);
 let absorb = exp(-depth * vec3<f32>(0.19, 0.06, 0.05));
 light *= absorb;
 if (world.y < -0.04) {
 let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
-light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.4 - 0.16 * k) * absorb;
+let cau = caustic(world.xz);
+light += F.sunCol * max(nl, 0.0) * sh * (cau * 3.1 - 0.14 * k) * absorb;
 }
 }
 if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
@@ -1948,31 +1994,39 @@ return vec4<f32>(L, 1.0);
 }
 if (rd.y < -1e-4) { far = min(far, F.camPos.y / -rd.y); }
 let dayK = smoothstep(0.0, 0.1, F.sunTrue.y);
-let ph = 0.25 + 1.6 * pow(0.5 + 0.5 * mu, 6.0) + 6.5 * pow(0.5 + 0.5 * mu, 56.0);
-let amb = F.amb.rgb * 0.9;
+let gold = sat(F.day.w);
+let ph = 0.2 + 1.35 * pow(0.5 + 0.5 * mu, 5.0) + 8.0 * pow(0.5 + 0.5 * mu, 48.0);
+let amb = F.amb.rgb * mix(0.85, 0.7, gold);
 let cloud0 = cloudShade(F.camPos.xz, F.camPos.y);
-let nearEnd = min(far, 46.0);
-let dn = nearEnd / 12.0;
+let nearSun = pow(sat(mu * 0.5 + 0.5), 10.0);
+let samples = select(8, 12, F.cloudOct >= 3.5);
+let nearEnd = min(far, 48.0);
+let dn = nearEnd / f32(samples);
 for (var i = 0; i < 12; i++) {
+if (i >= samples) { break; }
 let p = F.camPos + rd * (dn * (f32(i) + jit));
 let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * dn * f32(i), F.camPos.y + rd.y * dn * f32(i + 1), dn));
 let lit = (sunVis(p - rd * (dn * 0.333)) + sunVis(p) + sunVis(p + rd * (dn * 0.333))) / 3.0;
 let cP = cloudShade(p.xz, p.y);
-let gap = sat((cP - cloud0) * 3.5) + sat((cloud0 - cP) * 2.0) * 0.35;
-let shaft = lit * cP * (1.0 + 2.8 * gap * dayK);
-L += T * a * (F.sunCol * shaft * ph * dayK + amb);
+let gap = sat((cP - cloud0) * 4.8) + sat((cloud0 - cP) * 2.8) * 0.45;
+let shaft = lit * (cP * 0.4 + gap * 2.2) * (0.35 + 1.65 * nearSun);
+let sunShaft = F.sunCol * mix(vec3<f32>(1.0), vec3<f32>(1.25, 0.92, 0.65), gold) * shaft * ph * dayK;
+L += T * a * (sunShaft + amb);
 T *= 1.0 - a;
 }
-if (far > 46.0) {
-let span = min(far, 1500.0) - 46.0;
+if (far > 48.0) {
+let span = min(far, 1500.0) - 48.0;
+let farN = select(5, 8, F.cloudOct >= 3.5);
 for (var i = 0; i < 8; i++) {
-let t0 = 46.0 + span * f32(i * i) / 64.0;
-let t1 = 46.0 + span * f32((i + 1) * (i + 1)) / 64.0;
+if (i >= farN) { break; }
+let t0 = 48.0 + span * f32(i * i) / 64.0;
+let t1 = 48.0 + span * f32((i + 1) * (i + 1)) / 64.0;
 let p = F.camPos + rd * mix(t0, t1, jit);
 let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * t0, F.camPos.y + rd.y * t1, t1 - t0));
 let cP = cloudShade(p.xz, p.y);
-let gap = sat(abs(cP - cloud0) * 2.5);
-L += T * a * (F.sunCol * cP * ph * dayK * (1.0 + 1.8 * gap) + amb);
+let gap = sat(abs(cP - cloud0) * 3.2);
+let shaft = (cP * 0.35 + gap * 1.6) * (0.4 + 1.2 * nearSun);
+L += T * a * (F.sunCol * shaft * ph * dayK + amb);
 T *= 1.0 - a;
 }
 }
@@ -4357,7 +4411,8 @@ wx: 'clear', auto: true, hold: 200,
 v: WEATHER.clear.slice(1), wet: 0, sea: 1,
 ang: 0.36, wx0: 1, wz0: 0, speed: 4.5, cloud: [0, 0], gustOff: [0, 0],
 sun: [0, 1, 0], moon: [0, -1, 0], key: [0, 1, 0], keyCol: [1, 1, 1], amb: [0.34, 0.48, 0.7], disc: [1, 1, 1],
-gnd: 1, expo: 0.92, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0, day: [1, 1, 1]
+gnd: 1, expo: 0.92, expoSmooth: null, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0,
+day: [1, 1, 1], gold: 0, airMass: 1
 };
 const envLum = (c) => c[0] * 0.3 + c[1] * 0.6 + c[2] * 0.1;
 function envSunAt(h) {
@@ -4377,23 +4432,36 @@ return 1 / (Math.max(sy, 0) + 0.15 * Math.pow(el + 3.885, -1.253));
 function envLight(cover) {
 const sun = envSunAt(env.hour), sy = sun[1];
 const moon = envSunAt(env.hour + 12.6);
-const k = envAirMass(sy) - envAirMass(SUN[1]);
-const tr = [Math.exp(-0.045 * k), Math.exp(-0.085 * k), Math.exp(-0.17 * k)];
+const am = envAirMass(sy);
+const k = am - envAirMass(SUN[1]);
+env.airMass = am;
+const tr = [Math.exp(-0.05 * k), Math.exp(-0.095 * k), Math.exp(-0.19 * k)];
 const up = smooth01(-0.02, 0.05, sy);
 const night = smooth01(0.02, -0.18, sy), moonUp = smooth01(0.02, 0.2, moon[1]);
 const day = sy > -0.06, src = day ? sun : moon, ky = Math.max(src[1], day ? 0.12 : 0.2);
 const f = src[1] >= ky ? 1 : Math.sqrt(1 - ky * ky) / (Math.hypot(src[0], src[2]) || 1);
 env.key = [src[0] * f, f === 1 ? src[1] : ky, src[2] * f];
-const mk = 0.03 * smooth01(-0.08, -0.2, sy) * moonUp;
-env.keyCol = day ? [1.08 * tr[0] * up, 0.98 * tr[1] * up, 0.84 * tr[2] * up] : [0.6 * mk, 0.74 * mk, mk];
+const mk = 0.035 * smooth01(-0.08, -0.2, sy) * moonUp;
+const gold = smooth01(0.42, 0.04, sy) * smooth01(-0.18, -0.02, sy);
+env.gold = gold;
 const dayK = smooth01(-0.1, 0.4, sy), low = 1 - smooth01(0, 0.35, sy);
+if (day) {
+const rad = (1.55 + 0.95 * dayK) * (1 - 0.62 * cover) * (1 + 0.28 * gold);
+env.keyCol = [
+1.12 * tr[0] * up * rad * (1 + 0.55 * gold),
+0.98 * tr[1] * up * rad * (1 + 0.08 * gold),
+0.78 * tr[2] * up * rad * (1 - 0.42 * gold)
+];
+} else {
+env.keyCol = [0.55 * mk, 0.7 * mk, mk];
+}
 const tw = smooth01(-0.24, -0.04, sy) * (1 - smooth01(-0.04, 0.2, sy)), nk = night * (0.5 + 0.5 * moonUp);
 const amb = [
-dayK * (0.34 + 0.06 * low) + tw * 0.05 + nk * 0.004,
-dayK * (0.48 - 0.02 * low) + tw * 0.055 + nk * 0.006,
-dayK * (0.70 - 0.12 * low) + tw * 0.10 + nk * 0.011
+dayK * (0.30 + 0.04 * low) * (1 - 0.22 * gold) + tw * 0.045 + nk * 0.004,
+dayK * (0.46 - 0.02 * low) * (1 + 0.06 * gold) + tw * 0.055 + nk * 0.006,
+dayK * (0.72 - 0.08 * low) * (1 + 0.38 * gold) + tw * 0.11 + nk * 0.012
 ];
-const g = envLum(amb) * 1.15, oc = cover * 0.85;
+const g = envLum(amb) * 1.12, oc = cover * 0.85;
 env.amb = [amb[0] + (g * 0.96 - amb[0]) * oc, amb[1] + (g - amb[1]) * oc, amb[2] + (g * 1.05 - amb[2]) * oc];
 const kd = env.key[1] * (1 - 0.85 * cover);
 const D = [0, 1, 2].map((i) => env.keyCol[i] * kd + env.amb[i]);
@@ -4402,9 +4470,14 @@ if (!env.L0) { env.L0 = L; env.D0 = D; }
 env.day = D.map((d, i) => d / env.D0[i]);
 env.gnd = L / env.L0;
 const Lc = envLum(env.keyCol) * env.key[1] + envLum(amb);
-env.expo = 0.92 * Math.min(5.5, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.62)) * Math.pow(Lc / Math.max(L, 1e-4), 0.3);
+env.expo = 0.88 * Math.min(4.8, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.55))
+* Math.pow(Lc / Math.max(L, 1e-4), 0.22);
 const dv = smooth01(-0.03, 0.01, sy);
-env.disc = [1.2 * tr[0] * dv, 1.02 * tr[1] * dv, 0.88 * tr[2] * dv];
+env.disc = [
+1.25 * tr[0] * dv * (1 + 0.35 * gold),
+1.0 * tr[1] * dv * (1 + 0.05 * gold),
+0.82 * tr[2] * dv * (1 - 0.25 * gold)
+];
 env.sun = sun; env.moon = moon; env.night = night; env.moonUp = moonUp;
 }
 function envSet(wx, snap) {
@@ -4444,6 +4517,11 @@ env.cloud[0] = ((env.cloud[0] % 48) + 48) % 48;
 env.cloud[1] = ((env.cloud[1] % 48) + 48) % 48;
 env.gustOff[0] += env.wx0 * env.speed * 0.6 * dt; env.gustOff[1] += env.wz0 * env.speed * 0.6 * dt;
 envLight(env.cover);
+const target = env.expo;
+if (env.expoSmooth == null) env.expoSmooth = target;
+const tauE = target > env.expoSmooth ? 0.9 : 1.8;
+env.expoSmooth += (target - env.expoSmooth) * (1 - Math.exp(-Math.max(dt, 1e-3) / tauE));
+env.expo = env.expoSmooth;
 }
 function envWindAt(x, z) {
 return env.speed * (0.4 + 1.4 * vnoise((x - env.gustOff[0]) * 0.018, (z - env.gustOff[1]) * 0.018) * env.v[5]);
@@ -4475,8 +4553,9 @@ rot(env.moon, o + 8, env.night * env.moonUp);
 arr[o + 12] = env.wx0; arr[o + 13] = env.wz0; arr[o + 14] = env.speed; arr[o + 15] = env.v[5];
 arr[o + 16] = env.cloud[0]; arr[o + 17] = env.cloud[1]; arr[o + 18] = env.gustOff[0]; arr[o + 19] = env.gustOff[1];
 arr[o + 20] = env.v[1]; arr[o + 21] = Math.max(env.wet, env.dew); arr[o + 22] = env.mist; arr[o + 23] = env.humid;
-arr[o + 24] = env.disc[0] * sunK; arr[o + 25] = env.disc[1] * sunK; arr[o + 26] = env.disc[2] * sunK; arr[o + 27] = 0;
+arr[o + 24] = env.disc[0] * sunK; arr[o + 25] = env.disc[1] * sunK; arr[o + 26] = env.disc[2] * sunK; arr[o + 27] = env.airMass;
 for (let i = 0; i < 3; i++) { arr[o + 28 + i] = env.day[i]; arr[140 + i] *= env.day[i]; arr[144 + i] *= env.day[i]; }
+arr[o + 31] = env.gold;
 }
 const BUG_WING = 2, BUG_SCALE = 3, BUG_LAMP = 4, BUG_HALO = 5, BUG_PLAIN = 6;
 const BUG_STRIDE = 24;

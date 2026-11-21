@@ -28,7 +28,8 @@ const env = {
   v: WEATHER.clear.slice(1), wet: 0, sea: 1,
   ang: 0.36, wx0: 1, wz0: 0, speed: 4.5, cloud: [0, 0], gustOff: [0, 0],
   sun: [0, 1, 0], moon: [0, -1, 0], key: [0, 1, 0], keyCol: [1, 1, 1], amb: [0.34, 0.48, 0.7], disc: [1, 1, 1],
-  gnd: 1, expo: 0.92, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0, day: [1, 1, 1]
+  gnd: 1, expo: 0.92, expoSmooth: null, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0,
+  day: [1, 1, 1], gold: 0, airMass: 1
 };
 const envLum = (c) => c[0] * 0.3 + c[1] * 0.6 + c[2] * 0.1;
 function envSunAt(h) {
@@ -51,8 +52,10 @@ function envLight(cover) {
   const sun = envSunAt(env.hour), sy = sun[1];
   const moon = envSunAt(env.hour + 12.6);
   // Sunlight reddens with the length of its path: blue is scattered out of the beam first.
-  const k = envAirMass(sy) - envAirMass(SUN[1]);
-  const tr = [Math.exp(-0.045 * k), Math.exp(-0.085 * k), Math.exp(-0.17 * k)];
+  const am = envAirMass(sy);
+  const k = am - envAirMass(SUN[1]);
+  env.airMass = am;
+  const tr = [Math.exp(-0.05 * k), Math.exp(-0.095 * k), Math.exp(-0.19 * k)];
   // Direct solar contribution is fully off once the disc is gone; twilight is amb-only.
   const up = smooth01(-0.02, 0.05, sy);
   const night = smooth01(0.02, -0.18, sy), moonUp = smooth01(0.02, 0.2, moon[1]);
@@ -60,17 +63,31 @@ function envLight(cover) {
   const day = sy > -0.06, src = day ? sun : moon, ky = Math.max(src[1], day ? 0.12 : 0.2);
   const f = src[1] >= ky ? 1 : Math.sqrt(1 - ky * ky) / (Math.hypot(src[0], src[2]) || 1);
   env.key = [src[0] * f, f === 1 ? src[1] : ky, src[2] * f];
-  const mk = 0.03 * smooth01(-0.08, -0.2, sy) * moonUp;
-  env.keyCol = day ? [1.08 * tr[0] * up, 0.98 * tr[1] * up, 0.84 * tr[2] * up] : [0.6 * mk, 0.74 * mk, mk];
+  const mk = 0.035 * smooth01(-0.08, -0.2, sy) * moonUp;
+  // Golden hour: warm directional light peaking as the sun nears the horizon — not a global orange wash.
+  const gold = smooth01(0.42, 0.04, sy) * smooth01(-0.18, -0.02, sy);
+  env.gold = gold;
   const dayK = smooth01(-0.1, 0.4, sy), low = 1 - smooth01(0, 0.35, sy);
+  if (day) {
+    // HDR solar radiance: midday is bright but not clipped; low sun keeps glitter headroom.
+    const rad = (1.55 + 0.95 * dayK) * (1 - 0.62 * cover) * (1 + 0.28 * gold);
+    env.keyCol = [
+      1.12 * tr[0] * up * rad * (1 + 0.55 * gold),
+      0.98 * tr[1] * up * rad * (1 + 0.08 * gold),
+      0.78 * tr[2] * up * rad * (1 - 0.42 * gold)
+    ];
+  } else {
+    env.keyCol = [0.55 * mk, 0.7 * mk, mk];
+  }
   const tw = smooth01(-0.24, -0.04, sy) * (1 - smooth01(-0.04, 0.2, sy)), nk = night * (0.5 + 0.5 * moonUp);
+  // Cooler blue ambient in open shade; warmer only from the key, not the whole hemisphere.
   const amb = [
-    dayK * (0.34 + 0.06 * low) + tw * 0.05 + nk * 0.004,
-    dayK * (0.48 - 0.02 * low) + tw * 0.055 + nk * 0.006,
-    dayK * (0.70 - 0.12 * low) + tw * 0.10 + nk * 0.011
+    dayK * (0.30 + 0.04 * low) * (1 - 0.22 * gold) + tw * 0.045 + nk * 0.004,
+    dayK * (0.46 - 0.02 * low) * (1 + 0.06 * gold) + tw * 0.055 + nk * 0.006,
+    dayK * (0.72 - 0.08 * low) * (1 + 0.38 * gold) + tw * 0.11 + nk * 0.012
   ];
   // Under cloud the whole sky is the lamp: grey, and about as bright as a clear sky's blue.
-  const g = envLum(amb) * 1.15, oc = cover * 0.85;
+  const g = envLum(amb) * 1.12, oc = cover * 0.85;
   env.amb = [amb[0] + (g * 0.96 - amb[0]) * oc, amb[1] + (g - amb[1]) * oc, amb[2] + (g * 1.05 - amb[2]) * oc];
   // All the light reaching open ground, and the same thing as a colour for whatever has no
   // light of its own in the shaders: foam, and the glow of the water's own body.
@@ -81,11 +98,17 @@ function envLight(cover) {
   env.day = D.map((d, i) => d / env.D0[i]);
   // The eye and the camera both open up as the light goes, but not all the way.
   env.gnd = L / env.L0;
-  // Less so for weather than for the hour: a rain sky is meant to look dark.
+  // Exposure target: preserve deep shadows and bright shafts; adaptation is applied in envStep.
   const Lc = envLum(env.keyCol) * env.key[1] + envLum(amb);
-  env.expo = 0.92 * Math.min(5.5, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.62)) * Math.pow(Lc / Math.max(L, 1e-4), 0.3);
+  env.expo = 0.88 * Math.min(4.8, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.55))
+    * Math.pow(Lc / Math.max(L, 1e-4), 0.22);
   const dv = smooth01(-0.03, 0.01, sy);
-  env.disc = [1.2 * tr[0] * dv, 1.02 * tr[1] * dv, 0.88 * tr[2] * dv];
+  // Disc colour stays warm at golden hour without turning the whole sky orange.
+  env.disc = [
+    1.25 * tr[0] * dv * (1 + 0.35 * gold),
+    1.0 * tr[1] * dv * (1 + 0.05 * gold),
+    0.82 * tr[2] * dv * (1 - 0.25 * gold)
+  ];
   env.sun = sun; env.moon = moon; env.night = night; env.moonUp = moonUp;
 }
 function envSet(wx, snap) {
@@ -130,6 +153,12 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   env.cloud[1] = ((env.cloud[1] % 48) + 48) % 48;
   env.gustOff[0] += env.wx0 * env.speed * 0.6 * dt; env.gustOff[1] += env.wz0 * env.speed * 0.6 * dt;
   envLight(env.cover);
+  // Gradual exposure adaptation: forest shade vs bright lagoon should feel like one eye opening.
+  const target = env.expo;
+  if (env.expoSmooth == null) env.expoSmooth = target;
+  const tauE = target > env.expoSmooth ? 0.9 : 1.8;
+  env.expoSmooth += (target - env.expoSmooth) * (1 - Math.exp(-Math.max(dt, 1e-3) / tauE));
+  env.expo = env.expoSmooth;
 }
 // The wind at a place in m/s, gusts and all: the same travelling cells the shader bends the
 // plants by. Insects are carried by it, birds drift on it, and the sound of it is this number.
@@ -165,6 +194,7 @@ function envWrite(arr, o, sunAng, sunK) {
   arr[o + 12] = env.wx0; arr[o + 13] = env.wz0; arr[o + 14] = env.speed; arr[o + 15] = env.v[5];
   arr[o + 16] = env.cloud[0]; arr[o + 17] = env.cloud[1]; arr[o + 18] = env.gustOff[0]; arr[o + 19] = env.gustOff[1];
   arr[o + 20] = env.v[1]; arr[o + 21] = Math.max(env.wet, env.dew); arr[o + 22] = env.mist; arr[o + 23] = env.humid;
-  arr[o + 24] = env.disc[0] * sunK; arr[o + 25] = env.disc[1] * sunK; arr[o + 26] = env.disc[2] * sunK; arr[o + 27] = 0;
+  arr[o + 24] = env.disc[0] * sunK; arr[o + 25] = env.disc[1] * sunK; arr[o + 26] = env.disc[2] * sunK; arr[o + 27] = env.airMass;
   for (let i = 0; i < 3; i++) { arr[o + 28 + i] = env.day[i]; arr[140 + i] *= env.day[i]; arr[144 + i] *= env.day[i]; }
+  arr[o + 31] = env.gold;
 }

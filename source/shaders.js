@@ -226,9 +226,10 @@ fn sampleField(xz: vec2<f32>) -> vec2<f32> {
 }
 
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
+  // Linear HDR in, filmic curve out. Glitter, shafts and sunlit cloud rims may exceed 1.
   let x = max(c, vec3<f32>(0.0)) * F.exposure;
-  let y = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-  return pow(y, vec3<f32>(0.4545));
+  let y = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+  return pow(clamp(y, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
 }
 
 // ---- Sky. One panorama holds the air and the clouds. It is baked a strip at a time
@@ -291,46 +292,72 @@ fn atmosphere(rd: vec3<f32>) -> vec3<f32> {
   return 20.0 * (sR * bR * pR + sM * bM * pM);
 }
 
-// Trade-wind cumulus. The cover is a field of separate cells with clear gaps between
-// them; each cell is a dome standing on a flat base, taller toward its middle.
-// Cloud drift wraps so long sessions do not push noise into float-precision jitter.
+// Stable world-space cloud drift. Wraps so long sessions stay precise.
 fn cloudDrift() -> vec2<f32> {
   return fract(F.windOff.xy / 48.0) * 48.0;
 }
+// Weather mix of cloud families: cumulus, towering, cirrus, stratocumulus.
+fn cloudMix() -> vec4<f32> {
+  let cover = sat(F.mood.y);
+  let rain = sat(F.wx.x);
+  let humid = sat(F.wx.w);
+  var cumu = mix(0.9, 0.22, cover) * (1.0 - 0.55 * rain);
+  var tower = mix(0.06, 0.55, smoothstep(0.12, 0.72, cover)) * (0.45 + 0.55 * humid) + rain * 0.5;
+  var cirrus = mix(0.4, 0.06, cover) * (1.0 - rain);
+  var strato = smoothstep(0.4, 0.92, cover) * (0.5 + 0.5 * humid);
+  let s = max(cumu + tower + cirrus + strato, 1e-3);
+  return vec4<f32>(cumu, tower, cirrus, strato) / s;
+}
 fn cloudCover(p: vec2<f32>) -> f32 {
   let pd = p + cloudDrift();
-  let warp = (vec2<f32>(n2(pd * 0.28 + vec2<f32>(3.1, 0.0)), n2(pd * 0.28 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.4;
+  let m = cloudMix();
+  // Low-frequency domain warp — coherent masses, not boiling noise.
+  let warp = (vec2<f32>(n2(pd * 0.22 + vec2<f32>(3.1, 0.0)), n2(pd * 0.22 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.8;
   let q = pd + warp;
-  // Large cells: separate cumulus masses with clear gaps.
-  let large = n2(q * 1.15) * 0.7 + n2(q * 2.4 + vec2<f32>(4.0, 9.0)) * 0.3;
-  // Medium: cauliflower billow inside each mass.
-  let mid = n2(q * 4.6 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 8.1 + vec2<f32>(8.0, 2.0)) * 0.45;
-  let c = large * (0.58 + 0.42 * mid) * (0.7 + 0.45 * n2(pd * 0.07 + vec2<f32>(5.0, 2.0)));
-  let thr = 0.70 - 0.40 * sat(F.mood.y) - 0.34 * smoothstep(0.45, 0.95, F.mood.y);
-  return (c - thr) / (1.0 - thr);
+  // Scattered cumulus: separate cells with blue sky between them.
+  let cell = n2(q * 1.05) * 0.68 + n2(q * 2.35 + vec2<f32>(4.0, 9.0)) * 0.32;
+  let billow = n2(q * 4.4 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 7.8 + vec2<f32>(8.0, 2.0)) * 0.45;
+  let cumu = cell * (0.55 + 0.45 * billow) * (0.72 + 0.4 * n2(pd * 0.06 + vec2<f32>(5.0, 2.0)));
+  // Towering cumulus: larger footprints, irregular cauliflower tops.
+  let tw = n2(q * 0.48 + vec2<f32>(11.0, 3.0)) * 0.7 + n2(q * 1.7 + vec2<f32>(2.0, 8.0)) * 0.3;
+  let tower = tw * (0.5 + 0.5 * n2(q * 3.2 + vec2<f32>(6.0, 1.0)));
+  // Cirrus: thin elongated streaks at a rotated scale.
+  let r = vec2<f32>(q.x * 0.42 + q.y * 0.11, -q.x * 0.08 + q.y * 0.95);
+  let cirrus = n2(r * 1.9) * 0.55 + n2(r * 4.8 + vec2<f32>(3.0, 7.0)) * 0.3 + n2(r * 11.0) * 0.15;
+  // Stratocumulus: soft layered field with broken openings.
+  let strato = n2(q * 0.62) * 0.5 + n2(q * 1.55 + vec2<f32>(4.0, 2.0)) * 0.35 + n2(q * 3.8) * 0.15;
+  let c = cumu * m.x + tower * m.y + cirrus * m.z + strato * m.w;
+  let thr = 0.68 - 0.38 * sat(F.mood.y) - 0.32 * smoothstep(0.45, 0.95, F.mood.y);
+  return (c - thr) / max(1.0 - thr, 0.08);
 }
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   let amt = cloudCover(p.xz);
   if (amt <= 0.0) { return 0.0; }
-  // Flatter base, rounded dome top — photographic cumulus profile.
-  let thick = 0.12 + 1.05 * pow(sat(amt), 0.55);
-  let h = (p.y - CLOUD_BASE) / thick;
-  if (h < 0.0 || h > 1.0) { return 0.0; }
-  let base = smoothstep(0.0, 0.08, h);
-  let dome = 1.0 - pow(h, 1.65);
-  var d = base * dome * sat(amt * 4.6);
+  let m = cloudMix();
+  // Height profiles: flat strato bases, tall towers, thin high cirrus sheets.
+  let thick = 0.1 + (0.55 * m.x + 1.35 * m.y + 0.22 * m.z + 0.4 * m.w) * pow(sat(amt), 0.5);
+  let baseY = CLOUD_BASE + 0.55 * m.z - 0.06 * m.w;
+  let h = (p.y - baseY) / max(thick, 0.08);
+  if (h < -0.05 || h > 1.15) { return 0.0; }
+  let hh = clamp(h, 0.0, 1.0);
+  let base = smoothstep(0.0, mix(0.06, 0.14, m.w), hh);
+  // Dome for cumulus/tower; flatter for strato; wispy for cirrus.
+  let dome = mix(1.0 - pow(hh, mix(1.35, 2.1, m.y)), 1.0 - abs(hh - 0.35) * 1.6, m.w);
+  let wispy = mix(dome, exp(-pow((hh - 0.55) * 3.2, 2.0)), m.z);
+  var d = base * wispy * sat(amt * mix(3.8, 5.2, m.y));
   if (fine > 0.5) {
     let w = p + vec3<f32>(cloudDrift().x, 0.0, cloudDrift().y);
-    let large = n3(w * 2.4);
-    let mid = n3(w * 6.8 + vec3<f32>(4.0, 1.0, 7.0));
-    let fineN = n3(w * 18.0 + vec3<f32>(2.0, 9.0, 5.0)) * 0.55 + n3(w * 42.0 + vec3<f32>(8.0, 3.0, 1.0)) * 0.45;
-    let b = large * 0.45 + mid * 0.35 + fineN * 0.2;
-    // Erode sides and top; leave the base flatter.
-    d -= sat(0.5 + (b - 0.5) * 3.2) * (0.18 + 0.95 * h * h);
+    let large = n3(w * 2.2);
+    let mid = n3(w * 6.2 + vec3<f32>(4.0, 1.0, 7.0));
+    let fineN = n3(w * 15.0 + vec3<f32>(2.0, 9.0, 5.0));
+    let b = large * 0.45 + mid * 0.38 + fineN * 0.17;
+    // Cellular breakup of edges; towers erode more on top.
+    let erode = sat(0.5 + (b - 0.5) * 3.4) * (0.14 + 0.9 * hh * hh * (0.6 + 0.8 * m.y));
+    d -= erode * (1.0 - 0.35 * m.z);
   } else {
-    d -= 0.22 + 0.28 * h;
+    d -= 0.18 + 0.26 * hh;
   }
-  return sat(d * 1.85);
+  return sat(d * 1.9);
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
@@ -358,9 +385,12 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let dayK = smoothstep(-0.04, 0.1, F.sunTrue.y);
   let sunAim = mix(F.moon.xyz, F.sunTrue.xyz, dayK);
   let mu = dot(rd, normalize(sunAim + vec3<f32>(1e-5, 1e-5, 0.0)));
-  let sunL = F.sunCol * 1.35 * dayK * (1.0 + 1.6 * pow(sat(mu), 6.0));
+  let gold = sat(F.day.w);
+  // Warm sun-facing cloud light; cooler ambient for undersides — not a global orange filter.
+  let sunWarm = mix(vec3<f32>(1.0), vec3<f32>(1.35, 0.95, 0.62), gold);
+  let sunL = F.sunCol * sunWarm * 1.55 * dayK * (1.0 + 2.2 * pow(sat(mu), 5.0) + 1.1 * gold);
   let moonL = F.amb.rgb * vec3<f32>(0.55, 0.62, 0.78) * (1.0 - dayK) * (0.35 + 0.65 * F.moon.w);
-  let skyL = F.amb.rgb * vec3<f32>(0.88, 0.83, 0.8);
+  let skyL = F.amb.rgb * mix(vec3<f32>(0.88, 0.83, 0.8), vec3<f32>(0.55, 0.62, 0.95), gold * 0.55);
   var C = vec3<f32>(0.0);
   var tm = 0.0;
   var wsum = 0.0;
@@ -397,11 +427,12 @@ struct SkyBake { @location(0) c: vec4<f32> }
       ls += cloudAt(p + lightDir * 0.22, 0.0) * 0.2;
       ls += cloudAt(p + lightDir * 0.6, 0.0) * 0.5;
       let hK = sat((p.y - CLOUD_BASE) / 1.3);
-      let sunT = exp(-ls * 13.0);
-      // Single scatter + soft multiple scatter: bright sun-facing rims, grey interiors.
-      let phase = 0.75 + 0.55 * pow(sat(mu), 4.0);
-      let L = sunL * (sunT * 0.9 * phase + 0.12 * exp(-ls * 1.4))
-        + skyL * (0.28 + 0.72 * hK)
+      let sunT = exp(-ls * 12.0);
+      // Sun-facing rims warm; thin edges silver-lined when backlit; interiors cooler.
+      let phase = 0.7 + 0.65 * pow(sat(mu), 3.5);
+      let silver = pow(sat(mu), 8.0) * sunT * (1.0 - d * 0.65) * (0.55 + 0.9 * gold);
+      let L = sunL * (sunT * 0.95 * phase + 0.1 * exp(-ls * 1.3) + silver * 1.4)
+        + skyL * (0.22 + 0.55 * hK + 0.28 * (1.0 - hK))
         + moonL * (0.45 + 0.55 * hK);
       let al = 1.0 - exp(-d * ds * 34.0);
       C += T * al * L;
@@ -430,7 +461,10 @@ fn skyLook(rd: vec3<f32>, disc: f32) -> vec3<f32> {
   let over = sat(F.mood.y);
   col += F.disc.rgb * pow(sat(mu), 2200.0) * 18.0 * (1.0 - over) * s.a * disc;
   let warmK = sat(F.mood.x) * (1.0 - F.sunTrue.w);
-  col = mix(col, col * vec3<f32>(1.08, 0.97, 0.9) + vec3<f32>(0.04, 0.02, 0.0) * F.amb.w, warmK * 0.55);
+  let goldK = sat(F.day.w) * (1.0 - F.sunTrue.w);
+  col = mix(col, col * vec3<f32>(1.08, 0.97, 0.9) + vec3<f32>(0.04, 0.02, 0.0) * F.amb.w, warmK * 0.4);
+  // Horizon haze warms at golden hour without painting the zenith orange.
+  col = mix(col, col * vec3<f32>(1.12, 0.96, 0.82) + vec3<f32>(0.06, 0.02, 0.0), goldK * (1.0 - up) * 0.65);
   // A cloud deck is grey whatever colour the light under it has been given.
   col = mix(col, vec3<f32>(0.98, 1.0, 1.04) * dot(F.amb.rgb, vec3<f32>(0.37, 0.55, 0.23)) * (0.45 + 0.7 * up), over * 0.82);
   return col * max(F.lit.y, 0.0);
@@ -459,7 +493,7 @@ fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
   let sy = max(F.sunTrue.y, 0.08);
   let up = (CLOUD_BASE * 1000.0 + 250.0 - y) / sy;
   let amt = cloudCover((xz + F.sunTrue.xz * up) * 0.001);
-  let shade = mix(1.0, mix(0.42, 0.06, sat(F.mood.y * 1.3)), smoothstep(0.0, 0.3, amt));
+  let shade = mix(1.0, mix(0.48, 0.08, sat(F.mood.y * 1.25)), smoothstep(-0.05, 0.35, amt));
   return mix(1.0, shade, dayK);
 }
 
@@ -499,21 +533,37 @@ fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 }
 
 fn caustic(xz: vec2<f32>) -> f32 {
-  // Sunlight is focused by the small waves, into a moving net of thin bright lines.
-  // A 44 m swell does not focus within a few metres of water, so it draws no bands here.
+  // Surface waves refract sunlight onto the seabed. Two scales: slow large cells and
+  // faster fine interference. Bend follows a cheap multi-frequency wave field so the
+  // pattern moves with the sea without sampling FFT textures in the geo pass.
   let depth = max(-sampleField(xz).x, 0.12);
-  let surf = xz - F.sunDir.xz * (depth / max(F.sunDir.y, 0.3));
-  let bend = vec2<f32>(n2(surf * 0.7 + vec2<f32>(F.time * 0.11, 0.0)), n2(surf * 0.7 + vec2<f32>(5.2, F.time * 0.09))) - 0.5;
-  // The net coarsens with depth, the way the pattern on a real bottom does.
-  let cell = mix(1.5, 0.55, sat(depth / 5.0));
-  let p = (surf + bend * 1.4) * cell;
-  let e1 = laceCell(p, F.time * 1.3);
-  let e2 = laceCell(p * 1.83 + vec2<f32>(5.3, 2.1), F.time * 1.7);
-  // Thin filaments with dark cells between. Wide lines read as a pale sheet with holes.
-  let l1 = 1.0 - smoothstep(0.0, 0.11, e1);
-  let l2 = 1.0 - smoothstep(0.0, 0.13, e2);
-  let net = l1 * l1 * 0.75 + l2 * l2 * 0.4;
-  return net * exp(-depth * 0.32) * smoothstep(0.03, 0.35, depth) * 0.5;
+  if (depth < 0.02 || F.sunDir.y < 0.04) { return 0.0; }
+  let sy = max(F.sunDir.y, 0.18);
+  let surf = xz - F.sunDir.xz * (depth / sy);
+  let t = F.time;
+  // Approximate wave slopes from advected noise (same clock as the swell, not a wallpaper).
+  let b1 = vec2<f32>(
+    n2(surf * 0.48 + vec2<f32>(t * 0.08, 1.2)),
+    n2(surf * 0.48 + vec2<f32>(4.1, t * 0.07))
+  ) - 0.5;
+  let b2 = vec2<f32>(
+    n2(surf * 1.65 + vec2<f32>(t * 0.22, 2.4)),
+    n2(surf * 1.65 + vec2<f32>(3.3, t * 0.19))
+  ) - 0.5;
+  let bend = b1 * 1.7 + b2 * 0.95;
+  let focus = sat(length(bend) * 2.0);
+  let cell = mix(1.35, 0.42, sat(depth / 6.0));
+  let p1 = (surf + bend * depth * 0.55) * cell * 0.55;
+  let p2 = (surf + bend * depth * 0.9) * cell * 1.7 + vec2<f32>(3.1, 1.7);
+  let e1 = laceCell(p1, t * 0.85);
+  let e2 = laceCell(p2, t * 1.55);
+  let l1 = 1.0 - smoothstep(0.0, 0.1, e1);
+  let l2 = 1.0 - smoothstep(0.0, 0.12, e2);
+  let net = l1 * l1 * (0.55 + 0.55 * focus) + l2 * l2 * 0.45;
+  // Cloud shadows dim the seabed and the caustic together.
+  let lit = cloudShade(xz, 0.0);
+  let day = smoothstep(0.02, 0.12, F.sunTrue.y);
+  return net * exp(-depth * 0.28) * smoothstep(0.02, 0.28, depth) * lit * day * 0.72;
 }
 
 fn shadowAt(p: vec3<f32>) -> f32 {
@@ -589,16 +639,19 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let sky = skyIrradiance(n) * mix(mix(0.45, 1.0, hemi), 0.9, leaf) * open;
   let ground = vec3<f32>(0.42, 0.34, 0.22) * F.amb.w * (1.0 - hemi) * open;
   // Soften the lit / unlit edge a little so a hard sun does not cut every trunk in half.
+  let gold = sat(F.day.w);
   let sunTerm = mix(max(nl, 0.0), sat(nl * 0.5 + 0.5) * max(nl, 0.0), 0.35);
-  var light = F.sunCol * sunTerm * sh * 1.05 + sky * 0.85 + ground * 0.55;
+  // Warm key on lit faces; sky fill stays cooler so golden hour is directional, not a filter.
+  let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.18, 0.95, 0.72), gold * sunTerm);
+  var light = F.sunCol * keyTint * sunTerm * sh * 1.12 + sky * mix(0.85, 0.95, gold) + ground * 0.5;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
     let absorb = exp(-depth * vec3<f32>(0.19, 0.06, 0.05));
     light *= absorb;
-    // The ripples that gather sunlight into bright lines take it from the cells between them.
     if (world.y < -0.04) {
       let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
-      light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.4 - 0.16 * k) * absorb;
+      let cau = caustic(world.xz);
+      light += F.sunCol * max(nl, 0.0) * sh * (cau * 3.1 - 0.14 * k) * absorb;
     }
   }
   if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
@@ -1782,34 +1835,42 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
     return vec4<f32>(L, 1.0);
   }
   if (rd.y < -1e-4) { far = min(far, F.camPos.y / -rd.y); }
-  // God rays: forward scatter + occlusion by fronds and cloud gaps. Absent at night.
+  // God rays from cloud-shadow boundaries — not uniform radial streaks.
   let dayK = smoothstep(0.0, 0.1, F.sunTrue.y);
-  let ph = 0.25 + 1.6 * pow(0.5 + 0.5 * mu, 6.0) + 6.5 * pow(0.5 + 0.5 * mu, 56.0);
-  let amb = F.amb.rgb * 0.9;
+  let gold = sat(F.day.w);
+  let ph = 0.2 + 1.35 * pow(0.5 + 0.5 * mu, 5.0) + 8.0 * pow(0.5 + 0.5 * mu, 48.0);
+  let amb = F.amb.rgb * mix(0.85, 0.7, gold);
   let cloud0 = cloudShade(F.camPos.xz, F.camPos.y);
-  let nearEnd = min(far, 46.0);
-  let dn = nearEnd / 12.0;
+  let nearSun = pow(sat(mu * 0.5 + 0.5), 10.0);
+  let samples = select(8, 12, F.cloudOct >= 3.5);
+  let nearEnd = min(far, 48.0);
+  let dn = nearEnd / f32(samples);
   for (var i = 0; i < 12; i++) {
+    if (i >= samples) { break; }
     let p = F.camPos + rd * (dn * (f32(i) + jit));
     let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * dn * f32(i), F.camPos.y + rd.y * dn * f32(i + 1), dn));
     let lit = (sunVis(p - rd * (dn * 0.333)) + sunVis(p) + sunVis(p + rd * (dn * 0.333))) / 3.0;
     let cP = cloudShade(p.xz, p.y);
-    // Stronger shafts where the view crosses a cloud-shadow boundary (sun through gaps).
-    let gap = sat((cP - cloud0) * 3.5) + sat((cloud0 - cP) * 2.0) * 0.35;
-    let shaft = lit * cP * (1.0 + 2.8 * gap * dayK);
-    L += T * a * (F.sunCol * shaft * ph * dayK + amb);
+    // Beams where the ray crosses a lit/shadow boundary in the cloud field.
+    let gap = sat((cP - cloud0) * 4.8) + sat((cloud0 - cP) * 2.8) * 0.45;
+    let shaft = lit * (cP * 0.4 + gap * 2.2) * (0.35 + 1.65 * nearSun);
+    let sunShaft = F.sunCol * mix(vec3<f32>(1.0), vec3<f32>(1.25, 0.92, 0.65), gold) * shaft * ph * dayK;
+    L += T * a * (sunShaft + amb);
     T *= 1.0 - a;
   }
-  if (far > 46.0) {
-    let span = min(far, 1500.0) - 46.0;
+  if (far > 48.0) {
+    let span = min(far, 1500.0) - 48.0;
+    let farN = select(5, 8, F.cloudOct >= 3.5);
     for (var i = 0; i < 8; i++) {
-      let t0 = 46.0 + span * f32(i * i) / 64.0;
-      let t1 = 46.0 + span * f32((i + 1) * (i + 1)) / 64.0;
+      if (i >= farN) { break; }
+      let t0 = 48.0 + span * f32(i * i) / 64.0;
+      let t1 = 48.0 + span * f32((i + 1) * (i + 1)) / 64.0;
       let p = F.camPos + rd * mix(t0, t1, jit);
       let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * t0, F.camPos.y + rd.y * t1, t1 - t0));
       let cP = cloudShade(p.xz, p.y);
-      let gap = sat(abs(cP - cloud0) * 2.5);
-      L += T * a * (F.sunCol * cP * ph * dayK * (1.0 + 1.8 * gap) + amb);
+      let gap = sat(abs(cP - cloud0) * 3.2);
+      let shaft = (cP * 0.35 + gap * 1.6) * (0.4 + 1.2 * nearSun);
+      L += T * a * (F.sunCol * shaft * ph * dayK + amb);
       T *= 1.0 - a;
     }
   }
