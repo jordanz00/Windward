@@ -137,7 +137,9 @@ function envLabel() {
 }
 function envNextStop(back) {
   const n = DAY_STOPS.length;
-  let i = DAY_STOPS.findIndex((s) => s[0] > env.hour + 0.05);
+  // Count from where the clock is already headed, so two presses go two stops on.
+  const from = env.goal != null ? env.goal : env.hour;
+  let i = DAY_STOPS.findIndex((s) => s[0] > from + 0.05);
   if (i < 0) i = 0;
   if (back) i = (i - 2 + n * 2) % n;
   env.goal = DAY_STOPS[i][0];
