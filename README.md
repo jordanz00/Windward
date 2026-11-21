@@ -14,24 +14,25 @@ Open `index.html` in Chrome, or serve the folder and open that address. WebGPU w
 python3 -m http.server 4177
 ```
 
-Wait for the coast to finish generating, then press **Enter**. You arrive over the lagoon. Drag to look, scroll to come closer, and click the water. **Places** is the way from one body of water to another: the lagoon, the open ocean, a cove under the cliff, a calm lake, a storm, the reef, and a still pool. The flight between them eases, and the light changes with the place. **Walk** steps onto the sand. **Watch**, or `C`, hides the interface.
+Wait for the coast to finish generating, then press **Enter**. You arrive over the lagoon. **Walk** uses FPS mouse-look (click the view to lock). **Places** orbits a body of water — drag to look, scroll to zoom, click the water. **Fly** (`F`) leaves the ground. **Watch**, or `C`, hides the interface.
 
 | | |
 |---|---|
-| Look | Drag. Scroll zooms. `Q` and `E` dolly |
-| Move the view | `W` `A` `S` `D` |
+| Look (Walk / Fly) | Click to lock the mouse. Esc releases |
+| Look (Places) | Drag. Scroll zooms |
+| Move | `W` `A` `S` `D` · Shift run / boost |
 | Ripple | Click or tap the water |
-| Travel | Places |
-| Walk the island | Walk, then mouse look. `F` flies. `1`–`6` are places |
-| Dive / rise | `Q` / `E` while walking (Space also rises) |
+| Travel | Places · `1`–`6` |
+| Fly | `F` · Space up · Ctrl down |
+| Dive / rise | `Q` dive · Space rise while walking |
 | Just watch | Watch, or `C`. Esc brings the controls back |
-| Time of day | Hour, or `T` for the next part of the day (Shift goes back) |
-| Weather | Weather, or `R` for the next kind (Shift goes back) |
+| Time of day | Hour, or `T` (Shift goes back) |
+| Weather | Weather, or `R` (Shift goes back) |
 | Mute | `M` |
 | Frame time | `H` |
 | Menu | `Esc` |
 
-On a phone, drag to look and tap the water. A second finger is Shift once you are walking. **Menu** brings the card back.
+On a phone, drag to look while walking and tap the water. A second finger is Shift. **Menu** brings the card back.
 
 Low, Medium, and High are the same island with less or more in it. The choice is remembered. If a load dies, the next one steps down a level.
 
@@ -68,7 +69,7 @@ Nothing is allocated per frame on purpose: the uniform buffer, the bird list, an
 - **Instances.** Every plant, rock and boat is one of a few dozen prototype meshes in a single vertex buffer. Each placed copy is twelve floats: position, yaw, scale, tint. Every frame the CPU culls the copies against the view, picks a level of detail by distance, and writes one instance buffer that serves the main view, the mirror and the near shadow map.
 - **Palms.** A coconut palm is a curved, tapering trunk with leaf-scar rings and 20 to 26 fronds placed by age: young ones upright, old ones hanging and yellowing. Each frond is a curved rachis carrying separate folded leaflets. Three levels of detail share the same fronds, so a palm does not change shape as it recedes.
 - **Forest trees.** A bowed trunk that flares into buttress roots, one limb to each mass of leaves, and five to eight leaf masses forming a spreading crown. The crown's surface is shaded as leaves, not as a blob: cells of single leaves with a midrib, lit on top and dark inside, thinning to sky at the silhouette. Bark is furrowed up the trunk with lichen in patches. Nine shapes, three levels of detail each.
-- **Forest floor.** Close to, fallen leaves lie on the ground, thick under the canopy and scattered on the open turf, and the turf is tufted. The ferns and shrubs have not been rebuilt yet.
+- **Forest floor.** Close to, fallen leaves lie on the ground, thick under the canopy and scattered on the open turf, and the turf is tufted. Sparse fallen palm fronds sit under the grove. Ferns, tree ferns and coastal shrubs use habitat-aware placement.
 - **Boulders.** A lump cut along planes, then shaded with shared normals so the cuts read as worn faces instead of polygons.
 - **Shadows.** One depth map covers the island and is redrawn only when the sun moves. A second, 2048 texels across 52 m, follows the viewer so leaflets and trunks cast sharp shadows on the sand nearby.
 - **Sky.** Air and clouds are one small panorama: Rayleigh and Mie scattering, and cumulus marched through a slab with the march starting at each cloud's surface. It is baked a strip per frame and read by the sky, by reflections in water and wet sand, and by the haze.

@@ -183,16 +183,16 @@ body.studio.playing #menubtn { top: 12px; }
     <button type="button" data-q="high">High</button>
   </div>
   <div class="keys">
-    <b>Look</b><span>Click the view to lock the mouse. Move it to look. Esc releases.</span>
-    <b>Walk</b><span>WASD to move. Shift to run. Q to dive in the water.</span>
+    <b>Look</b><span>In Walk or Fly, click the view to lock the mouse. Esc releases.</span>
+    <b>Walk</b><span>WASD to move. Shift to run. Q to dive. Space rises.</span>
     <b>Fly</b><span>F or Fly. WASD, Space up, Ctrl down, Shift faster.</span>
-    <b>Places</b><span>Lagoon, ocean, cove, lake, storm, reef, pool</span>
+    <b>Places</b><span>Orbit a place: drag to look, scroll to zoom. Lagoon, ocean, cove, lake, storm, reef, pool</span>
     <b>Watch</b><span>Hide the interface. C does the same.</span>
     <b>Day</b><span>T next hour, R weather. N music.</span>
     <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
     <b>Esc</b><span>Release look, then open this card</span>
   </div>
-  <p class="fine">Best in Chrome. On a phone, drag to look and tap the water. One HTML file, MIT licensed.</p>
+  <p class="fine">Best in Chrome. On a phone, drag to look while walking; tap the water. One HTML file, MIT licensed.</p>
 </div>
 <nav id="places" aria-label="Places"></nav>
 <div id="chrome">
@@ -616,8 +616,8 @@ let wd = textureLoad(shoreWet, vec2<i32>(x1, z1), 0);
 let w = mix(mix(wa, wb, f.x), mix(wc, wd, f.x), f.y);
 o.h = max(s.x, 0.0);
 o.vel = s.yz;
-o.foam = max(s.w, w.z);
-o.wet = w.x;
+o.foam = s.w;
+o.wet = max(w.x, w.z * 0.55);
 o.bed = w.y;
 o.inside = 1.0;
 o.eta = o.bed + o.h;
@@ -860,8 +860,13 @@ let shade = mix(1.0, mix(0.48, 0.08, sat(F.mood.y * 1.25)), smoothstep(-0.05, 0.
 return mix(1.0, shade, dayK);
 }
 fn waterHaze(dy: f32) -> vec3<f32> {
-let c = mix(vec3<f32>(0.012, 0.13, 0.25), vec3<f32>(0.06, 0.33, 0.42), sat(dy * 1.4 + 0.45));
-return c * mix(0.55, 1.0, cloudShade(F.camPos.xz, 0.0)) * max(F.lit.y, 0.0) * F.day.rgb;
+let depth = max(-F.camPos.y, 0.0);
+let deepK = sat(depth / 9.0);
+let shallow = mix(vec3<f32>(0.05, 0.28, 0.36), vec3<f32>(0.08, 0.36, 0.42), sat(dy * 1.4 + 0.45));
+let deep = mix(vec3<f32>(0.008, 0.09, 0.22), vec3<f32>(0.03, 0.22, 0.34), sat(dy * 1.2 + 0.4));
+let c = mix(shallow, deep, deepK);
+let lit = mix(0.48, 1.0, cloudShade(F.camPos.xz, 0.0));
+return c * lit * max(F.lit.y, 0.0) * F.day.rgb * exp(-depth * vec3<f32>(0.04, 0.015, 0.01));
 }
 fn waterFill(depth: f32) -> vec3<f32> {
 return vec3<f32>(0.10, 0.21, 0.24) * F.under * sat(depth * 3.0) * exp(-depth * 0.12) * max(F.lit.y, 0.0) * F.day.rgb;
@@ -891,7 +896,8 @@ fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 let d = world - F.camPos;
 let dist = length(d);
 if (F.under > 0.5) {
-return mix(waterHaze(d.y / max(dist, 0.01)), col, sat(exp(-dist * mix(0.028, 0.06, sat(F.camDamp)))));
+let absorb = exp(-dist * mix(vec3<f32>(0.045, 0.028, 0.018), vec3<f32>(0.09, 0.055, 0.035), sat(F.camDamp)));
+return mix(waterHaze(d.y / max(dist, 0.01)), col * absorb, sat(exp(-dist * mix(0.024, 0.052, sat(F.camDamp)))));
 }
 return airMix(col, d / max(dist, 1e-3), dist);
 }
@@ -1193,12 +1199,12 @@ let fr = 0.02 + 0.98 * pow(1.0 - max(dot(nw, Vt), 0.0), 5.0);
 col = mix(col, applyFog(skyReflect(reflect(-Vt, nw)), in.world), sat(fr * gloss * 0.9));
 }
 if (washWet > 0.04 || washFoam > 0.02) {
-col *= mix(1.0, 0.6, washWet * (1.0 - washFoam * 0.5));
+col *= mix(1.0, 0.58, washWet * (1.0 - washFoam * 0.35));
 let Vw = normalize(F.camPos - in.world);
 let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), 24.0) * washWet;
-col += vec3<f32>(0.2, 0.2, 0.19) * F.sunCol * spec;
+col += vec3<f32>(0.18, 0.18, 0.17) * F.sunCol * spec;
 let sun = 0.62 + 0.5 * max(dot(n, F.sunDir), 0.0);
-col = mix(col, vec3<f32>(0.9, 0.92, 0.9) * F.day.rgb * sun, washFoam * 0.75);
+col = mix(col, vec3<f32>(0.82, 0.85, 0.82) * F.day.rgb * sun, washFoam * 0.34);
 }
 return vec4<f32>(col, 1.0);
 }
@@ -2194,9 +2200,9 @@ let tongue = sat(sh.foam * 1.35 - acrossF * 0.85);
 let trail = sat(min(sh.foam, alongF * 1.2));
 let retreat = sat(-dot(dir, SH.sea)) * sat(backF * 0.9 - sh.foam * 0.35);
 let grain = n2(in.xz0 * 5.8 + dir * F.time * 0.35 + vec2<f32>(2.0, 0.0));
-let adv = sat(max(tongue, trail * 0.8) * mix(0.85, 1.05, grain) + retreat * 0.55 * grain);
+let adv = sat(max(tongue, trail * 0.75) * mix(0.7, 1.0, grain) + retreat * 0.45 * grain);
 let band = 1.0 - smoothstep(0.5, 0.78, shoreOff);
-let patches = foamCover(in.xz0 + dir * (F.time * 0.08), adv * 0.95, foot);
+let patches = foamCover(in.xz0 + dir * (F.time * 0.08), adv * 0.78, foot);
 foam = sat(mix(foam * (1.0 - band * 0.92), patches, band));
 onSheet = band * patches;
 }
@@ -2294,10 +2300,10 @@ var film = 1.0;
 if (dep < 0.9995 && in.sheet < 0.5) {
 film = smoothstep(0.0, 0.09, in.world.y - worldAt(in.clip.xy, dep).y);
 }
-let foamCol = mix(vec3<f32>(0.78, 0.82, 0.8), vec3<f32>(0.97, 0.98, 0.96), sat(foam)) * F.day.rgb;
-base = mix(base, foamCol, foam * mix(0.4, 0.95, onSheet));
+let foamCol = mix(vec3<f32>(0.68, 0.74, 0.72), vec3<f32>(0.9, 0.92, 0.9), sat(foam)) * F.day.rgb;
+base = mix(base, foamCol, foam * mix(0.26, 0.58, onSheet));
 let sheetK = smoothstep(0.5, 1.0, in.sheet);
-var fresK = fres * reflK * (1.0 - foam * mix(0.5, 0.95, onSheet)) * film;
+var fresK = fres * reflK * (1.0 - foam * mix(0.45, 0.85, onSheet)) * film;
 fresK = mix(fresK, fresK * 0.6, sheetK);
 var col = mix(base, reflCol, fresK);
 let foamK = 1.0 - foam * 0.85;
@@ -2327,8 +2333,8 @@ let dmn = in.xz0 - SH.origin;
 let fi = dot(dmn, SH.along) / SH.dx;
 let border = smoothstep(1.0, 16.0, fi) * smoothstep(SH.nx - 1.0, SH.nx - 16.0, fi);
 let fade = smoothstep(-0.04, 0.04, sh.bed);
-let body = max(smoothstep(0.012, 0.06, sh.h), smoothstep(0.08, 0.32, sh.foam));
-alpha = border * fade * mix(body * 0.35, 1.0, smoothstep(0.18, 0.55, foam));
+let body = max(smoothstep(0.012, 0.06, sh.h), smoothstep(0.12, 0.4, sh.foam));
+alpha = border * fade * mix(body * 0.32, 0.85, smoothstep(0.22, 0.65, foam));
 }
 return vec4<f32>(tonemap(airOver(col, in.clip.xy)), alpha);
 }
@@ -4209,7 +4215,8 @@ counts[slot]++;
 }
 }
 let run = 0;
-const draws = [];
+const draws = this._draws || (this._draws = []);
+draws.length = 0;
 for (let k = 0; k < counts.length; k++) {
 starts[k] = run;
 if (counts[k]) { const g = ranges[k]; draws.push(g.first, g.count, g.base, run, counts[k]); }
@@ -5222,7 +5229,8 @@ a.big = Math.max(1, dist * pxw * 4 / L);
 counts[a.slot]++;
 }
 let run = 0;
-const draws = [];
+const draws = this._draws || (this._draws = []);
+draws.length = 0;
 for (let k = 0; k < 22; k++) {
 starts[k] = run;
 if (counts[k]) { const g = ranges[k]; draws.push(g.first, g.count, g.base, run, counts[k]); }
@@ -5804,6 +5812,46 @@ for (let k = from; k < m.sway.length; k++) m.sway[k] = topSway;
 }
 return m;
 }
+function makeFallenFrond(seed) {
+const rnd = seeded(seed * 419 + 9);
+const m = new Mesh();
+const L = 1.6 + rnd() * 1.4;
+const curl = (rnd() - 0.5) * 0.9;
+const brown = [0.28 + rnd() * 0.1, 0.2 + rnd() * 0.08, 0.08 + rnd() * 0.05];
+const pts = [];
+let p = [0, 0.02, 0];
+const segs = 7;
+for (let k = 0; k <= segs; k++) {
+const t = k / segs;
+const yaw = curl * t * t;
+const lift = 0.04 * Math.sin(t * Math.PI) - 0.02 * t;
+const T = [Math.cos(yaw), lift * 4, Math.sin(yaw)];
+const len = Math.hypot(T[0], T[1], T[2]) || 1;
+T[0] /= len; T[1] /= len; T[2] /= len;
+const S = [-T[2], 0, T[0]];
+pts.push({ p: p.slice(), T, S });
+p = [p[0] + T[0] * (L / segs), p[1] + T[1] * (L / segs), p[2] + T[2] * (L / segs)];
+}
+let prev = null;
+for (let k = 0; k <= segs; k++) {
+const q = pts[k], t = k / segs, w = 0.012 * (1 - t * 0.7);
+const a = m.v(q.p[0] + q.S[0] * w, q.p[1], q.p[2] + q.S[2] * w, 0, 1, 0, brown[0], brown[1], brown[2], 0, SOLID);
+const b = m.v(q.p[0] - q.S[0] * w, q.p[1], q.p[2] - q.S[2] * w, 0, 1, 0, brown[0], brown[1], brown[2], 0, SOLID);
+if (prev) { m.tri(prev, a, prev + 1); m.tri(prev + 1, a, b); }
+prev = a;
+}
+const nLeaf = 5 + ((rnd() * 4) | 0);
+for (let i = 0; i < nLeaf; i++) {
+const t = 0.15 + rnd() * 0.75, f = t * segs, k0 = Math.min(segs - 1, f | 0);
+const A = pts[k0], side = rnd() < 0.5 ? -1 : 1;
+const len = 0.18 + rnd() * 0.35 * (1 - t * 0.5);
+const col = [brown[0] * (0.85 + rnd() * 0.3), brown[1] * (0.9 + rnd() * 0.25), brown[2]];
+addLeaflet(m, A.p[0], A.p[1] + 0.01, A.p[2],
+A.T[0] * 0.2 + A.S[0] * side, -0.15 - rnd() * 0.2, A.T[2] * 0.2 + A.S[2] * side,
+len, 0.018 + rnd() * 0.012, col, 0, (rnd() - 0.5) * 0.6);
+}
+return m;
+}
 function makeFern(seed) {
 const rnd = seeded(seed || 2);
 const m = new Mesh();
@@ -6255,7 +6303,8 @@ counts[slot]++;
 slotOf[i] = slot;
 }
 let run = at;
-const draws = [];
+const draws = this._draws || (this._draws = []);
+draws.length = 0;
 for (let s = 0; s < counts.length; s++) {
 starts[s] = run;
 if (counts[s]) { const g = this.packed.ranges[s]; draws.push(g.first, g.count, g.base, run, counts[s]); }
@@ -7287,6 +7336,7 @@ const canopyIds = protoSet([6, 13, 18, 25], makeCanopy, 1.1);
 const fernIds = protoSet([7, 12, 19, 24, 30, 33], makeFern, 0.85);
 const broadIds = protoSet([2, 15, 28, 36, 41], makeBroad, 0.95);
 let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
+const palmSites = [];
 const fernBudget = Math.max(14, (q.broad * 0.7) | 0);
 const canopyBudget = Math.max(5, (q.broad * 0.32) | 0);
 const clearR = 9;
@@ -7314,6 +7364,7 @@ const tint = [0.88 + rnd() * 0.2, 0.9 + rnd() * 0.16, 0.8 + rnd() * 0.2];
 const psc = 0.75 + rnd() * 0.45;
 scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.88 + rnd() * 0.28, 1.1 + rnd() * 0.35, plantBias());
 walkHits.push(x, z, 0.4 * psc);
+palmSites.push(x, z, h);
 palms++;
 }
 for (let i = 0; i < (q.palms + q.broad) * 24 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget || ferns < fernBudget || canopies < canopyBudget); i++) {
@@ -7331,6 +7382,7 @@ if (palms < q.palms && h > 0.55 && h < 5.8 && s < 0.34 && clump > 0.38 && (h < 2
 const psc = 0.7 + rnd() * 0.55;
 scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.85 + rnd() * 0.35, 1.05 + rnd() * 0.4, plantBias());
 walkHits.push(x, z, 0.4 * psc);
+palmSites.push(x, z, h);
 palms++;
 } else if (shrubs < shrubBudget && h > 0.3 && h < 2.8 && s < 0.4 && clump > 0.3 && (h < 1.6 || clump2 > 0.4)) {
 scatter.add(pick(shrubIds, x, z), x, h, z, rnd() * 6.28, 1.5 + rnd() * 1.9, tint, 0.65 + rnd() * 0.6, plantSoft(), plantBias());
@@ -7406,6 +7458,16 @@ const sc = 0.35 + rnd() * 1.1;
 scatter.add(pick(rockIds, x, z), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
 walkHits.push(x, z, 0.65 * sc);
 rocks++;
+}
+const frondIds = [1, 2, 3, 5].map((sd) => scatter.proto([makeFallenFrond(sd)], 1.2));
+for (let i = 0; i < palmSites.length && i < 28; i += 3) {
+if (rnd() > 0.55) continue;
+const px = palmSites[i], pz = palmSites[i + 1];
+const a = rnd() * 6.28, r = 1.2 + rnd() * 3.4;
+const x = px + Math.cos(a) * r, z = pz + Math.sin(a) * r;
+const h = fieldSample(world, x, z);
+if (h < 0.15 || h > 4.5 || fieldSlope(world, x, z) > 0.45) continue;
+scatter.add(pick(frondIds, x, z), x, h + 0.01, z, rnd() * 6.28, 0.85 + rnd() * 0.45, [0.95, 0.9, 0.85], 1, 0.2, rnd());
 }
 const stackList = [];
 for (let i = 0; i < q.stacks * 30 && stacks < q.stacks; i++) {
@@ -7551,9 +7613,12 @@ const meshIB = upload(packed.idx, GPUBufferUsage.INDEX);
 const instArr = new Float32Array(Math.max(1, scatter.n) * 3 * ISTRIDE);
 const instB = device.createBuffer({ size: instArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
 const farArr = new Float32Array(Math.max(1, scatter.n) * ISTRIDE);
-const farDraws = scatter.collect(farArr, 0, null, 0, 0, 0, 1e9, 9);
+const farDraws = scatter.collect(farArr, 0, null, beach.x, 8, beach.z, 420, 9);
 const instFarB = upload(farArr, GPUBufferUsage.VERTEX);
 let mainDraws = [], reflDraws = [], shadowFor = null;
+let nearShadowKey = null;
+let nearShadowUnder = null;
+const nearShadowScratch = [0, 0, 0, 0, 0, 0];
 function drawMeshes(pass, pipeline, bg, vb, ib, buf, draws) {
 if (!pipeline || !draws.length) return;
 pass.setPipeline(pipeline); pass.setBindGroup(0, bg);
@@ -8093,7 +8158,8 @@ skyStrip = (skyStrip + 1) % SKY_STRIPS;
 bp.end();
 }
 if (!shadowFor || uf[52] * shadowFor[0] + uf[53] * shadowFor[1] + uf[54] * shadowFor[2] < 0.99996) {
-shadowFor = [uf[52], uf[53], uf[54]];
+if (!shadowFor) shadowFor = nearShadowScratch;
+shadowFor[0] = uf[52]; shadowFor[1] = uf[53]; shadowFor[2] = uf[54];
 const spass = enc.beginRenderPass(shadowPass);
 spass.setPipeline(pipes.shadowTerrain); spass.setBindGroup(0, bgUB);
 spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
@@ -8102,14 +8168,23 @@ drawMeshes(spass, pipes.shadowMesh, bgUB, meshVB, meshIB, instFarB, farDraws);
 spass.end();
 }
 {
+const nsk = nearShadowKey || (nearShadowKey = [0, 0, 0, 0, 0, 0]);
+const eyeMove = Math.hypot(camX - nsk[0], camY - nsk[1], camZ - nsk[2]);
+const sunDot = uf[52] * nsk[3] + uf[53] * nsk[4] + uf[54] * nsk[5];
+const underFlip = nearShadowUnder !== under;
+if (eyeMove > 0.45 || sunDot < 0.9999 || underFlip) {
+nsk[0] = camX; nsk[1] = camY; nsk[2] = camZ;
+nsk[3] = uf[52]; nsk[4] = uf[53]; nsk[5] = uf[54];
+nearShadowUnder = under;
 const np = enc.beginRenderPass(nearPass);
 np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
 np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
 np.drawIndexed(nearRows[1], 1, nearRows[0]);
 drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
-drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
-drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
+if (under) drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
+else drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
 np.end();
+}
 }
 if (uf[86] > 0.5) {
 const rp = enc.beginRenderPass(reflPass);
@@ -8246,7 +8321,7 @@ orbit = true;
 mode = 2;
 enterPlace('lagoon', false);
 showHint = 7;
-$('hint').textContent = 'Click Walk for FPS look · or drag here in Places view';
+$('hint').textContent = 'Walk: click to look · Places: drag to orbit';
 paintMoveMode();
 });
 menuBtn.addEventListener('click', () => {

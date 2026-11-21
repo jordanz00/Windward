@@ -451,6 +451,48 @@ function makePalm(seed, lod) {
   return m;
 }
 
+// Fallen palm frond litter: a single rachis with a few dry leaflets, for beach / grove floor.
+function makeFallenFrond(seed) {
+  const rnd = seeded(seed * 419 + 9);
+  const m = new Mesh();
+  const L = 1.6 + rnd() * 1.4;
+  const curl = (rnd() - 0.5) * 0.9;
+  const brown = [0.28 + rnd() * 0.1, 0.2 + rnd() * 0.08, 0.08 + rnd() * 0.05];
+  const pts = [];
+  let p = [0, 0.02, 0];
+  const segs = 7;
+  for (let k = 0; k <= segs; k++) {
+    const t = k / segs;
+    const yaw = curl * t * t;
+    const lift = 0.04 * Math.sin(t * Math.PI) - 0.02 * t;
+    const T = [Math.cos(yaw), lift * 4, Math.sin(yaw)];
+    const len = Math.hypot(T[0], T[1], T[2]) || 1;
+    T[0] /= len; T[1] /= len; T[2] /= len;
+    const S = [-T[2], 0, T[0]];
+    pts.push({ p: p.slice(), T, S });
+    p = [p[0] + T[0] * (L / segs), p[1] + T[1] * (L / segs), p[2] + T[2] * (L / segs)];
+  }
+  let prev = null;
+  for (let k = 0; k <= segs; k++) {
+    const q = pts[k], t = k / segs, w = 0.012 * (1 - t * 0.7);
+    const a = m.v(q.p[0] + q.S[0] * w, q.p[1], q.p[2] + q.S[2] * w, 0, 1, 0, brown[0], brown[1], brown[2], 0, SOLID);
+    const b = m.v(q.p[0] - q.S[0] * w, q.p[1], q.p[2] - q.S[2] * w, 0, 1, 0, brown[0], brown[1], brown[2], 0, SOLID);
+    if (prev) { m.tri(prev, a, prev + 1); m.tri(prev + 1, a, b); }
+    prev = a;
+  }
+  const nLeaf = 5 + ((rnd() * 4) | 0);
+  for (let i = 0; i < nLeaf; i++) {
+    const t = 0.15 + rnd() * 0.75, f = t * segs, k0 = Math.min(segs - 1, f | 0);
+    const A = pts[k0], side = rnd() < 0.5 ? -1 : 1;
+    const len = 0.18 + rnd() * 0.35 * (1 - t * 0.5);
+    const col = [brown[0] * (0.85 + rnd() * 0.3), brown[1] * (0.9 + rnd() * 0.25), brown[2]];
+    addLeaflet(m, A.p[0], A.p[1] + 0.01, A.p[2],
+      A.T[0] * 0.2 + A.S[0] * side, -0.15 - rnd() * 0.2, A.T[2] * 0.2 + A.S[2] * side,
+      len, 0.018 + rnd() * 0.012, col, 0, (rnd() - 0.5) * 0.6);
+  }
+  return m;
+}
+
 // Fern / tree-fern: curved rachis with paired pinnae that shrink toward the tip.
 function makeFern(seed) {
   const rnd = seeded(seed || 2);
@@ -948,7 +990,8 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser) {
     slotOf[i] = slot;
   }
   let run = at;
-  const draws = [];
+  const draws = this._draws || (this._draws = []);
+  draws.length = 0;
   for (let s = 0; s < counts.length; s++) {
     starts[s] = run;
     if (counts[s]) { const g = this.packed.ranges[s]; draws.push(g.first, g.count, g.base, run, counts[s]); }
@@ -2058,6 +2101,7 @@ async function main() {
     const fernIds = protoSet([7, 12, 19, 24, 30, 33], makeFern, 0.85);
     const broadIds = protoSet([2, 15, 28, 36, 41], makeBroad, 0.95);
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
+    const palmSites = [];
     const fernBudget = Math.max(14, (q.broad * 0.7) | 0);
     const canopyBudget = Math.max(5, (q.broad * 0.32) | 0);
     const clearR = 9;
@@ -2086,6 +2130,7 @@ async function main() {
       const psc = 0.75 + rnd() * 0.45;
       scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.88 + rnd() * 0.28, 1.1 + rnd() * 0.35, plantBias());
       walkHits.push(x, z, 0.4 * psc);
+      palmSites.push(x, z, h);
       palms++;
     }
     for (let i = 0; i < (q.palms + q.broad) * 24 && (palms < q.palms || broads < q.broad || shrubs < shrubBudget || ferns < fernBudget || canopies < canopyBudget); i++) {
@@ -2104,6 +2149,7 @@ async function main() {
         const psc = 0.7 + rnd() * 0.55;
         scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.85 + rnd() * 0.35, 1.05 + rnd() * 0.4, plantBias());
         walkHits.push(x, z, 0.4 * psc);
+        palmSites.push(x, z, h);
         palms++;
       } else if (shrubs < shrubBudget && h > 0.3 && h < 2.8 && s < 0.4 && clump > 0.3 && (h < 1.6 || clump2 > 0.4)) {
         // Beach interior shrubs in irregular clusters.
@@ -2186,6 +2232,17 @@ async function main() {
       scatter.add(pick(rockIds, x, z), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
       walkHits.push(x, z, 0.65 * sc);
       rocks++;
+    }
+    // Sparse fallen fronds under palms — organic litter, not denser planting.
+    const frondIds = [1, 2, 3, 5].map((sd) => scatter.proto([makeFallenFrond(sd)], 1.2));
+    for (let i = 0; i < palmSites.length && i < 28; i += 3) {
+      if (rnd() > 0.55) continue;
+      const px = palmSites[i], pz = palmSites[i + 1];
+      const a = rnd() * 6.28, r = 1.2 + rnd() * 3.4;
+      const x = px + Math.cos(a) * r, z = pz + Math.sin(a) * r;
+      const h = fieldSample(world, x, z);
+      if (h < 0.15 || h > 4.5 || fieldSlope(world, x, z) > 0.45) continue;
+      scatter.add(pick(frondIds, x, z), x, h + 0.01, z, rnd() * 6.28, 0.85 + rnd() * 0.45, [0.95, 0.9, 0.85], 1, 0.2, rnd());
     }
     const stackList = [];
     for (let i = 0; i < q.stacks * 30 && stacks < q.stacks; i++) {
@@ -2347,11 +2404,14 @@ async function main() {
     // Three lists share one instance buffer each frame: the view, its mirror, and the near shadow.
     const instArr = new Float32Array(Math.max(1, scatter.n) * 3 * ISTRIDE);
     const instB = device.createBuffer({ size: instArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-    // The island-wide shadow map sees every plant at its coarsest level, and is drawn once per sun angle.
+    // Island-wide shadow: coarsest LOD, culled to a practical reach so tiny understory is skipped.
     const farArr = new Float32Array(Math.max(1, scatter.n) * ISTRIDE);
-    const farDraws = scatter.collect(farArr, 0, null, 0, 0, 0, 1e9, 9);
+    const farDraws = scatter.collect(farArr, 0, null, beach.x, 8, beach.z, 420, 9);
     const instFarB = upload(farArr, GPUBufferUsage.VERTEX);
     let mainDraws = [], reflDraws = [], shadowFor = null;
+    let nearShadowKey = null;
+    let nearShadowUnder = null;
+    const nearShadowScratch = [0, 0, 0, 0, 0, 0];
     // Plants, fish and insects are all drawn the same way: one buffer of prototypes, one of
     // instances, and a list of runs. A pipeline that is still being built draws nothing yet.
     function drawMeshes(pass, pipeline, bg, vb, ib, buf, draws) {
@@ -2948,9 +3008,10 @@ async function main() {
         }
         bp.end();
       }
-      // The island's shadow map is redrawn when the light has moved half a degree.
+      // Island shadow: redraw when the light has moved about half a degree.
       if (!shadowFor || uf[52] * shadowFor[0] + uf[53] * shadowFor[1] + uf[54] * shadowFor[2] < 0.99996) {
-        shadowFor = [uf[52], uf[53], uf[54]];
+        if (!shadowFor) shadowFor = nearShadowScratch;
+        shadowFor[0] = uf[52]; shadowFor[1] = uf[53]; shadowFor[2] = uf[54];
         const spass = enc.beginRenderPass(shadowPass);
         spass.setPipeline(pipes.shadowTerrain); spass.setBindGroup(0, bgUB);
         spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
@@ -2958,15 +3019,25 @@ async function main() {
         drawMeshes(spass, pipes.shadowMesh, bgUB, meshVB, meshIB, instFarB, farDraws);
         spass.end();
       }
+      // Near cascade: redraw when the eye or sun moved enough to matter.
       {
-        const np = enc.beginRenderPass(nearPass);
-        np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
-        np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
-        np.drawIndexed(nearRows[1], 1, nearRows[0]);
-        drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
-        drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
-        drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
-        np.end();
+        const nsk = nearShadowKey || (nearShadowKey = [0, 0, 0, 0, 0, 0]);
+        const eyeMove = Math.hypot(camX - nsk[0], camY - nsk[1], camZ - nsk[2]);
+        const sunDot = uf[52] * nsk[3] + uf[53] * nsk[4] + uf[54] * nsk[5];
+        const underFlip = nearShadowUnder !== under;
+        if (eyeMove > 0.45 || sunDot < 0.9999 || underFlip) {
+          nsk[0] = camX; nsk[1] = camY; nsk[2] = camZ;
+          nsk[3] = uf[52]; nsk[4] = uf[53]; nsk[5] = uf[54];
+          nearShadowUnder = under;
+          const np = enc.beginRenderPass(nearPass);
+          np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
+          np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
+          np.drawIndexed(nearRows[1], 1, nearRows[0]);
+          drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
+          if (under) drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
+          else drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
+          np.end();
+        }
       }
       if (uf[86] > 0.5) {
         const rp = enc.beginRenderPass(reflPass);
@@ -3110,7 +3181,7 @@ async function main() {
       mode = 2;
       enterPlace('lagoon', false);
       showHint = 7;
-      $('hint').textContent = 'Click Walk for FPS look · or drag here in Places view';
+      $('hint').textContent = 'Walk: click to look · Places: drag to orbit';
       paintMoveMode();
     });
     menuBtn.addEventListener('click', () => {

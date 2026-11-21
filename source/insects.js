@@ -687,7 +687,8 @@ BugLife.prototype.collect = function (out, vp, ex, ey, ez, pxw, ranges) {
     counts[a.slot]++;
   }
   let run = 0;
-  const draws = [];
+  const draws = this._draws || (this._draws = []);
+  draws.length = 0;
   for (let k = 0; k < 22; k++) {
     starts[k] = run;
     if (counts[k]) { const g = ranges[k]; draws.push(g.first, g.count, g.base, run, counts[k]); }

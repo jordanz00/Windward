@@ -205,8 +205,9 @@ fn shoreFetch(xz: vec2<f32>) -> ShoreS {
   let w = mix(mix(wa, wb, f.x), mix(wc, wd, f.x), f.y);
   o.h = max(s.x, 0.0);
   o.vel = s.yz;
-  o.foam = max(s.w, w.z);
-  o.wet = w.x;
+  // Live sheet foam only — deposited ground foam darkens wet sand, it does not bleach white.
+  o.foam = s.w;
+  o.wet = max(w.x, w.z * 0.55);
   o.bed = w.y;
   o.inside = 1.0;
   o.eta = o.bed + o.h;
@@ -500,8 +501,14 @@ fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
 // The colour clear tropical water goes to with distance: lit from above, so it dims under a cloud.
 // Brighter looking up toward the light, bluer and darker looking down and away.
 fn waterHaze(dy: f32) -> vec3<f32> {
-  let c = mix(vec3<f32>(0.012, 0.13, 0.25), vec3<f32>(0.06, 0.33, 0.42), sat(dy * 1.4 + 0.45));
-  return c * mix(0.55, 1.0, cloudShade(F.camPos.xz, 0.0)) * max(F.lit.y, 0.0) * F.day.rgb;
+  // Depth shifts turquoise shallows toward deep blue; cloud cover dims transmission.
+  let depth = max(-F.camPos.y, 0.0);
+  let deepK = sat(depth / 9.0);
+  let shallow = mix(vec3<f32>(0.05, 0.28, 0.36), vec3<f32>(0.08, 0.36, 0.42), sat(dy * 1.4 + 0.45));
+  let deep = mix(vec3<f32>(0.008, 0.09, 0.22), vec3<f32>(0.03, 0.22, 0.34), sat(dy * 1.2 + 0.4));
+  let c = mix(shallow, deep, deepK);
+  let lit = mix(0.48, 1.0, cloudShade(F.camPos.xz, 0.0));
+  return c * lit * max(F.lit.y, 0.0) * F.day.rgb * exp(-depth * vec3<f32>(0.04, 0.015, 0.01));
 }
 // Light scattered by the water itself reaches every side of a thing that is in it,
 // which is why nothing under water has a black shadow.
@@ -542,7 +549,9 @@ fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
   let d = world - F.camPos;
   let dist = length(d);
   if (F.under > 0.5) {
-    return mix(waterHaze(d.y / max(dist, 0.01)), col, sat(exp(-dist * mix(0.028, 0.06, sat(F.camDamp)))));
+    // Stronger red/green absorption with distance; blue carries farther.
+    let absorb = exp(-dist * mix(vec3<f32>(0.045, 0.028, 0.018), vec3<f32>(0.09, 0.055, 0.035), sat(F.camDamp)));
+    return mix(waterHaze(d.y / max(dist, 0.01)), col * absorb, sat(exp(-dist * mix(0.024, 0.052, sat(F.camDamp)))));
   }
   return airMix(col, d / max(dist, 1e-3), dist);
 }
@@ -902,12 +911,13 @@ struct GeoV {
     col = mix(col, applyFog(skyReflect(reflect(-Vt, nw)), in.world), sat(fr * gloss * 0.9));
   }
   if (washWet > 0.04 || washFoam > 0.02) {
-    col *= mix(1.0, 0.6, washWet * (1.0 - washFoam * 0.5));
+    // Wet sand goes darker and slightly specular; foam is a sparse lace, not a white band.
+    col *= mix(1.0, 0.58, washWet * (1.0 - washFoam * 0.35));
     let Vw = normalize(F.camPos - in.world);
     let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), 24.0) * washWet;
-    col += vec3<f32>(0.2, 0.2, 0.19) * F.sunCol * spec;
+    col += vec3<f32>(0.18, 0.18, 0.17) * F.sunCol * spec;
     let sun = 0.62 + 0.5 * max(dot(n, F.sunDir), 0.0);
-    col = mix(col, vec3<f32>(0.9, 0.92, 0.9) * F.day.rgb * sun, washFoam * 0.75);
+    col = mix(col, vec3<f32>(0.82, 0.85, 0.82) * F.day.rgb * sun, washFoam * 0.34);
   }
   return vec4<f32>(col, 1.0);
 }
@@ -2063,9 +2073,9 @@ struct BlitOut {
     // Backwash: retreating flow leaves sparse fragments behind the front.
     let retreat = sat(-dot(dir, SH.sea)) * sat(backF * 0.9 - sh.foam * 0.35);
     let grain = n2(in.xz0 * 5.8 + dir * F.time * 0.35 + vec2<f32>(2.0, 0.0));
-    let adv = sat(max(tongue, trail * 0.8) * mix(0.85, 1.05, grain) + retreat * 0.55 * grain);
+    let adv = sat(max(tongue, trail * 0.75) * mix(0.7, 1.0, grain) + retreat * 0.45 * grain);
     let band = 1.0 - smoothstep(0.5, 0.78, shoreOff);
-    let patches = foamCover(in.xz0 + dir * (F.time * 0.08), adv * 0.95, foot);
+    let patches = foamCover(in.xz0 + dir * (F.time * 0.08), adv * 0.78, foot);
     foam = sat(mix(foam * (1.0 - band * 0.92), patches, band));
     onSheet = band * patches;
   }
@@ -2181,12 +2191,12 @@ struct BlitOut {
   if (dep < 0.9995 && in.sheet < 0.5) {
     film = smoothstep(0.0, 0.09, in.world.y - worldAt(in.clip.xy, dep).y);
   }
-  let foamCol = mix(vec3<f32>(0.78, 0.82, 0.8), vec3<f32>(0.97, 0.98, 0.96), sat(foam)) * F.day.rgb;
-  base = mix(base, foamCol, foam * mix(0.4, 0.95, onSheet));
+  let foamCol = mix(vec3<f32>(0.68, 0.74, 0.72), vec3<f32>(0.9, 0.92, 0.9), sat(foam)) * F.day.rgb;
+  base = mix(base, foamCol, foam * mix(0.26, 0.58, onSheet));
 
   // On the sheet the wash is whitewater, not a mirror. The open sea keeps its Fresnel.
   let sheetK = smoothstep(0.5, 1.0, in.sheet);
-  var fresK = fres * reflK * (1.0 - foam * mix(0.5, 0.95, onSheet)) * film;
+  var fresK = fres * reflK * (1.0 - foam * mix(0.45, 0.85, onSheet)) * film;
   // The film on the sand is the water and the foam, not a mirror of the horizon.
   fresK = mix(fresK, fresK * 0.6, sheetK);
   var col = mix(base, reflCol, fresK);
@@ -2219,8 +2229,8 @@ struct BlitOut {
     let fi = dot(dmn, SH.along) / SH.dx;
     let border = smoothstep(1.0, 16.0, fi) * smoothstep(SH.nx - 1.0, SH.nx - 16.0, fi);
     let fade = smoothstep(-0.04, 0.04, sh.bed);
-    let body = max(smoothstep(0.012, 0.06, sh.h), smoothstep(0.08, 0.32, sh.foam));
-    alpha = border * fade * mix(body * 0.35, 1.0, smoothstep(0.18, 0.55, foam));
+    let body = max(smoothstep(0.012, 0.06, sh.h), smoothstep(0.12, 0.4, sh.foam));
+    alpha = border * fade * mix(body * 0.32, 0.85, smoothstep(0.22, 0.65, foam));
   }
   return vec4<f32>(tonemap(airOver(col, in.clip.xy)), alpha);
 }

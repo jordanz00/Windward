@@ -41,16 +41,16 @@ ${pack(css)}
     <button type="button" data-q="high">High</button>
   </div>
   <div class="keys">
-    <b>Look</b><span>Click the view to lock the mouse. Move it to look. Esc releases.</span>
-    <b>Walk</b><span>WASD to move. Shift to run. Q to dive in the water.</span>
+    <b>Look</b><span>In Walk or Fly, click the view to lock the mouse. Esc releases.</span>
+    <b>Walk</b><span>WASD to move. Shift to run. Q to dive. Space rises.</span>
     <b>Fly</b><span>F or Fly. WASD, Space up, Ctrl down, Shift faster.</span>
-    <b>Places</b><span>Lagoon, ocean, cove, lake, storm, reef, pool</span>
+    <b>Places</b><span>Orbit a place: drag to look, scroll to zoom. Lagoon, ocean, cove, lake, storm, reef, pool</span>
     <b>Watch</b><span>Hide the interface. C does the same.</span>
     <b>Day</b><span>T next hour, R weather. N music.</span>
     <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
     <b>Esc</b><span>Release look, then open this card</span>
   </div>
-  <p class="fine">Best in Chrome. On a phone, drag to look and tap the water. One HTML file, MIT licensed.</p>
+  <p class="fine">Best in Chrome. On a phone, drag to look while walking; tap the water. One HTML file, MIT licensed.</p>
 </div>
 <nav id="places" aria-label="Places"></nav>
 <div id="chrome">
