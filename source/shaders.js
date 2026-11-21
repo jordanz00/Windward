@@ -227,15 +227,23 @@ fn sampleField(xz: vec2<f32>) -> vec2<f32> {
 }
 
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
-  // Photographic filmic curve: soft shoulder, restrained midtone chroma (not game HDR punch).
-  let x = max(c, vec3<f32>(0.0)) * F.exposure;
-  let y = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
-  let soft = y / (1.0 + max(y - 0.88, vec3<f32>(0.0)) * 0.55);
-  // Pull saturation slightly in the midtones — real photos are less candy than game lighting.
+  // Photographic response: exposure, soft shoulder, midtone desat, subtle sun white-balance.
+  var x = max(c, vec3<f32>(0.0)) * F.exposure;
+  // Neutralize key tint slightly so golden hour warms the scene, not the camera.
+  let gold = sat(F.day.w);
+  let wb = mix(vec3<f32>(1.0), vec3<f32>(0.96, 1.0, 1.06), gold * 0.35);
+  x *= wb;
+  // ACES-inspired shoulder — preserves shadow structure without HDR punch.
+  let a = x * (2.51 * x + 0.03);
+  let b = x * (2.43 * x + 0.59) + 0.14;
+  var soft = a / b;
+  soft = soft / (1.0 + max(soft - 0.92, vec3<f32>(0.0)) * 0.7);
   let luma = dot(soft, vec3<f32>(0.2126, 0.7152, 0.0722));
-  let mid = smoothstep(0.04, 0.18, luma) * (1.0 - smoothstep(0.5, 0.9, luma));
-  let photo = mix(soft, vec3<f32>(luma), mid * 0.22);
-  return pow(clamp(photo, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
+  let mid = smoothstep(0.03, 0.16, luma) * (1.0 - smoothstep(0.48, 0.88, luma));
+  let photo = mix(soft, vec3<f32>(luma), mid * 0.26);
+  // Gentle contrast around mid-gray — landscape photos, not crushed game looks.
+  let c2 = (photo - 0.5) * 1.06 + 0.5;
+  return pow(clamp(c2, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
 }
 
 // ---- Sky. One panorama holds the air and the clouds. It is baked a strip at a time
@@ -330,16 +338,16 @@ fn cloudCover(p: vec2<f32>) -> f32 {
   let w2 = (vec2<f32>(n2((pd + w1) * 0.48 + vec2<f32>(2.0, 8.0)), n2((pd + w1) * 0.48 + vec2<f32>(5.0, 1.0))) - 0.5) * 1.15;
   let q = pd + w1 + w2;
   // Cumulus: sparse cellular mounds with soft billow fill and clear blue between.
-  let cell = n2(q * 0.68) * 0.72 + n2(q * 1.55 + vec2<f32>(4.0, 9.0)) * 0.28;
-  let billow = n2(q * 3.1 + vec2<f32>(1.2, 5.5)) * 0.58 + n2(q * 5.8 + vec2<f32>(8.0, 2.0)) * 0.42;
-  let mound = pow(sat((cell - 0.4) / 0.48), 1.4);
-  let frag = pow(sat((n2(q * 2.4 + vec2<f32>(12.0, 3.0)) - 0.55) / 0.4), 1.8) * 0.55;
-  let cumu = max(mound * (0.52 + 0.48 * billow), frag) * (0.55 + 0.45 * region);
+  let cell = n2(q * 0.62) * 0.7 + n2(q * 1.45 + vec2<f32>(4.0, 9.0)) * 0.3;
+  let billow = n2(q * 2.9 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 5.4 + vec2<f32>(8.0, 2.0)) * 0.45;
+  let mound = pow(sat((cell - 0.38) / 0.5), 1.55);
+  let frag = pow(sat((n2(q * 2.2 + vec2<f32>(12.0, 3.0)) - 0.52) / 0.42), 1.9) * 0.5;
+  let cumu = max(mound * (0.48 + 0.52 * billow), frag) * (0.5 + 0.5 * region);
   // Towering tropical cumulus: rarer, larger footprints that punch upward.
-  let tw = n2(q * 0.26 + vec2<f32>(11.0, 3.0)) * 0.78 + n2(q * 0.85 + vec2<f32>(2.0, 8.0)) * 0.22;
-  let tower = pow(sat((tw - 0.5) / 0.4), 1.7)
-    * (0.4 + 0.6 * n2(q * 2.2 + vec2<f32>(6.0, 1.0)))
-    * smoothstep(0.38, 0.72, region);
+  let tw = n2(q * 0.22 + vec2<f32>(11.0, 3.0)) * 0.8 + n2(q * 0.72 + vec2<f32>(2.0, 8.0)) * 0.2;
+  let tower = pow(sat((tw - 0.48) / 0.42), 1.85)
+    * (0.35 + 0.65 * n2(q * 2.0 + vec2<f32>(6.0, 1.0)))
+    * smoothstep(0.35, 0.7, region);
   // Cirrus: thin elongated streaks on a faster upper-level drift.
   let pdC = p + cloudDriftH(1.2);
   let r = vec2<f32>(pdC.x * 0.38 + pdC.y * 0.1, -pdC.x * 0.07 + pdC.y * 0.92);
@@ -359,39 +367,39 @@ fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   let m = cloudMix();
   let grow = sat(amt);
   // Per-column peak height so some masses are flat and some tower into cauliflower.
-  let peak = 0.65 + 0.7 * n2(p.xz * 0.95 + cloudDrift() * 0.4);
-  let thick = (0.1 + (0.48 * m.x + 1.65 * m.y + 0.18 * m.z + 0.36 * m.w) * pow(grow, 0.42))
-    * mix(0.75, peak, sat(m.x + m.y));
+  let peak = 0.7 + 0.85 * n2(p.xz * 0.9 + cloudDrift() * 0.4);
+  // Towers climb higher; strato stays shallow — real tropical depth variation.
+  let thick = (0.12 + (0.52 * m.x + 2.05 * m.y + 0.16 * m.z + 0.38 * m.w) * pow(grow, 0.4))
+    * mix(0.72, peak, sat(m.x + m.y));
   let baseY = CLOUD_BASE + 0.58 * m.z - 0.05 * m.w + 0.07 * n2(p.xz * 0.35 + vec2<f32>(2.0, 6.0));
   let h = (p.y - baseY) / max(thick, 0.08);
-  if (h < -0.06 || h > 1.2) { return 0.0; }
+  if (h < -0.06 || h > 1.25) { return 0.0; }
   let hh = clamp(h, 0.0, 1.0);
-  let base = smoothstep(0.0, mix(0.05, 0.13, m.w), hh);
-  // Stacked soft lobes — rounded billows instead of a single dome.
-  let lobePh = hh * mix(5.5, 7.5, m.y) + n2(p.xz * 2.1 + cloudDrift() * 0.2) * 3.2;
-  let lobe = 0.55 + 0.45 * sin(lobePh);
-  let dome = (1.0 - pow(hh, mix(1.2, 2.35, m.y))) * mix(1.0, lobe, 0.55 * sat(m.x + m.y));
-  let flat = 1.0 - abs(hh - 0.32) * 1.55;
+  let base = smoothstep(0.0, mix(0.04, 0.12, m.w), hh);
+  // Stacked soft lobes — cauliflower towers, not a single dome.
+  let lobePh = hh * mix(5.8, 8.2, m.y) + n2(p.xz * 2.0 + cloudDrift() * 0.2) * 3.5;
+  let lobe = 0.5 + 0.5 * sin(lobePh);
+  let dome = (1.0 - pow(hh, mix(1.15, 2.55, m.y))) * mix(1.0, lobe, 0.62 * sat(m.x + m.y));
+  let flat = 1.0 - abs(hh - 0.3) * 1.6;
   let profile = mix(mix(dome, flat, m.w), exp(-pow((hh - 0.52) * 3.0, 2.0)), m.z);
-  var d = base * profile * sat(amt * mix(3.6, 5.4, m.y));
-  // Soft radial falloff from the horizontal density core — edges read as volume, not cutouts.
-  let core = sat(amt * 1.8);
-  d *= 0.35 + 0.65 * smoothstep(0.0, 0.55, core) * (1.0 - 0.35 * hh * hh * (1.0 - m.z));
+  var d = base * profile * sat(amt * mix(3.8, 5.8, m.y));
+  // Dense cores, soft edges — volume, not cutout sprites.
+  let core = sat(amt * 1.9);
+  d *= 0.28 + 0.72 * smoothstep(0.0, 0.5, core) * (1.0 - 0.42 * hh * hh * (1.0 - m.z));
   if (fine > 0.5) {
     let drift = cloudDriftH(hh);
     let w = p + vec3<f32>(drift.x, hh * 0.08, drift.y);
-    // Mid-scale cauliflower over sparse fine noise — soft and stable, not boiling.
-    let large = n3(w * 1.7);
-    let mid = n3(w * 4.6 + vec3<f32>(4.0, 1.0, 7.0));
-    let fineN = n3(w * 9.5 + vec3<f32>(2.0, 9.0, 5.0));
-    let b = large * 0.52 + mid * 0.36 + fineN * 0.12;
-    // Tops erode into irregular rims; bases stay denser.
-    let erode = sat(0.48 + (b - 0.5) * 3.4) * (0.1 + 1.05 * hh * hh * (0.55 + 0.9 * m.y));
-    d -= erode * (1.0 - 0.4 * m.z);
+    let large = n3(w * 1.55);
+    let mid = n3(w * 4.2 + vec3<f32>(4.0, 1.0, 7.0));
+    let fineN = n3(w * 8.8 + vec3<f32>(2.0, 9.0, 5.0));
+    let b = large * 0.5 + mid * 0.38 + fineN * 0.12;
+    // Tops erode into irregular rims; bases stay denser and darker.
+    let erode = sat(0.45 + (b - 0.5) * 3.6) * (0.08 + 1.15 * hh * hh * (0.5 + 1.0 * m.y));
+    d -= erode * (1.0 - 0.35 * m.z);
   } else {
-    d -= 0.16 + 0.3 * hh;
+    d -= 0.14 + 0.34 * hh;
   }
-  return sat(d * 2.05);
+  return sat(d * 2.15);
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
@@ -457,25 +465,24 @@ struct SkyBake { @location(0) c: vec4<f32> }
       }
       let d = cloudAt(p, 1.0);
       if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
-      let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.03, 0.0));
-      // Soft self-shadow along the sun ray — longer reach for tower depth.
-      var ls = cloudAt(p + lightDir * 0.05, 1.0) * 0.08;
-      ls += cloudAt(p + lightDir * 0.16, 0.0) * 0.16;
-      ls += cloudAt(p + lightDir * 0.4, 0.0) * 0.32;
-      ls += cloudAt(p + lightDir * 0.95, 0.0) * 0.55;
-      let hK = sat((p.y - CLOUD_BASE) / 1.55);
-      let sunT = exp(-ls * 15.0);
-      // Approximate multiple scattering (powder) so thin lit edges glow without clipping.
-      let powder = 1.0 - exp(-d * 5.2);
-      let phase = 0.65 + 0.75 * pow(sat(mu), 3.2);
-      let silver = pow(sat(mu), 6.0) * sunT * powder * (0.7 + 1.1 * gold);
-      // Darker bases, brighter sun-facing tops — interiors have depth, not flat white.
-      // Deep internal shadow — flat white interiors read as game blobs.
-      let baseAO = mix(0.28, 1.0, sat(hK * 1.05 + sunT * 0.35));
-      let L = sunL * (sunT * (0.48 + 0.5 * powder) * phase + silver * 1.4) * baseAO
-        + skyL * (0.12 + 0.42 * hK + 0.28 * (1.0 - hK) * (0.5 + 0.5 * sunT))
-        + moonL * (0.35 + 0.55 * hK);
-      let al = 1.0 - exp(-d * ds * 36.0);
+      let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.04, 0.0));
+      // Beer-law self-shadow: longer path through dense cores → deep internal darkness.
+      var ls = cloudAt(p + lightDir * 0.04, 1.0) * 0.1;
+      ls += cloudAt(p + lightDir * 0.12, 1.0) * 0.18;
+      ls += cloudAt(p + lightDir * 0.32, 0.0) * 0.35;
+      ls += cloudAt(p + lightDir * 0.75, 0.0) * 0.55;
+      ls += cloudAt(p + lightDir * 1.45, 0.0) * 0.7;
+      let hK = sat((p.y - CLOUD_BASE) / 1.85);
+      let sunT = exp(-ls * 18.5);
+      let powder = 1.0 - exp(-d * 4.8);
+      let phase = 0.55 + 0.85 * pow(sat(mu), 2.8);
+      let silver = pow(sat(mu), 5.5) * sunT * powder * (0.65 + 1.2 * gold);
+      // Massive tropical depth: dark bases, lit rims, soft multiple scatter in the body.
+      let baseAO = mix(0.18, 1.0, sat(hK * 1.1 + sunT * 0.4));
+      let L = sunL * (sunT * (0.42 + 0.55 * powder) * phase + silver * 1.55) * baseAO
+        + skyL * (0.08 + 0.38 * hK + 0.32 * (1.0 - hK) * (0.45 + 0.55 * sunT))
+        + moonL * (0.3 + 0.55 * hK);
+      let al = 1.0 - exp(-d * ds * 40.0);
       C += T * al * L;
       tm += T * al * t;
       wsum += T * al;
@@ -567,15 +574,20 @@ fn waterFill(depth: f32) -> vec3<f32> {
 fn envVol(p: vec3<f32>) -> vec3<f32> {
   let h = sampleField(p.xz).x;
   let above = p.y - h;
-  let forest = smoothstep(1.8, 4.6, h) * smoothstep(-0.65, -0.1, forestNoise(p.xz));
-  let canopy = forest * smoothstep(14.0, 1.5, above) * smoothstep(-0.4, 2.8, above);
+  // Multi-scale canopy: broad forest mass + local crown crowding.
+  let f0 = smoothstep(-0.65, -0.1, forestNoise(p.xz));
+  let f1 = smoothstep(-0.55, 0.05, forestNoise(p.xz * 1.7 + vec2<f32>(9.0, 3.0)));
+  let forest = smoothstep(1.8, 4.6, h) * mix(f0, f1, 0.45);
+  let canopy = forest * smoothstep(16.0, 1.2, above) * smoothstep(-0.5, 3.2, above);
   let hx = sampleField(p.xz + vec2<f32>(2.2, 0.0)).x - sampleField(p.xz - vec2<f32>(2.2, 0.0)).x;
   let hz = sampleField(p.xz + vec2<f32>(0.0, 2.2)).x - sampleField(p.xz - vec2<f32>(0.0, 2.2)).x;
   let cliff = sat(length(vec2<f32>(hx, hz)) * 0.22) * smoothstep(6.0, 1.0, above);
   let cloudOcc = sat(cloudCover(p.xz * 0.001) * 0.55 + 0.15);
-  let open = sat(1.0 - 0.7 * canopy - 0.22 * cliff - 0.18 * cloudOcc * sat(above / 40.0));
-  let dens = 0.32 + 0.5 * canopy + 0.22 * sat(F.wx.w) + 0.18 * sat(F.mood.y) + 0.12 * cliff;
-  let bounce = sat(canopy * 0.6 + cliff * 0.2);
+  // Contact darkening near ground under canopy — AO without a screen pass.
+  let contact = sat(1.0 - above / 2.4) * canopy;
+  let open = sat(1.0 - 0.78 * canopy - 0.28 * cliff - 0.2 * cloudOcc * sat(above / 40.0) - 0.22 * contact);
+  let dens = 0.28 + 0.58 * canopy + 0.22 * sat(F.wx.w) + 0.18 * sat(F.mood.y) + 0.14 * cliff;
+  let bounce = sat(canopy * 0.72 + cliff * 0.22 + contact * 0.25);
   return vec3<f32>(open, dens, bounce);
 }
 
@@ -617,9 +629,12 @@ fn airMix(col: vec3<f32>, dir: vec3<f32>, dist: f32) -> vec3<f32> {
     haze = mix(haze, haze * vec3<f32>(0.88, 1.02, 0.95) + F.amb.rgb * 0.08, ev.g * 0.45);
     keep *= mix(1.0, 0.8, ev.g * sat((dist - 22.0) / 70.0));
   }
-  // Extra contrast fade with distance — distant trees should not stay game-sharp.
-  keep *= mix(1.0, 0.88, smoothstep(60.0, 220.0, dist));
-  return col * keep + haze * (1.0 - keep);
+  // Extra contrast fade with distance — island scale reads as real world, not miniature.
+  keep *= mix(1.0, 0.82, smoothstep(45.0, 200.0, dist));
+  // Distant chroma collapses toward haze — photographic atmospheric perspective.
+  let desat = smoothstep(40.0, 180.0, dist) * 0.35;
+  let c2 = mix(col, vec3<f32>(dot(col, vec3<f32>(0.3, 0.55, 0.15))), desat);
+  return c2 * keep + haze * (1.0 - keep);
 }
 fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
   let d = world - F.camPos;
@@ -722,74 +737,82 @@ fn skyIrradiance(n: vec3<f32>) -> vec3<f32> {
   return (skyLook(n0, 0.0) + skyLook(n1, 0.0) * 1.15 + skyLook(n2, 0.0) * 0.85) * 0.333;
 }
 
-// leaf is 1 for a thin blade, which is lit from whichever side the sun is on: by
-// reflection on the near face, by transmission through it from the far face.
-// gloss is the waxy sheen on a leaf's upper face.
+// Microfacet GGX (shared by land materials). Energy-conserving with Fresnel + Schlick-GGX.
+fn microSpec(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, rough: f32, F0: vec3<f32>) -> vec3<f32> {
+  let a = max(rough * rough, 0.0025);
+  let a2 = a * a;
+  let H = normalize(V + L);
+  let ndh = max(dot(N, H), 0.0);
+  let ndv = max(dot(N, V), 0.001);
+  let ndl = max(dot(N, L), 0.0);
+  let d = ndh * ndh * (a2 - 1.0) + 1.0;
+  let D = a2 / max(PI * d * d, 1e-6);
+  let k = (rough + 1.0) * (rough + 1.0) * 0.125;
+  let G = (ndv / (ndv * (1.0 - k) + k)) * (ndl / (ndl * (1.0 - k) + k));
+  let hv = max(dot(H, V), 0.0);
+  let Fr = F0 + (1.0 - F0) * pow(1.0 - hv, 5.0);
+  return Fr * (D * G * ndl) / max(4.0 * ndv, 1e-4);
+}
+
+// Unified land shading: one lighting frame for terrain, bark, leaves, rocks.
+// leaf ≈ thin-blade transmission weight; gloss ≈ upper-face wax (maps to roughness).
 fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: f32) -> vec3<f32> {
   let n = normalize(nrm);
-  let nl = dot(n, F.sunDir);
+  let V = normalize(F.camPos - world);
+  let L = F.sunDir;
+  let nl = dot(n, L);
   let sh = sunShadow(world) * cloudShade(world.xz, world.y);
   let hemi = n.y * 0.5 + 0.5;
-  // Under the forest the crowns hide half the sky from the ground, the trunks and the low leaves.
   let fld = sampleField(world.xz);
-  let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz)) * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
-  // Env field (Abyssal vol idea): skylight openness + warm bounce under canopy/cliffs.
+  let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz))
+    * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
   let ev = envVol(world);
-  // Forest interiors must go dark — game look is everything equally lit.
-  let open = sat((1.0 - mix(0.72, 0.35, sat(leaf)) * roof) * mix(0.62, 1.0, ev.r));
-  // The same panorama that paints the sky and the water lights the ground. Leaves take more
-  // of the upper sky; a face turned down takes more of the sand bounce.
-  let sky = skyIrradiance(n) * mix(mix(0.32, 0.85, hemi), 0.8, leaf) * open;
-  let ground = vec3<f32>(0.36, 0.3, 0.2) * F.amb.w * (1.0 - hemi) * open;
-  // Soften the lit / unlit edge a little so a hard sun does not cut every trunk in half.
+  let open = sat((1.0 - mix(0.78, 0.38, sat(leaf)) * roof) * mix(0.55, 1.0, ev.r));
   let gold = sat(F.day.w);
-  let sunTerm = mix(max(nl, 0.0), sat(nl * 0.5 + 0.5) * max(nl, 0.0), 0.28);
-  // Warm key on lit faces; sky fill stays cooler so golden hour is directional, not a filter.
-  let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.16, 0.94, 0.72), gold * sunTerm);
-  // Photographic contrast: shade is substantially darker than sunlit faces.
-  let shadeK = mix(0.42, 1.0, sh) * mix(0.62, 1.0, sunTerm * 0.7 + 0.3);
-  var light = F.sunCol * keyTint * sunTerm * sh * 0.98 + sky * mix(0.62, 0.8, gold) * shadeK + ground * 0.32;
-  // Canopy/cliff bounce: litter green-brown under trees, cooler rock bounce on cliffs.
-  light += mix(vec3<f32>(0.12, 0.16, 0.08), vec3<f32>(0.22, 0.18, 0.14), gold) * F.amb.w * ev.b * (0.22 + 0.28 * (1.0 - hemi));
+  let wet = F.wx.y * step(0.05, world.y) * (1.0 - F.under);
+  // Roughness: bark/soil matte; waxed leaf mid; wet pulls toward mirror.
+  let rough = clamp(mix(0.72, 0.38, sat(gloss)) * mix(1.0, 0.82, leaf) * mix(1.0, 0.55, wet), 0.08, 0.95);
+  let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.06, 0.08, 0.04), leaf);
+  // Wrap diffuse for foliage — soft plant silhouette lighting, not hard Lambert cut.
+  let wrap = mix(0.0, 0.55, sat(leaf));
+  let sunDiff = sat((nl + wrap) / (1.0 + wrap));
+  let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.14, 0.94, 0.74), gold * sunDiff);
+  let sky = skyIrradiance(n) * mix(mix(0.28, 0.78, hemi), 0.72, leaf) * open;
+  let ground = mix(vec3<f32>(0.38, 0.32, 0.22), vec3<f32>(0.18, 0.22, 0.1), roof) * F.amb.w * (1.0 - hemi) * open;
+  let bounce = mix(vec3<f32>(0.1, 0.14, 0.07), vec3<f32>(0.2, 0.16, 0.12), gold)
+    * F.amb.w * ev.b * (0.2 + 0.32 * (1.0 - hemi));
+  // Shade is dark; lit faces carry the key. Avoid flat game fill.
+  let shadeK = mix(0.36, 1.0, sh) * mix(0.55, 1.0, sunDiff * 0.75 + 0.25);
+  var light = F.sunCol * keyTint * sunDiff * sh * 0.92 + (sky * mix(0.55, 0.75, gold) + ground * 0.28 + bounce) * shadeK;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
-    // Sun energy attenuated along the beam path through water (Abyssal sunE).
     let absorb = exp(W_KD * (-depth) / max(F.sunDir.y, 0.12));
     light *= absorb * (0.55 + 0.45 * sat(depth / 8.0 + 0.2));
     if (world.y < -0.04) {
       let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
-      let cau = caustic(world.xz);
-      // Softer caustic peaks — photographic underwater light, not disco sparkle.
-      light += F.sunCol * max(nl, 0.0) * sh * (cau * 2.6 - 0.1 * k) * absorb;
+      light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.4 - 0.1 * k) * absorb;
     }
   }
   if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
-  // Rain and dew: bark and soil soak dark, a leaf only deepens, and both take a film that shines.
-  let wet = F.wx.y * step(0.05, world.y) * (1.0 - F.under);
-  // Shade + overall desat — real tropical foliage is duller than game asset greens.
-  let albShade = mix(albedo, vec3<f32>(dot(albedo, vec3<f32>(0.3, 0.55, 0.15))), 0.12 + (1.0 - sunTerm * sh) * 0.28);
-  var col = albShade * mix(1.0, mix(0.6, 0.86, leaf), wet) * light;
-  let V = normalize(F.camPos - world);
-  // Thin-leaf transmission: yellower through-light + soft rim when backlit (restrained).
+  // Albedo loses chroma in open shade — photographic foliage/soil.
+  let albShade = mix(albedo, vec3<f32>(dot(albedo, vec3<f32>(0.3, 0.55, 0.15))), 0.14 + (1.0 - sunDiff * sh) * 0.3);
+  let albWet = albShade * mix(1.0, mix(0.58, 0.84, leaf), wet);
+  // Energy-conserving diffuse: leave room for specular.
+  let ndv = max(dot(n, V), 0.0);
+  let Fs = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+  var col = albWet * (1.0 - Fs) * light;
+  // Microfacet sun specular (shared GGX).
+  let specAmt = mix(0.55, 0.22, leaf) * mix(1.0, 1.35, wet);
+  col += F.sunCol * keyTint * microSpec(n, V, L, rough, F0) * sh * specAmt;
+  // Environment specular: only faces that see the sky.
+  col += skyLook(reflect(-V, n), 0.0) * Fs * mix(0.08, 0.2, gloss) * sat(n.y * 1.4 + 0.15) * open * 0.55;
+  // Thin-leaf subsurface: yellower transmitted light when backlit.
   let trans = max(-nl, 0.0) * leaf;
-  col += albShade * vec3<f32>(1.18, 1.38, 0.28) * F.sunCol * trans * sh * (0.55 + 0.25 * leaf);
-  col += albShade * F.sunCol * pow(sat(1.0 - abs(dot(n, V))), 3.2) * trans * sh * 0.12;
-  let H = normalize(V + F.sunDir);
-  // A wet leaf glints in the sun; wet bark and soil are mostly just dark. The sky shows in
-  // a wet face only if the face is turned up to it, not round the edge of every shape.
-  let sheen = max(gloss * 0.7, wet * mix(0.05, 0.28, leaf));
-  if (sheen > 0.0) {
-    let ndv = max(dot(n, V), 0.0);
-    let fr = 0.02 + 0.85 * pow(1.0 - ndv, 5.0);
-    // Soft, low specular — matte foliage, not plastic.
-    let hard = mix(mix(28.0, 52.0, leaf), 44.0, wet);
-    col += F.sunCol * pow(max(dot(n, H), 0.0), hard) * step(0.0, nl) * sh * sheen * mix(0.14, 0.28, leaf);
-    col += skyLook(reflect(-V, n), 0.0) * fr * max(gloss * 0.35, wet * mix(0.03, 0.08, leaf) * sat(n.y * 1.5)) * 0.18;
-  }
+  col += albWet * vec3<f32>(1.22, 1.42, 0.26) * F.sunCol * trans * sh * (0.5 + 0.28 * leaf);
+  col += albWet * F.sunCol * pow(sat(1.0 - abs(dot(n, V))), 3.4) * trans * sh * 0.1;
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
-    let spec = pow(max(dot(n, H), 0.0), 56.0);
-    let wet = 1.0 - sat(world.y / 0.7);
-    col += F.sunCol * spec * sh * wet * 0.09;
+    let shoreWet = 1.0 - sat(world.y / 0.7);
+    col += F.sunCol * microSpec(n, V, L, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.35;
   }
   return applyFog(col, world);
 }
@@ -1066,11 +1089,16 @@ fn plantShift(L: vec2<f32>, sway: f32) -> vec3<f32> {
 }
 // Height-powered tip flutter (Abyssal sway) — independent of plant lean direction.
 fn tipSway(at: vec2<f32>, h: f32) -> vec2<f32> {
+  // Hierarchical: slow trunk lean + mid crown + fast tip flutter (Abyssal multi-frequency).
   let ph = dot(at, vec2<f32>(0.031, 0.017));
-  let a = 0.016 * pow(max(h, 0.0), 1.25);
+  let hh = max(h, 0.0);
+  let a0 = 0.01 * pow(hh, 1.05);
+  let a1 = 0.012 * pow(hh, 1.25);
+  let a2 = 0.007 * pow(hh, 1.55);
   let t = F.time;
-  return a * (vec2<f32>(sin(t * 0.5 + ph + h * 0.09), cos(t * 0.37 + ph * 1.3 + h * 0.07))
-    + 0.35 * vec2<f32>(sin(t * 1.3 + ph * 3.0 + h * 0.3), cos(t * 1.1 + ph * 2.0 + h * 0.23)));
+  return a0 * vec2<f32>(sin(t * 0.22 + ph), cos(t * 0.18 + ph * 1.2))
+    + a1 * vec2<f32>(sin(t * 0.55 + ph + hh * 0.09), cos(t * 0.42 + ph * 1.3 + hh * 0.07))
+    + a2 * vec2<f32>(sin(t * 1.45 + ph * 3.1 + hh * 0.35), cos(t * 1.2 + ph * 2.2 + hh * 0.28));
 }
 // How one vertex of a plant gives to the wind. i1.z is how exposed the plant stands. A leaf
 // has no mass: on top of the plant's lean it streams downwind and flutters, faster in a
@@ -1225,15 +1253,16 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     let rib = smoothstep(0.26, 0.0, abs(in.uv.x));
     alb = mix(alb, alb * 1.24 + vec3<f32>(0.014, 0.02, 0.0), rib * 0.5);
     // Desaturate mature faces slightly; keep young tips warmer.
-    alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.55, 0.15))), 0.22 + 0.1 * (1.0 - in.uv.y));
-    let grit = 0.82 + 0.14 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.06 * sin(in.uv.y * 29.0);
+    alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.55, 0.15))), 0.26 + 0.12 * (1.0 - in.uv.y));
+    let grit = 0.8 + 0.15 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.07 * sin(in.uv.y * 29.0);
     alb *= grit;
-    // Midrib V-fold in the shading normal — leaflets read as cupped blades, not flat cards.
+    // Vein micro-normals: midrib V-fold + fine lateral ridges.
     let side = sign(in.uv.x + 1e-4);
-    n = normalize(n + side * cross(n, vec3<f32>(0.0, 1.0, 0.0)) * (0.18 + 0.22 * (1.0 - rib)) * select(-0.4, 1.0, upper));
-    // Transmission toward the tip; dull wax — thin film, not painted plastic.
-    leaf = select(1.15, 0.55, upper) * (0.85 + 0.25 * in.uv.y);
-    gloss = select(0.008, 0.035 + 0.035 * rib, upper);
+    let vein = sin(in.uv.y * 48.0 + in.uv.x * 6.0) * 0.04 * (1.0 - rib);
+    n = normalize(n + side * cross(n, vec3<f32>(0.0, 1.0, 0.0)) * (0.2 + 0.24 * (1.0 - rib) + vein) * select(-0.4, 1.0, upper));
+    // Two-sided: underside transmits more; upper face has dull wax only.
+    leaf = select(1.35, 0.48, upper) * (0.82 + 0.28 * in.uv.y);
+    gloss = select(0.006, 0.028 + 0.04 * rib, upper);
     if (in.world.y < -0.1) { gloss *= 0.15; leaf *= 0.45; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
@@ -1456,10 +1485,11 @@ fn seaFade(dist: f32) -> f32 {
 fn seaBands(dist: f32, foot: f32) -> vec4<f32> {
   let elev = max(F.camPos.y, 0.5);
   let alt = sat((elev - 10.0) / 130.0);
-  let fine = smoothstep(110.0, 22.0, dist) * (1.0 - smoothstep(0.28, 1.5, foot));
-  let farK = smoothstep(55.0, 380.0, dist) * mix(0.5, 1.0, alt);
+  let fine = smoothstep(100.0, 20.0, dist) * (1.0 - smoothstep(0.25, 1.4, foot));
+  // Far band starts earlier so distant water softens into atmosphere instead of staying game-sharp.
+  let farK = smoothstep(42.0, 320.0, dist) * mix(0.55, 1.0, alt);
   let midK = sat(1.0 - fine - farK * 0.55);
-  let roughLift = sat(farK * 0.75 + smoothstep(0.1, 1.35, foot) * 0.5 + alt * farK * 0.35);
+  let roughLift = sat(farK * 0.85 + smoothstep(0.1, 1.35, foot) * 0.55 + alt * farK * 0.4);
   return vec4<f32>(fine, midK, farK, roughLift);
 }
 
@@ -1635,11 +1665,12 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   let grain = n2(xz * 0.11 + vec2<f32>(F.time * 0.04, 0.0));
   let foam = sat(crest - 0.55) * smoothstep(0.42, 0.78, grain) * seaFade(distS)
     * max(F.mood.w, 0.0) * calm * (1.0 - smoothstep(0.4, 1.8, foot)) * (1.0 - band.z * 0.7);
-  var base = F.deepC.rgb;
+  // Far ocean: depth color + sky haze — not a flat paint chip.
+  var base = mix(F.deepC.rgb, hazeColor(vec3<f32>(V.x, max(V.y, 0.02), V.z)) * 0.35 + F.deepC.rgb * 0.65, band.z * 0.55);
   base = mix(base, vec3<f32>(0.86, 0.88, 0.86) * F.day.rgb, foam * 0.4);
-  var col = mix(base, reflCol, fres * (1.0 - foam * 0.5));
+  var col = mix(base, reflCol, fres * (1.0 - foam * 0.5) * (1.0 - band.z * 0.15));
   // Soft glints only — hard GGX fireflies shimmer across the horizon.
-  col += ggxGlint(N, V, max(rough, 0.028), fres) * mix(0.1, 0.04, band.z) * (1.0 - foam);
+  col += ggxGlint(N, V, max(rough, 0.032), fres) * mix(0.09, 0.03, band.z) * (1.0 - foam);
   return airMix(col, -V, distS);
 }
 
@@ -2296,7 +2327,7 @@ struct BlitOut {
   var reflCol = skyReflect(reflect(-V, reflN));
   let Rd = reflect(-V, reflN);
   // Horizon: lean distant reflections into aerial haze so the sea does not detach as a hard plate.
-  reflCol = mix(reflCol, hazeColor(Rd), band.z * 0.18);
+  reflCol = mix(reflCol, hazeColor(Rd), band.z * 0.28);
   if (F.reflOn > 0.5) {
     var uv = frag.xy / F.res;
     let tv = normalize(in.xz0 - F.camPos.xz + vec2<f32>(1e-4, 0.0));
@@ -2331,7 +2362,8 @@ struct BlitOut {
       // The sand is a few centimetres under this pixel. Grazing view does not
       // turn that into a metre of water, or the sheet goes milky.
       let depth = max(sh.h, 0.004) / max(ndv, 0.62);
-      let sigma = vec3<f32>(0.55, 0.09, 0.045) * max(F.deepC.w, 0.08);
+      // Same optical family as underwater Beer's law (W_KD) — one water system above/below.
+      let sigma = (W_KD * 9.5 + vec3<f32>(0.12, 0.02, 0.01)) * max(F.deepC.w, 0.08);
       let trans = exp(-depth * sigma);
       let sceneCol = textureLoad(sceneTex, vec2<i32>(shifted), 0).rgb;
       let scatter = mix(F.shalC.rgb, F.deepC.rgb, sat(sh.h / 0.45));
@@ -2345,7 +2377,7 @@ struct BlitOut {
         if (rw.y < in.world.y - 0.03) { look = shifted; sp = rw; d = in.world.y - rw.y; }
       }
       let depth = max(d, 0.02);
-      let sigma = vec3<f32>(0.48, 0.075, 0.04) * max(F.deepC.w, 0.08);
+      let sigma = (W_KD * 8.2 + vec3<f32>(0.1, 0.018, 0.01)) * max(F.deepC.w, 0.08);
       let trans = exp(-depth * sigma);
       let sceneCol = textureLoad(sceneTex, vec2<i32>(look), 0).rgb;
       let scatter = mix(F.shalC.rgb, F.deepC.rgb, sat(depth / 7.0));

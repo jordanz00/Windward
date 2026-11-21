@@ -304,32 +304,40 @@ function makePalm(seed, lod) {
   const add = (a, b, k) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
   const unit = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-  // Age / exposure morph: young short dense crowns, old tall sparse, coastal heavy lean.
-  const age = rnd();
-  const coastal = rnd();
-  const H = 5.2 + age * 4.8 + rnd() * 2.2;
-  const lean = 0.06 + coastal * coastal * 0.55 + rnd() * rnd() * 0.35;
-  const topSway = 0.075 + (1 - age) * 0.04;
-  const trunkFat = 0.095 + age * 0.045 + rnd() * 0.03;
+  // Four structural families — genuinely different architecture, not scaled clones.
+  // 0 young upright dense · 1 classic mature · 2 coastal lean · 3 old tall sparse
+  const family = ((seed * 17 + (rnd() * 97) | 0) % 4);
+  const age = family === 0 ? 0.12 + rnd() * 0.22 : family === 3 ? 0.72 + rnd() * 0.28 : 0.28 + rnd() * 0.5;
+  const coastal = family === 2 ? 0.65 + rnd() * 0.35 : family === 1 ? rnd() * 0.35 : rnd() * 0.2;
+  const H = family === 0 ? 4.2 + rnd() * 1.8
+    : family === 2 ? 5.5 + rnd() * 2.8
+    : family === 3 ? 8.5 + rnd() * 3.5
+    : 6.0 + rnd() * 3.2;
+  const lean = family === 2 ? 0.35 + rnd() * 0.55
+    : family === 3 ? 0.08 + rnd() * 0.28
+    : 0.05 + coastal * 0.35 + rnd() * 0.15;
+  const topSway = 0.07 + (1 - age) * 0.045 + (family === 2 ? 0.02 : 0);
+  const trunkFat = (family === 0 ? 0.08 : family === 3 ? 0.12 : 0.095) + age * 0.04 + rnd() * 0.028;
   const sides = [12, 7, 4][lod], rings = [36, 12, 5][lod];
   // Trunk: out of the ground at an angle, then curving back up toward the light.
   let P = [0, -0.2, 0];
   let last = null;
-  const barkTone = [0.34 + age * 0.08, 0.30 + age * 0.05, 0.26 + age * 0.04];
-  // Gentle S-curve / lateral wander so trunks are not perfect arcs of a circle.
-  const bowZ = (rnd() - 0.5) * 0.18;
-  const bowX = (rnd() - 0.5) * 0.08;
+  const barkTone = [0.32 + age * 0.1 + family * 0.01, 0.28 + age * 0.06, 0.24 + age * 0.05];
+  // S-curve / lateral wander — stronger on coastal and old families.
+  const bowZ = (rnd() - 0.5) * (family === 2 ? 0.32 : family === 3 ? 0.22 : 0.14);
+  const bowX = (rnd() - 0.5) * (family === 2 ? 0.14 : 0.08);
+  const taper = family === 3 ? 0.038 : 0.028;
   for (let i = 0; i <= rings; i++) {
     const t = i / rings, s = t * H;
-    const th = lean * (1 - 0.92 * Math.pow(t, 0.75));
+    const th = lean * (1 - 0.92 * Math.pow(t, family === 2 ? 0.62 : 0.75));
     const T = unit([Math.sin(th) + bowX * Math.sin(t * 3.1), Math.cos(th), bowZ * Math.sin(t * 2.7)]);
     const X0 = unit(cross(T, [0, 0, 1]));
     const X = Math.hypot(X0[0], X0[1], X0[2]) < 0.2 ? unit(cross(T, [0, 1, 0])) : X0;
     const Z = unit(cross(X, T));
-    // Slight oval cross-section + scar bumps along the height.
-    const oval = 0.92 + 0.1 * Math.sin(t * 9.0 + seed);
-    const scar = 1 + 0.045 * Math.sin(t * 22.0 + seed * 0.7);
-    const r = (trunkFat - 0.028 * t + 0.16 * Math.exp(-s / 0.45) + 0.055 * smooth01(0.92, 1, t)) * scar;
+    // Oval cross-section + scar bumps along the height.
+    const oval = 0.9 + 0.12 * Math.sin(t * 9.0 + seed);
+    const scar = 1 + (0.04 + age * 0.02) * Math.sin(t * 22.0 + seed * 0.7);
+    const r = (trunkFat - taper * t + 0.16 * Math.exp(-s / 0.45) + 0.055 * smooth01(0.92, 1, t)) * scar;
     const row = [];
     for (let k = 0; k <= sides; k++) {
       const a = k / sides * 6.2832, ca = Math.cos(a) * oval, sa = Math.sin(a);
@@ -342,27 +350,37 @@ function makePalm(seed, lod) {
     if (i < rings) P = add(P, T, H / rings);
   }
   const C = P;
-  // Cap geometry so one palm stays under 65535 verts (packed as uint16). Density comes from
-  // width, droop and fold, not from blowing past the index limit.
-  const nf = 18 + ((rnd() * 7 + age * 4) | 0), nd = 1 + ((rnd() * 3 + age) | 0);
+  // Cap geometry so one palm stays under 65535 verts (packed as uint16).
+  const nf = family === 0 ? 22 + ((rnd() * 6) | 0)
+    : family === 3 ? 14 + ((rnd() * 5) | 0)
+    : family === 2 ? 16 + ((rnd() * 6) | 0)
+    : 18 + ((rnd() * 7) | 0);
+  const nd = family === 3 ? 2 + ((rnd() * 3) | 0) : 1 + ((rnd() * 2 + age) | 0);
   const nseg = [18, 8, 4][lod], lseg = [4, 3, 2][lod];
-  // Whole-crown bias: real palms lean and pack fronds toward the light, not a perfect spiral.
-  const crownBias = (rnd() - 0.5) * 0.7;
-  // Sky gaps between fronds — solid fans look like game props against the sky.
-  const crownGap = 0.18 + rnd() * 0.28;
+  // Whole-crown bias: pack fronds toward light / wind — asymmetric silhouettes.
+  const crownBias = (rnd() - 0.5) * (family === 2 ? 1.0 : 0.65);
+  const crownGap = family === 0 ? 0.08 + rnd() * 0.12
+    : family === 3 ? 0.28 + rnd() * 0.32
+    : 0.16 + rnd() * 0.26;
+  const frondLen0 = family === 0 ? 3.2 : family === 3 ? 4.4 : 3.8;
   for (let j = 0; j < nf + nd; j++) {
     const dead = j >= nf;
     // 0 has just opened at the top of the crown. 1 is about to fall.
     const age = dead ? 1.1 : (j + rnd() * 0.85) / nf;
     // Irregular azimuth / elevation: real crowns are not a perfect spiral of feathers.
-    const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 1.55 + Math.sin(j * 1.7 + seed) * 0.45;
-    const el0 = dead ? -1.25 - rnd() * 0.3 : 1.05 - Math.pow(age, 1.08) * 1.95 + (rnd() - 0.5) * 0.5 + crownBias * 0.18;
-    const L = dead ? 2.5 + rnd() : 3.7 + 2.1 * Math.sin(Math.min(1, age * 1.2 + 0.08) * Math.PI) + rnd() * 0.7;
-    // Outer half droops harder; some fronds are more wind-swept than others.
-    const droop = dead ? 0.15 : 0.9 + age * 1.15 + rnd() * 0.55;
-    const curl = (rnd() - 0.5) * 1.4 + crownBias * 0.4, twist = (rnd() - 0.5) * 3.1 * (0.25 + age);
-    const tipSway = 0.16 + rnd() * 0.22;
-    const widthK = 0.016 + rnd() * 0.01, lenK = 0.8 + rnd() * 0.55, hang0 = rnd() * 0.5;
+    const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 1.65 + Math.sin(j * 1.7 + seed) * 0.5;
+    const el0 = dead ? -1.3 - rnd() * 0.35
+      : (family === 0 ? 1.15 : 1.02) - Math.pow(age, family === 3 ? 0.95 : 1.1) * (family === 3 ? 2.15 : 1.9)
+        + (rnd() - 0.5) * 0.55 + crownBias * 0.2;
+    const L = dead ? 2.4 + rnd()
+      : frondLen0 + (family === 3 ? 2.4 : 2.0) * Math.sin(Math.min(1, age * 1.2 + 0.08) * Math.PI) + rnd() * 0.75;
+    // Outer half droops harder; old/coastal hang more.
+    const droop = dead ? 0.15
+      : (family === 3 ? 1.15 : family === 2 ? 1.05 : 0.85) + age * 1.2 + rnd() * 0.55;
+    const curl = (rnd() - 0.5) * 1.5 + crownBias * 0.45, twist = (rnd() - 0.5) * 3.2 * (0.25 + age);
+    const tipSway = 0.14 + rnd() * 0.24;
+    const widthK = (family === 0 ? 0.018 : 0.014) + rnd() * 0.01;
+    const lenK = 0.75 + rnd() * 0.6, hang0 = rnd() * 0.55 + (family === 3 ? 0.2 : 0);
     // Leaflets draw from their own stream, so every level builds the same fronds.
     const fr = seeded(seed * 131 + j * 977 + 5);
     // The rachis starts in the crown and bends over under its own weight, twisting as it goes.
