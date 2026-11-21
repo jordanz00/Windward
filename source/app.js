@@ -731,6 +731,7 @@ function waveY(world, x, z, time) {
     const k = Math.PI * 2 / len;
     const feel = 1 - smooth01(len * 0.08, len * 0.45, D);
     let As = w[2] * wp.amp * damp * (1 + feel * 0.85);
+    if (i < 2) As *= 0.3 + 0.7 * (1 - smooth01(2, 8, D));
     if (i >= 4) As *= wp.cx;
     const Q = Math.min(w[4] + feel * 0.45, 1.05);
     const steep = k * As * Q;
@@ -1497,7 +1498,8 @@ async function main() {
         { binding: 2, visibility: FS, texture: { sampleType: 'float' } },
         { binding: 3, visibility: FS, sampler: { type: 'filtering' } },
         { binding: 4, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 5, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
+        { binding: 5, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 6, visibility: FS, texture: { sampleType: 'unfilterable-float' } }
       ]
     });
     const blitLayout = device.createBindGroupLayout({
@@ -1686,7 +1688,7 @@ async function main() {
       cols: await oceanEntry('ifft_cols'),
       slopes: await oceanEntry('slopes')
     };
-    const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 80], 0.32, 0, 11);
+    const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 80], 0.4, 0, 11);
     const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
     const oceanU = new Float32Array(4);
     function oceanCascade(h0, size) {
@@ -1714,7 +1716,8 @@ async function main() {
       });
       return { size, ub, view, bg };
     }
-    const cascades = [oceanCascade(shapeH0, 220), oceanCascade(glintH0, 4)];
+    const chopH0 = makeOceanH0(OCEAN_N, 24, [6.5, 1.5], 0.001, [0.45, 5], 0, 0.1, 47, 1.6);
+    const cascades = [oceanCascade(shapeH0, 220), oceanCascade(glintH0, 4), oceanCascade(chopH0, 24)];
     const shoreSim = await createShore(
       device, world,
       shore || { x: -150, z: 6, fx: -1, fz: 0 },
@@ -1815,7 +1818,8 @@ async function main() {
         { binding: 2, resource: rv },
         { binding: 3, resource: samp },
         { binding: 4, resource: cascades[0].view },
-        { binding: 5, resource: cascades[1].view }
+        { binding: 5, resource: cascades[1].view },
+        { binding: 6, resource: cascades[2].view }
       ] });
     }
     resize();

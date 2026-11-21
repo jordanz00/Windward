@@ -184,7 +184,7 @@ function oceanIfft2(h0, n) {
 // h0 is tightly packed vec2 (re, im). size is the tile in meters.
 // band is [minWavelength, maxWavelength] in meters. target is the std-dev
 // of height (shape) or of slope (glint) after the inverse transform.
-function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed) {
+function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed, tilt) {
   const rnd = oceanRand(seed);
   const h0 = new Float32Array(n * n * 2);
   const g = 9.81;
@@ -215,7 +215,8 @@ function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed) {
       const swell = (kx * sdx + kz * sdz) / k;
       const longW = Math.max(0, Math.min(1, (lambda - 12) / 30));
       const dir = spread(kd, 2) * 0.8 + spread(swell, 6) * (0.35 + longW * 0.4);
-      const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * dir;
+      // tilt lifts the short end of the band. Wind chop keeps its slope there.
+      const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * dir * (tilt ? Math.pow(k, tilt) : 1);
       const amp = Math.sqrt(Math.max(phillips, 0) * 0.5);
       h0[o] = oceanGauss(rnd) * amp;
       h0[o + 1] = oceanGauss(rnd) * amp;
