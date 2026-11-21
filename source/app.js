@@ -2993,11 +2993,14 @@ async function main() {
         // to be that many metres up, so the light has to come through the fronds.
         if (qstr.has('shade')) {
           envStep(0, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
-          let best = 0, bd = 1e9;
-          for (let i = 0; i < scatter.n; i++) if (palmIds.includes(scatter.kind[i])) { const d = Math.hypot(scatter.data[i * ISTRIDE] - camX, scatter.data[i * ISTRIDE + 2] - camZ); if (d < bd) { bd = d; best = i * ISTRIDE; } }
-          const D = scatter.data, az = Math.atan2(env.key[2], env.key[0]) + wp.sunAng, hl = Math.hypot(env.key[0], env.key[2]);
-          const t = ((num('shade') || 8.5) * D[best + 4] - 1.6) / env.key[1];
-          camX = D[best] - Math.cos(az) * hl * t; camZ = D[best + 2] - Math.sin(az) * hl * t; camY = Math.max(fieldSample(world, camX, camZ), 0) + 1.6;
+          // The nearest palm whose shadow falls on dry land: a low sun throws it a long way.
+          const D = scatter.data, az = Math.atan2(env.key[2], env.key[0]) + wp.sunAng, hl = Math.hypot(env.key[0], env.key[2]) / Math.max(env.key[1], 0.05);
+          let bd = 1e9, bx = camX, bz = camZ;
+          for (let i = 0; i < scatter.n; i++) if (palmIds.includes(scatter.kind[i])) {
+            const o = i * ISTRIDE, t = ((num('shade') || 8.5) * D[o + 4] - 1.6) * hl, x = D[o] - Math.cos(az) * t, z = D[o + 2] - Math.sin(az) * t, d = Math.hypot(D[o] - camX, D[o + 2] - camZ);
+            if (d < bd && fieldSample(world, x, z) > 0.6) { bd = d; bx = x; bz = z; }
+          }
+          camX = bx; camZ = bz; camY = fieldSample(world, camX, camZ) + 1.6;
           fly = true;
         }
         // bug=<kind> frames the nearest one from bd metres, in state bst if given; bwarm runs

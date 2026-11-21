@@ -456,7 +456,7 @@ fn airKeep(dist: f32, dy: f32) -> vec3<f32> {
   let s = dy / 150.0;
   var lay = exp(-max(F.camPos.y, 0.0) / 150.0);
   if (abs(s) > 1e-3) { lay *= (1.0 - exp(-s)) / s; }
-  let veil = (0.00042 + 0.0016 * F.wx.w * F.wx.w + 0.003 * F.wx.x) * min(lay, 4.0);
+  let veil = (0.00042 + 0.0012 * F.wx.w * F.wx.w + 0.003 * F.wx.x) * min(lay, 4.0);
   return exp(-dist * (vec3<f32>(0.46, 1.08, 2.65) * 1e-4 + veil));
 }
 fn airMix(col: vec3<f32>, dir: vec3<f32>, dist: f32) -> vec3<f32> {
@@ -565,12 +565,14 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   col += albedo * vec3<f32>(1.25, 1.45, 0.3) * F.sunCol * max(-nl, 0.0) * sh * leaf;
   let V = normalize(F.camPos - world);
   let H = normalize(V + F.sunDir);
-  let sheen = max(gloss, wet * mix(0.45, 1.0, leaf));
+  // A wet leaf glints in the sun; wet bark and soil are mostly just dark. The sky shows in
+  // a wet face only if the face is turned up to it, not round the edge of every shape.
+  let sheen = max(gloss, wet * mix(0.15, 0.8, leaf));
   if (sheen > 0.0) {
     let ndv = max(dot(n, V), 0.0);
     let fr = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
-    col += F.sunCol * pow(max(dot(n, H), 0.0), mix(36.0, 90.0, wet)) * step(0.0, nl) * sh * sheen * (0.55 + wet);
-    col += F.amb.rgb * fr * sheen * 0.55;
+    col += F.sunCol * pow(max(dot(n, H), 0.0), mix(36.0, 70.0, wet)) * step(0.0, nl) * sh * sheen * (0.55 + 0.6 * wet);
+    col += F.amb.rgb * fr * max(gloss, wet * mix(0.1, 0.2, leaf) * sat(n.y * 1.5)) * 0.55;
   }
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let spec = pow(max(dot(n, H), 0.0), 56.0);
@@ -809,7 +811,7 @@ struct GeoV {
   var col = shade(in.world, n, alb, 0.0, 0.0);
   // Wet sand is a mirror at a low angle. Dry sand never is.
   let Vt = normalize(F.camPos - in.world);
-  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * step(-0.02, in.world.y), washWet * mix(0.3, 1.0, sandy)) * (1.0 - slope * 3.0);
+  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * step(-0.02, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
   if (gloss > 0.01 && F.under < 0.5) {
     let nw = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.8));
     let fr = 0.02 + 0.98 * pow(1.0 - max(dot(nw, Vt), 0.0), 5.0);
@@ -1571,22 +1573,24 @@ const DROP_SPRAY: u32 = 60000u;
     var top = 0.0;
     if (fld.x < 0.25 && fld.x > -3.2) {
       let S = seaAt(home, fld.y, deep);
-      force = S.brk * smoothstep(2.8, 0.4, deep);
+      force = sat(S.brk * 1.6) * smoothstep(2.8, 0.4, deep);
       top = S.disp.y;
       let sh = shoreFetch(home);
-      if (sh.inside > 0.5) { force = max(force, sat(sh.foam * 1.3) * smoothstep(0.7, 2.2, length(sh.vel))); top = max(top, sh.eta); }
+      if (sh.inside > 0.5) { force = max(force, sat(sh.foam * 1.3) * smoothstep(0.4, 1.6, length(sh.vel))); top = max(top, sh.eta); }
     }
     let life = fract(F.time * (0.55 + 0.3 * hh.x) + hh.y * 9.0);
     let blow = clamp(F.wind.z / 5.0, 0.35, 2.4);
-    let rise = (0.25 + 1.5 * pow(life, 0.55)) * (0.5 + 0.5 * blow) - 1.1 * life * life;
+    // Spray off small surf stays low: thrown up a metre or so, then falling as it drifts.
+    let rise = (0.15 + 0.85 * pow(life, 0.55)) * (0.6 + 0.4 * blow) - 0.75 * life * life;
     let w = vec3<f32>(home.x, max(top, 0.0) + rise, home.y) + vec3<f32>(F.wind.x, 0.0, F.wind.y) * F.wind.z * 0.45 * life * 1.6;
-    let rad = (0.35 + 1.5 * life) * (0.7 + 0.6 * hh.x);
+    let rad = (0.25 + 0.85 * life) * (0.7 + 0.6 * hh.x);
     pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.02, force);
     let mu = dot(normalize(w - F.camPos), F.sunDir);
-    light = F.amb.rgb * 0.95 + F.sunCol * sunVis(w) * cloudShade(w.xz, 0.0) * (0.35 + 1.3 * pow(0.5 + 0.5 * mu, 5.0));
-    a = force * sin(life * 3.14159) * 0.2 * blow;
-    o.form = 2.0;
+    // Thin spray is greyer than foam with the sun behind the eye and brighter against it.
+    light = F.amb.rgb * 0.7 + F.sunCol * sunVis(w) * cloudShade(w.xz, 0.0) * (0.2 + 1.6 * pow(0.5 + 0.5 * mu, 5.0));
     o.dist = length(w - F.camPos);
+    a = force * sin(life * 3.14159) * 0.24 * blow * smoothstep(1.5, 7.0, o.dist);
+    o.form = 2.0;
   }
   o.col = vec4<f32>(airMix(light, normalize(pos - F.camPos), o.dist), a * (1.0 - F.under));
   o.clip = F.viewProj * vec4<f32>(pos, 1.0);
@@ -1684,7 +1688,9 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
     return vec4<f32>(L, 1.0);
   }
   if (rd.y < -1e-4) { far = min(far, F.camPos.y / -rd.y); }
-  let ph = 0.3 + 1.7 * pow(0.5 + 0.5 * mu, 6.0);
+  // Droplets throw most of their light nearly straight on, so lit air is brightest close
+  // round the sun: that is where a shaft through the fronds shows.
+  let ph = 0.3 + 1.7 * pow(0.5 + 0.5 * mu, 6.0) + 5.0 * pow(0.5 + 0.5 * mu, 48.0);
   let amb = F.amb.rgb * 0.9;
   let cloud0 = cloudShade(F.camPos.xz, F.camPos.y);
   let nearEnd = min(far, 46.0);
@@ -1692,7 +1698,10 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   for (var i = 0; i < 12; i++) {
     let p = F.camPos + rd * (dn * (f32(i) + jit));
     let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * dn * f32(i), F.camPos.y + rd.y * dn * f32(i + 1), dn));
-    L += T * a * (F.sunCol * sunVis(p) * cloud0 * ph + amb);
+    // The water in the air changes slowly along the ray; what the fronds let through does
+    // not, so each step asks the shadow map three times along its length.
+    let lit = (sunVis(p - rd * (dn * 0.333)) + sunVis(p) + sunVis(p + rd * (dn * 0.333))) / 3.0;
+    L += T * a * (F.sunCol * lit * cloud0 * ph + amb);
     T *= 1.0 - a;
   }
   if (far > 46.0) {
