@@ -40,7 +40,7 @@ You stay on the sand. Step into the water and you swim; hold `Q` to go under and
 
 ## How it is built
 
-`source/` is the readable copy. `node source/build.mjs` writes `index.html` next to this file and prints the sizes of the source, the page, the script in it and the shaders in that. The page is the source with indentation, blank lines and comment lines taken out; no names are changed and no lines are joined, so an error in the page still points at a line you can find. `node source/build.mjs --dev` writes the page with the source as it is.
+`source/` is the readable copy. `node source/build.mjs` writes `index.html` next to this file and prints source, page, gzip and brotli sizes. The shipped page strips comments and spare whitespace (including inside WGSL templates) but keeps names unchanged so runtime errors still map to written identifiers. `node source/build.mjs --dev` writes the page with the source as it is.
 
 | File | What it is |
 |---|---|
