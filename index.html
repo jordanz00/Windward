@@ -503,6 +503,26 @@ function shaderCode(res, span) {
 @group(0) @binding(2) var ripTex: texture_2d<f32>;
 @group(0) @binding(3) var shadowMap: texture_depth_2d;
 @group(0) @binding(4) var shadowSamp: sampler_comparison;
+struct ShoreU {
+  origin: vec2<f32>,
+  dx: f32,
+  nx: f32,
+  along: vec2<f32>,
+  sea: vec2<f32>,
+  time: f32,
+  dt: f32,
+  amp: f32,
+  spd: f32,
+  dir: f32,
+  nz: f32,
+  frq: f32,
+  pad: f32,
+  waves: array<vec4<f32>, 4>,
+  steep: vec4<f32>,
+}
+@group(0) @binding(5) var<uniform> SH: ShoreU;
+@group(0) @binding(6) var shoreTex: texture_2d<f32>;
+@group(0) @binding(7) var shoreWet: texture_2d<f32>;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
@@ -533,6 +553,46 @@ fn n2(p: vec2<f32>) -> f32 {
              mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
 }
 
+struct ShoreS {
+  h: f32,
+  vel: vec2<f32>,
+  foam: f32,
+  wet: f32,
+  bed: f32,
+  inside: f32,
+  eta: f32,
+}
+fn shoreFetch(xz: vec2<f32>) -> ShoreS {
+  var o: ShoreS;
+  o.h = 0.0; o.vel = vec2<f32>(0.0); o.foam = 0.0; o.wet = 0.0; o.bed = 0.0; o.inside = 0.0; o.eta = 0.0;
+  let d = xz - SH.origin;
+  let fi = dot(d, SH.along) / SH.dx - 0.5;
+  let fj = dot(d, SH.sea) / SH.dx - 0.5;
+  if (fi < 1.0 || fj < 1.0 || fi > SH.nx - 2.0 || fj > SH.nz - 2.0) { return o; }
+  let x0 = i32(floor(fi));
+  let z0 = i32(floor(fj));
+  let x1 = x0 + 1;
+  let z1 = z0 + 1;
+  let f = fract(vec2<f32>(fi, fj));
+  let a = textureLoad(shoreTex, vec2<i32>(x0, z0), 0);
+  let b = textureLoad(shoreTex, vec2<i32>(x1, z0), 0);
+  let c = textureLoad(shoreTex, vec2<i32>(x0, z1), 0);
+  let d4 = textureLoad(shoreTex, vec2<i32>(x1, z1), 0);
+  let s = mix(mix(a, b, f.x), mix(c, d4, f.x), f.y);
+  let wa = textureLoad(shoreWet, vec2<i32>(x0, z0), 0);
+  let wb = textureLoad(shoreWet, vec2<i32>(x1, z0), 0);
+  let wc = textureLoad(shoreWet, vec2<i32>(x0, z1), 0);
+  let wd = textureLoad(shoreWet, vec2<i32>(x1, z1), 0);
+  let w = mix(mix(wa, wb, f.x), mix(wc, wd, f.x), f.y);
+  o.h = max(s.x, 0.0);
+  o.vel = s.yz;
+  o.foam = s.w;
+  o.wet = w.x;
+  o.bed = w.y;
+  o.inside = 1.0;
+  o.eta = o.bed + o.h;
+  return o;
+}
 fn texel(i: vec2<i32>) -> vec2<f32> { return textureLoad(htex, i, 0).rg; }
 
 fn sampleField(xz: vec2<f32>) -> vec2<f32> {
@@ -843,20 +903,25 @@ struct GeoV {
   let gz = n2(in.world.xz * 5.5 + vec2<f32>(0.0, 0.18)) - g0;
   n = normalize(n + vec3<f32>(gx, 0.0, gz) * (1.0 - slope) * 0.55);
   var alb = terrainAlbedo(in.world.xz, in.world.y, n);
+  let sh = shoreFetch(in.world.xz);
   var washFoam = 0.0;
   var washWet = 0.0;
-  if (in.world.y > -0.02 && in.world.y < 2.2 && slope < 0.62) {
-    let W = washAt(in.world.xz);
-    washWet = W.wet;
-    washFoam = W.foam;
-    alb = mix(alb, alb * vec3<f32>(0.34, 0.36, 0.34), W.wet * smoothstep(0.02, 0.18, in.world.y));
+  if (sh.inside > 0.5 && slope < 0.72) {
+    // Wetness is where the sheet has been, not a contour of the coarse mesh.
+    washWet = sh.wet * smoothstep(0.16, 0.0, sh.h);
+    let streak = smoothstep(0.28, 0.66, n2(in.world.xz * vec2<f32>(1.7, 5.4)));
+    let grain = smoothstep(0.5, 0.84, n2(in.world.xz * 9.0));
+    washFoam = sh.foam * smoothstep(0.06, 0.0, sh.h) * streak * (0.45 + 0.55 * grain);
+    alb = mix(alb, alb * vec3<f32>(0.22, 0.24, 0.23), washWet * smoothstep(0.0, 0.2, in.world.y));
   }
   var col = shade(in.world, n, alb);
-  if (washWet > 0.05 || washFoam > 0.02) {
-    // Darken after the tonemap-bound lighting, or the wet sand stays as bright as the dry.
-    col *= mix(1.0, 0.38, washWet * (1.0 - washFoam * 0.85));
+  if (washWet > 0.04 || washFoam > 0.02) {
+    col *= mix(1.0, 0.62, washWet * (1.0 - washFoam * 0.65));
+    let Vw = normalize(F.camPos - in.world);
+    let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), 24.0) * washWet;
+    col += vec3<f32>(0.22, 0.2, 0.16) * spec;
     let sun = 0.62 + 0.5 * max(dot(n, F.sunDir), 0.0);
-    col = mix(col, vec3<f32>(0.7, 0.74, 0.7) * sun, washFoam * 0.5);
+    col = mix(col, vec3<f32>(0.9, 0.92, 0.9) * sun, washFoam * 0.75);
   }
   return vec4<f32>(col, 1.0);
 }
@@ -1177,6 +1242,7 @@ struct WaterV {
   @builtin(position) clip: vec4<f32>,
   @location(0) world: vec3<f32>,
   @location(1) xz0: vec2<f32>,
+  @location(2) sheet: f32,
 }
 fn ripAt(xz: vec2<f32>) -> vec3<f32> {
   let dom = max(F.ripO.z, 1.0);
@@ -1234,7 +1300,32 @@ fn warp(t: f32) -> f32 {
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
+  o.sheet = 0.0;
   o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  return o;
+}
+
+// The surf is its own surface, one vertex per stretch of the shoreline grid,
+// so the sheet can climb the sand instead of being painted onto the sea plane.
+@vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
+  let xz = SH.origin + SH.along * (uv.x * SH.nx * SH.dx) + SH.sea * (uv.y * SH.nz * SH.dx);
+  let sh = shoreFetch(xz);
+  let field = sampleField(xz);
+  let s = seaAt(xz, field.y, max(-field.x, 0.2));
+  var y = s.disp.y + oceanSample(shapeTex, xz, 220.0).x * smoothstep(460.0, 70.0, length(xz - F.camPos.xz));
+  if (sh.inside > 0.5) {
+    // Stay on the sand even where the sheet is dry, so a triangle never stretches
+    // from the water up across the sky. Dry fragments are discarded later.
+    let onBeach = smoothstep(-0.05, 0.12, sh.bed);
+    // The sim bed has small ridges so the wash breaks up. The drawn sheet sits on the
+    // smooth beach, or those ridges read as contour lines from this angle.
+    y = mix(sh.eta + 0.02, field.x + max(sh.h, 0.0) + 0.04, onBeach);
+  }
+  var o: WaterV;
+  o.world = vec3<f32>(xz.x, y, xz.y);
+  o.xz0 = xz;
+  o.sheet = 1.0;
+  o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
   return o;
 }
 
@@ -1246,6 +1337,13 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
 }
 
 @fragment fn fsWater(in: WaterV) -> @location(0) vec4<f32> {
+  let sh0 = shoreFetch(in.xz0);
+  // The surf sheet only shades the wash. Deep water and dry sand are not its job.
+  // The sheet only draws the water that has climbed onto the sand.
+  // The sea itself stays the spectral mesh, so the domain edge is not a line in the water.
+  if (in.sheet > 0.5 && (sh0.inside < 0.5 || sh0.bed < -0.04)) { discard; }
+  if (in.sheet > 0.5 && sh0.bed > -0.02 && sh0.h < 0.012 && sh0.foam < 0.06) { discard; }
+  if (in.sheet < 0.5 && sh0.inside > 0.5 && sh0.bed > 0.0 && sh0.h > 0.015) { discard; }
   let field = sampleField(in.xz0);
   let scale = field.y;
   let bed = field.x;
@@ -1259,14 +1357,35 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let open = mix(0.4, 1.0, scale);
   // The reflection follows the swell. Capillary slopes are reserved for the sun glint,
   // otherwise a distant pixel picks one random facet and the sea turns to static.
-  let N = normalize(S.nrm + vec3<f32>(-ocn.y * open + rip.y + cap.x * 0.25, 0.0, -ocn.z * open + rip.z + cap.y * 0.25));
+  var N = normalize(S.nrm + vec3<f32>(-ocn.y * open + rip.y + cap.x * 0.25, 0.0, -ocn.z * open + rip.z + cap.y * 0.25));
+  let sh = shoreFetch(in.xz0);
+  if (sh.inside > 0.5 && sh.bed > -1.5 && (in.sheet > 0.5 || sh.bed < 0.05)) {
+    let e = 0.48;
+    let spx = shoreFetch(in.xz0 + vec2<f32>(e, 0.0));
+    let smx = shoreFetch(in.xz0 - vec2<f32>(e, 0.0));
+    let spz = shoreFetch(in.xz0 + vec2<f32>(0.0, e));
+    let smz = shoreFetch(in.xz0 - vec2<f32>(0.0, e));
+    if (spx.inside > 0.5 && smx.inside > 0.5 && spz.inside > 0.5 && smz.inside > 0.5) {
+      let dmn = in.xz0 - SH.origin;
+      let fi = dot(dmn, SH.along) / SH.dx;
+      let fj = dot(dmn, SH.sea) / SH.dx;
+      let brim = smoothstep(2.0, 20.0, fi) * smoothstep(SH.nx - 2.0, SH.nx - 20.0, fi) * smoothstep(2.0, 14.0, fj);
+      let take = smoothstep(-1.5, -0.45, sh.bed) * brim * mix(0.5, 1.0, in.sheet);
+      // On the sand the sheet is a film. Follow the water thickness, not every ridge in the bed,
+      // or the grazing highlight turns into contour lines.
+      let onBeach = smoothstep(-0.3, 0.08, sh.bed);
+      let dhx = mix(spx.eta - smx.eta, spx.h - smx.h, onBeach);
+      let dhz = mix(spz.eta - smz.eta, spz.h - smz.h, onBeach);
+      let sn = normalize(vec3<f32>(-dhx / (e * 2.0), 1.0, -dhz / (e * 2.0)));
+      N = normalize(mix(N, sn, take));
+    }
+  }
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
   // Schlick, F0 for water against air (IOR 1.333).
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   let reflK = sat(F.mat.y);
   let rough = clamp(0.008 + sat(F.mat.x) * 0.055, 0.006, 0.065);
-  let Wsh = washAt(in.xz0);
   let dir0 = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
   let alongW = dot(in.xz0, dir0);
   let acrossW = dot(in.xz0, vec2<f32>(-dir0.y, dir0.x));
@@ -1275,8 +1394,24 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let crest = smoothstep(0.58, 0.2, S.jac) * smoothstep(0.2, 0.65, scale);
   let crestFoam = sat(max(crest, S.brk * 0.65) - 0.5) * smoothstep(0.3, 0.72, lace * 0.62 + lace2 * 0.38);
   let breaker = S.brk * smoothstep(2.6, 0.3, max(-bed, 0.0)) * smoothstep(0.34, 0.72, lace);
-  let foam = sat(max(crestFoam * 0.45, max(breaker * (0.55 + 0.45 * lace2), Wsh.foam))) * max(F.mood.w, 0.0);
-  let onSheet = smoothstep(-0.04, 0.05, bed) * Wsh.beach;
+  var foam = sat(max(crestFoam * 0.45, breaker * (0.55 + 0.45 * lace2))) * max(F.mood.w, 0.0);
+  var onSheet = 0.0;
+  if (in.sheet > 0.5 && sh.inside > 0.5 && sh.bed > -0.05) {
+    let nA = n2(in.xz0 * 0.33 + vec2<f32>(F.time * 0.03, 0.2));
+    let nB = n2(in.xz0 * 0.85 + vec2<f32>(3.0, -F.time * 0.04));
+    onSheet = smoothstep(-0.85, -0.15, sh.bed);
+    // Mostly solid, with soft holes. A threshold on the noise becomes contour lines from this angle.
+    let hole = smoothstep(0.58, 0.86, nA) * 0.8 + smoothstep(0.66, 0.9, nB) * 0.45;
+    var mask = sat(1.0 - hole);
+    let adv = sh.foam * mask;
+    foam = sat(mix(foam * (1.0 - onSheet), adv, onSheet));
+  }
+
+  // Dry sand stays the terrain. The water edge is the sim depth, not the mesh.
+  if (sh.inside > 0.5 && sh.bed > -0.02 && sh.h < 0.012 && sh.foam < 0.06) { discard; }
+  // Deep water stays the spectral mesh. The surf sheet takes over as the bed rises.
+  if (in.sheet > 0.5 && sh.bed < -0.04) { discard; }
+  if (in.sheet < 0.5 && sh.inside > 0.5 && sh.bed > 0.0 && sh.h > 0.015) { discard; }
 
   if (F.under > 0.5) {
     let I = normalize(in.world - F.camPos);
@@ -1297,12 +1432,18 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let px = vec2<i32>(frag.xy);
   let dep = textureLoad(sceneDepth, px, 0);
   // Land, trees and boats in front of this fragment stay as the blit left them.
-  if (dep < 0.999 && dep < frag.z - 0.00015) { discard; }
+  // The sheet is allowed to draw over the sand it is running across.
+  let swash = sh.inside > 0.5 && sh.bed > -0.12 && (sh.h > 0.018 || sh.foam > 0.2);
+  if (!swash && dep < 0.999 && dep < frag.z - 0.00015) { discard; }
 
-  // The reflection image is the mirrored camera. On flat water it lines up with this pixel.
-  // The normal slides that sample, which is what makes the shore move with the surface.
-  var reflCol = skyColor(reflect(-V, N));
-  let Rd = reflect(-V, N);
+  // One facet, not an average. Averaging the nearby sky samples was flattening
+  // the grazing reflection into a single pale column.
+  var reflN = N;
+  if (distS < 95.0) {
+    reflN = normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * 0.7);
+  }
+  var reflCol = skyColor(reflect(-V, reflN));
+  let Rd = reflect(-V, reflN);
   if (Rd.y < 0.02) {
     reflCol = mix(F.deepC.rgb, reflCol, sat(Rd.y * 14.0 + 0.2));
   }
@@ -1326,7 +1467,19 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     var look = in.clip.xy;
     var sp = worldAt(look, dep);
     var d = in.world.y - sp.y;
-    if (d > -0.05) {
+    let sheet = sh.inside > 0.5 && sh.bed > -0.85 && sh.h < 0.5 && sh.h > 0.006;
+    if (sheet) {
+      let bend = N.xz * sh.h * 5.0 * F.mat.z;
+      let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
+      // The sand is a few centimetres under this pixel. Grazing view does not
+      // turn that into a metre of water, or the sheet goes milky.
+      let depth = max(sh.h, 0.004) / max(ndv, 0.62);
+      let sigma = vec3<f32>(0.55, 0.09, 0.045) * max(F.deepC.w, 0.08);
+      let trans = exp(-depth * sigma);
+      let sceneCol = textureLoad(sceneTex, vec2<i32>(shifted), 0).rgb;
+      let scatter = mix(F.shalC.rgb, F.deepC.rgb, sat(sh.h / 0.45));
+      base = sceneCol * trans + scatter * (1.0 - trans);
+    } else if (d > -0.05) {
       let bend = N.xz * clamp(d, 0.0, 3.0) * 7.0 * F.mat.z;
       let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
       let rd = textureLoad(sceneDepth, vec2<i32>(shifted), 0);
@@ -1343,11 +1496,14 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     }
   }
   base = mix(F.deepC.rgb, base, sat(F.mat.w));
-  let foamCol = mix(vec3<f32>(0.58, 0.66, 0.64), vec3<f32>(0.84, 0.87, 0.85), sat(foam));
-  base = mix(base, foamCol, foam * mix(0.5, 0.72, onSheet));
+  let foamCol = mix(vec3<f32>(0.78, 0.82, 0.8), vec3<f32>(0.97, 0.98, 0.96), sat(foam));
+  base = mix(base, foamCol, foam * mix(0.4, 0.95, onSheet));
 
-  // Fresnel is the only thing that chooses reflection versus the water beneath it.
-  var col = mix(base, reflCol, fres * reflK * (1.0 - foam * 0.55));
+  // On the sheet the wash is whitewater, not a mirror. The open sea keeps its Fresnel.
+  let sheetK = smoothstep(0.5, 1.0, in.sheet);
+  var fresK = fres * reflK * (1.0 - foam * mix(0.5, 0.95, onSheet));
+  fresK = mix(fresK, fresK * (1.0 - smoothstep(0.12, 0.45, foam)) * 0.2, sheetK);
+  var col = mix(base, reflCol, fresK);
   // The sun lights the capillary facets. Close in, one facet per pixel. Farther away a pixel
   // covers many of them, so the brightest facet in that pixel is the glint that survives.
   let foamK = 1.0 - foam * 0.85;
@@ -1371,7 +1527,18 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));
   col = mix(F.horiz, col, sat(exp(-distS * dens)));
   col *= mix(0.58, 1.0, sunShadow(in.world));
-  return vec4<f32>(tonemap(col), 1.0);
+  var alpha = 1.0;
+  if (in.sheet > 0.5) {
+    let dmn = in.xz0 - SH.origin;
+    let fi = dot(dmn, SH.along) / SH.dx;
+    let fj = dot(dmn, SH.sea) / SH.dx;
+    let border = smoothstep(1.0, 16.0, fi) * smoothstep(SH.nx - 1.0, SH.nx - 16.0, fi) * smoothstep(1.0, 12.0, fj);
+    let edge = smoothstep(-0.02, 0.08, sh.bed);
+    let body = smoothstep(0.012, 0.04, sh.h);
+    // Foam is opaque. The clear parts of the sheet stay thin so the sand shows through.
+    alpha = border * edge * mix(body * 0.28, 1.0, smoothstep(0.18, 0.55, foam));
+  }
+  return vec4<f32>(tonemap(col), alpha);
 }
 
 `;
@@ -1695,6 +1862,424 @@ function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed) {
   const scale = slopeTarget ? (slopeTarget / sStd) : (target / hStd);
   for (let i = 0; i < h0.length; i++) h0[i] *= scale;
   return h0;
+}
+
+// Shallow water on its own grid, finer than the island mesh.
+// The seaward edge is driven by the swell. The beach is where that water runs up.
+
+const SHORE_NX = 320;
+const SHORE_NZ = 176;
+const SHORE_DX = 0.32;
+
+function shoreWgsl() {
+  return `
+struct ShoreU {
+  origin: vec2<f32>,
+  dx: f32,
+  nx: f32,
+  along: vec2<f32>,
+  sea: vec2<f32>,
+  time: f32,
+  dt: f32,
+  amp: f32,
+  spd: f32,
+  dir: f32,
+  nz: f32,
+  frq: f32,
+  pad: f32,
+  waves: array<vec4<f32>, 4>,
+  steep: vec4<f32>,
+}
+@group(0) @binding(0) var srcS: texture_2d<f32>;
+@group(0) @binding(1) var dstS: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var bedTex: texture_2d<f32>;
+@group(0) @binding(3) var srcW: texture_2d<f32>;
+@group(0) @binding(4) var dstW: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var<uniform> U: ShoreU;
+@group(0) @binding(6) var shapeTex: texture_2d<f32>;
+
+const NX: u32 = ${SHORE_NX}u;
+const NZ: u32 = ${SHORE_NZ}u;
+
+fn hash21s(p: vec2<f32>) -> f32 {
+  var p3 = fract(vec3<f32>(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn rot2(p: vec2<f32>) -> vec2<f32> {
+  let cs = cos(U.dir);
+  let sn = sin(U.dir);
+  return vec2<f32>(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
+}
+fn oceanSample(xz: vec2<f32>) -> f32 {
+  let p = fract(rot2(xz) / 220.0) * 128.0;
+  let i = vec2<i32>(floor(p));
+  let f = fract(p);
+  let x0 = i.x & 127;
+  let y0 = i.y & 127;
+  let x1 = (i.x + 1) & 127;
+  let y1 = (i.y + 1) & 127;
+  let a = textureLoad(shapeTex, vec2<i32>(x0, y0), 0).x;
+  let b = textureLoad(shapeTex, vec2<i32>(x1, y0), 0).x;
+  let c = textureLoad(shapeTex, vec2<i32>(x0, y1), 0).x;
+  let d = textureLoad(shapeTex, vec2<i32>(x1, y1), 0).x;
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+fn steepOf(i: i32) -> f32 {
+  if (i == 0) { return U.steep.x; }
+  if (i == 1) { return U.steep.y; }
+  if (i == 2) { return U.steep.z; }
+  return U.steep.w;
+}
+fn cellPos(ix: u32, iz: u32) -> vec2<f32> {
+  return U.origin + U.along * (f32(ix) + 0.5) * U.dx + U.sea * (f32(iz) + 0.5) * U.dx;
+}
+fn ocean(xz: vec2<f32>) -> vec3<f32> {
+  var eta = oceanSample(xz);
+  var vel = vec2<f32>(0.0);
+  let frq = max(U.frq, 0.2);
+  for (var i = 0; i < 4; i++) {
+    let w = U.waves[i];
+    let dir = rot2(w.xy);
+    let len = w.w / frq;
+    let k = 6.2831853 / len;
+    var As = w.z * U.amp;
+    if (i >= 3) { As *= 0.22; }
+    let Q = steepOf(i);
+    let st = k * As * Q;
+    if (st > 0.72) { As *= 0.72 / st; }
+    let omega = sqrt(9.81 * k) * U.spd;
+    let phase = k * dot(dir, xz) - omega * U.time;
+    let s = sin(phase);
+    eta += As * s;
+    vel += dir * Q * As * s * omega;
+  }
+  return vec3<f32>(eta, vel);
+}
+fn at(ix: i32, iz: i32) -> vec4<f32> {
+  let x = clamp(ix, 0, i32(NX) - 1);
+  let z = clamp(iz, 0, i32(NZ) - 1);
+  return textureLoad(srcS, vec2<i32>(x, z), 0);
+}
+fn bedAt(ix: i32, iz: i32) -> vec2<f32> {
+  let x = clamp(ix, 0, i32(NX) - 1);
+  let z = clamp(iz, 0, i32(NZ) - 1);
+  return textureLoad(bedTex, vec2<i32>(x, z), 0).xy;
+}
+fn sampleS(xz: vec2<f32>) -> vec4<f32> {
+  let d = xz - U.origin;
+  let fi = dot(d, U.along) / U.dx - 0.5;
+  let fj = dot(d, U.sea) / U.dx - 0.5;
+  let x0 = clamp(i32(floor(fi)), 0, i32(NX) - 1);
+  let z0 = clamp(i32(floor(fj)), 0, i32(NZ) - 1);
+  let x1 = min(x0 + 1, i32(NX) - 1);
+  let z1 = min(z0 + 1, i32(NZ) - 1);
+  let f = fract(vec2<f32>(fi, fj));
+  let a = textureLoad(srcS, vec2<i32>(x0, z0), 0);
+  let b = textureLoad(srcS, vec2<i32>(x1, z0), 0);
+  let c = textureLoad(srcS, vec2<i32>(x0, z1), 0);
+  let dS = textureLoad(srcS, vec2<i32>(x1, z1), 0);
+  return mix(mix(a, b, f.x), mix(c, dS, f.x), f.y);
+}
+
+@compute @workgroup_size(8, 8)
+fn seed(@builtin(global_invocation_id) id: vec3<u32>) {
+  let x = id.x;
+  let z = id.y;
+  if (x >= NX || z >= NZ) { return; }
+  let b = textureLoad(bedTex, vec2<i32>(i32(x), i32(z)), 0).x;
+  var h = 0.0;
+  if (b < 0.0) { h = -b; }
+  textureStore(dstS, vec2<i32>(i32(x), i32(z)), vec4<f32>(h, 0.0, 0.0, 0.0));
+  let wet = select(0.0, 1.0, b < 0.02);
+  textureStore(dstW, vec2<i32>(i32(x), i32(z)), vec4<f32>(wet, b, 0.0, 0.0));
+}
+
+@compute @workgroup_size(8, 8)
+fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
+  let x = id.x;
+  let z = id.y;
+  if (x >= NX || z >= NZ) { return; }
+  let ip = vec2<i32>(i32(x), i32(z));
+  let bed = textureLoad(bedTex, ip, 0);
+  let b = bed.x;
+  let drive = bed.y;
+  let xz = cellPos(x, z);
+  let sea = ocean(xz);
+
+  if (drive > 0.82 || b > 2.4) {
+    var h0 = 0.0;
+    var vel0 = vec2<f32>(0.0);
+    if (b < 1.5) {
+      h0 = max(sea.x - b, 0.0);
+      vel0 = sea.yz;
+    }
+    let prevF = textureLoad(srcS, ip, 0).w * 0.92;
+    textureStore(dstS, ip, vec4<f32>(h0, vel0, prevF));
+    textureStore(dstW, ip, vec4<f32>(select(0.0, 1.0, h0 > 0.02 || b < 0.0), b, 0.0, 0.0));
+    return;
+  }
+
+  let c = textureLoad(srcS, ip, 0);
+  let l = at(ip.x - 1, ip.y);
+  let r = at(ip.x + 1, ip.y);
+  let dwn = at(ip.x, ip.y - 1);
+  let up = at(ip.x, ip.y + 1);
+  let bl = bedAt(ip.x - 1, ip.y).x;
+  let br = bedAt(ip.x + 1, ip.y).x;
+  let bd = bedAt(ip.x, ip.y - 1).x;
+  let bu = bedAt(ip.x, ip.y + 1).x;
+  let gx = ((br + r.x) - (bl + l.x)) / (2.0 * U.dx);
+  let gz = ((bu + up.x) - (bd + dwn.x)) / (2.0 * U.dx);
+  let slope = clamp(vec2<f32>(gx, gz), vec2<f32>(-0.85), vec2<f32>(0.85));
+  let steep = length(vec2<f32>(gx, gz));
+
+  var vel = c.yz;
+  // A dry cell has no velocity of its own, so it would never sample the water
+  // arriving from offshore. Borrow the deepest neighbor's velocity first.
+  if (c.x < 0.025) {
+    var donor = c.x;
+    var donorV = vel;
+    if (l.x > donor) { donor = l.x; donorV = l.yz; }
+    if (r.x > donor) { donor = r.x; donorV = r.yz; }
+    if (dwn.x > donor) { donor = dwn.x; donorV = dwn.yz; }
+    if (up.x > donor) { donor = up.x; donorV = up.yz; }
+    if (donor > 0.03) { vel = donorV; }
+  }
+  let back = xz - vel * U.dt;
+  let adv = sampleS(back);
+  var h = max(adv.x, 0.0);
+  vel = mix(vel, adv.yz, smoothstep(0.0, 0.04, adv.x));
+  var foam = adv.w;
+
+  let gworld = U.along * slope.x + U.sea * slope.y;
+  vel -= gworld * 9.81 * U.dt;
+
+  let vl = vec2<f32>(dot(l.yz, U.along), dot(l.yz, U.sea));
+  let vr = vec2<f32>(dot(r.yz, U.along), dot(r.yz, U.sea));
+  let vd = vec2<f32>(dot(dwn.yz, U.along), dot(dwn.yz, U.sea));
+  let vu = vec2<f32>(dot(up.yz, U.along), dot(up.yz, U.sea));
+  let div = (vr.x - vl.x + vu.y - vd.y) / (2.0 * U.dx);
+  h = max(h - h * clamp(div, -6.0, 6.0) * U.dt, 0.0);
+
+  let shallow = smoothstep(1.5, 0.08, max(-b, 0.0));
+  let brk = smoothstep(0.10, 0.38, steep) * shallow * smoothstep(0.008, 0.05, h);
+  let spd = length(vel);
+  let rush = smoothstep(0.35, 1.3, spd) * smoothstep(-0.08, 0.12, b) * smoothstep(0.004, 0.035, h);
+  foam = min(foam + brk * 1.8 * U.dt, 1.0);
+  // The lip of the sheet foams. The body of the wash is allowed to thin and clear.
+  let lip = smoothstep(0.01, 0.035, h) * smoothstep(0.14, 0.045, h) * smoothstep(0.35, 1.2, spd);
+  foam = min(foam + (lip * 0.9 + rush * 0.35) * U.dt, 1.0);
+  // A breaking crest is nudged toward a bore. Added as a target speed, not an
+  // acceleration, so it cannot flood the beach a little more every step.
+  let wob = hash21s(xz * 0.37) - 0.5;
+  let bore = -U.sea * 2.3 + U.along * wob * 0.9;
+  let push = brk * smoothstep(0.55, -0.05, b);
+  vel = mix(vel, bore, push * 0.45);
+  if (b > -0.02) { h = min(h, mix(0.16, 0.05, smoothstep(0.05, 0.55, b))); }
+  if (b > 0.02 && c.x < 0.02) { h = min(h, 0.045); }
+  let melt = mix(0.25, 0.7, smoothstep(-0.02, 0.2, b) * (1.0 - brk));
+  foam *= exp(-U.dt * melt);
+  vel *= exp(-brk * 0.45 * U.dt);
+  if (b > 0.62) {
+    vel *= exp(-3.0 * U.dt);
+    h *= exp(-1.5 * U.dt);
+  }
+
+  var drag = 0.08;
+  if (b > -0.02) { drag += 0.14; }
+  vel *= exp(-drag * U.dt);
+  vel *= exp(-min(foam, 1.0) * 0.8 * U.dt);
+  let sp2 = length(vel);
+  if (sp2 > 4.2) { vel *= 4.2 / sp2; }
+
+  if (h < 0.007 && b > -0.04) {
+    h = 0.0;
+    vel = vec2<f32>(0.0);
+  }
+  h = min(h, 2.8);
+
+  if (drive > 0.02) {
+    let etaT = max(sea.x - b, 0.0);
+    h = mix(h, etaT, drive);
+    vel = mix(vel, sea.yz, drive);
+  }
+  if (x < 5u || x + 5u >= NX) {
+    let fade = select(f32(x) / 5.0, f32(NX - 1u - x) / 5.0, x + 5u >= NX);
+    h *= fade;
+    vel *= fade;
+    foam *= fade;
+  }
+  if (z < 3u) {
+    h *= f32(z) / 3.0;
+    vel *= f32(z) / 3.0;
+  }
+
+  var wet = textureLoad(srcW, ip, 0).x;
+  wet = max(wet * exp(-U.dt * 0.1), smoothstep(0.0, 0.028, h));
+  if (b < 0.0) { wet = 1.0; }
+
+  textureStore(dstS, ip, vec4<f32>(h, vel, foam));
+  textureStore(dstW, ip, vec4<f32>(wet, b, 0.0, 0.0));
+}
+
+@compute @workgroup_size(8, 8)
+fn copy(@builtin(global_invocation_id) id: vec3<u32>) {
+  let x = id.x;
+  let z = id.y;
+  if (x >= NX || z >= NZ) { return; }
+  let ip = vec2<i32>(i32(x), i32(z));
+  textureStore(dstS, ip, textureLoad(srcS, ip, 0));
+  textureStore(dstW, ip, textureLoad(srcW, ip, 0));
+}
+`;
+}
+
+async function createShore(device, world, anchor, shapeView) {
+  const nx = SHORE_NX, nz = SHORE_NZ, dx = SHORE_DX;
+  const seaX = anchor.fx, seaZ = anchor.fz;
+  const alongX = -seaZ, alongZ = seaX;
+  const inland = 18;
+  const originX = anchor.x - alongX * nx * dx * 0.5 - seaX * inland;
+  const originZ = anchor.z - alongZ * nx * dx * 0.5 - seaZ * inland;
+  const bedData = new Float32Array(nx * nz * 2);
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) {
+      const x = originX + alongX * (i + 0.5) * dx + seaX * (j + 0.5) * dx;
+      const z = originZ + alongZ * (i + 0.5) * dx + seaZ * (j + 0.5) * dx;
+      let h = fieldSample(world, x, z);
+      const band = smooth01(1.15, 0.2, h) * smooth01(-1.1, -0.2, h);
+      const ridge = (vnoise(x * 0.47, z * 0.47) - 0.5) * 0.08;
+      const grain = (vnoise(x * 1.8 + 4.0, z * 1.8) - 0.5) * 0.025;
+      h += (ridge + grain) * band;
+      // Deeper than the surf zone, the cell is the ocean. The solver owns the wash.
+      let drive = 0;
+      if (h < -0.7) drive = 1;
+      else if (h < -0.32) drive = (-0.32 - h) / 0.38;
+      if (j > nz - 6) drive = 1;
+      const o = (j * nx + i) * 2;
+      bedData[o] = h;
+      bedData[o + 1] = drive;
+    }
+  }
+
+  const bedTex = device.createTexture({
+    size: [nx, nz],
+    format: 'rg32float',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+  });
+  device.queue.writeTexture(
+    { texture: bedTex },
+    bedData,
+    { bytesPerRow: nx * 8, rowsPerImage: nz },
+    { width: nx, height: nz }
+  );
+
+  const simUsage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING;
+  const makeTex = () => device.createTexture({ size: [nx, nz], format: 'rgba16float', usage: simUsage });
+  const state = [makeTex(), makeTex()];
+  const wet = [makeTex(), makeTex()];
+  const showS = device.createTexture({ size: [nx, nz], format: 'rgba16float', usage: simUsage });
+  const showW = device.createTexture({ size: [nx, nz], format: 'rgba16float', usage: simUsage });
+
+  const module = device.createShaderModule({ code: shoreWgsl() });
+  const info = await module.getCompilationInfo();
+  const errs = info.messages.filter((m) => m.type === 'error');
+  if (errs.length) throw new Error(errs.map((e) => e.lineNum + ':' + e.message).join('\n'));
+  const layout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+      { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 4, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+      { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+      { binding: 6, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } }
+    ]
+  });
+  const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
+  const pipe = (name) => device.createComputePipeline({ layout: pl, compute: { module: module, entryPoint: name } });
+  const pipes = { seed: pipe('seed'), step: pipe('shoreStep'), copy: pipe('copy') };
+
+  const ubuf = device.createBuffer({ size: 144, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const u = new Float32Array(36);
+  u[0] = originX; u[1] = originZ; u[2] = dx; u[3] = nx;
+  u[4] = alongX; u[5] = alongZ; u[6] = seaX; u[7] = seaZ;
+  u[13] = nz;
+  const bedView = bedTex.createView();
+  const shape = shapeView;
+  const group = (src, dst, srcW, dstW) => device.createBindGroup({
+    layout: layout,
+    entries: [
+      { binding: 0, resource: src.createView() },
+      { binding: 1, resource: dst.createView() },
+      { binding: 2, resource: bedView },
+      { binding: 3, resource: srcW.createView() },
+      { binding: 4, resource: dstW.createView() },
+      { binding: 5, resource: { buffer: ubuf } },
+      { binding: 6, resource: shape }
+    ]
+  });
+  const stepBG = [
+    group(state[0], state[1], wet[0], wet[1]),
+    group(state[1], state[0], wet[1], wet[0])
+  ];
+  const copyBG = [
+    group(state[0], showS, wet[0], showW),
+    group(state[1], showS, wet[1], showW)
+  ];
+  let ping = 0;
+
+  function writeWaves(time, dt) {
+    u[8] = time;
+    u[9] = dt;
+    u[10] = wp.amp;
+    u[11] = wp.spd;
+    u[12] = wp.dir;
+    u[14] = Math.max(wp.frq, 0.2);
+    for (let i = 0; i < 4; i++) {
+      const w = WAVES[i];
+      const L = Math.hypot(w[0], w[1]) || 1;
+      u[16 + i * 4] = w[0] / L;
+      u[17 + i * 4] = w[1] / L;
+      u[18 + i * 4] = w[2];
+      u[19 + i * 4] = w[3];
+      u[32 + i] = w[4];
+    }
+    device.queue.writeBuffer(ubuf, 0, u);
+  }
+  function dispatch(enc, pipeline, bg) {
+    const p = enc.beginComputePass();
+    p.setPipeline(pipeline);
+    p.setBindGroup(0, bg);
+    p.dispatchWorkgroups(nx / 8, nz / 8);
+    p.end();
+  }
+  function seed(enc) {
+    writeWaves(0, 0.02);
+    dispatch(enc, pipes.seed, stepBG[0]);
+    dispatch(enc, pipes.copy, copyBG[1]);
+    ping = 1;
+  }
+  function encode(enc, time, dt) {
+    const sub = 2;
+    const hdt = Math.max(0.004, Math.min(dt, 0.05)) / sub;
+    for (let s = 0; s < sub; s++) {
+      writeWaves(time, hdt);
+      dispatch(enc, pipes.step, stepBG[ping]);
+      ping = 1 - ping;
+    }
+    dispatch(enc, pipes.copy, copyBG[ping]);
+  }
+
+  return {
+    ubuf: ubuf,
+    stateView: showS.createView(),
+    wetView: showW.createView(),
+    module: module,
+    seed: seed,
+    encode: encode
+  };
 }
 
 const PRESETS = {
@@ -3017,7 +3602,10 @@ async function main() {
         { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 2, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 3, visibility: FS, texture: { sampleType: 'depth' } },
-        { binding: 4, visibility: FS, sampler: { type: 'comparison' } }
+        { binding: 4, visibility: FS, sampler: { type: 'comparison' } },
+        { binding: 5, visibility: VS | FS, buffer: { type: 'uniform' } },
+        { binding: 6, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 7, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
       ]
     });
     const simLayout = device.createBindGroupLayout({
@@ -3060,6 +3648,7 @@ async function main() {
       fn: (x, z) => fieldSample(world, x, z)
     });
     const water = gridMesh(q.water, null);
+    const shoreMesh = gridMesh(112, null);
     const packed = packMesh(staticMesh);
     const g = grassGeom();
     const grassVert = packInterleaved(g.pos, g.uv);
@@ -3070,6 +3659,8 @@ async function main() {
     const terrainIB = upload(terrain.idx, GPUBufferUsage.INDEX);
     const waterVB = upload(water.pos, GPUBufferUsage.VERTEX);
     const waterIB = upload(water.idx, GPUBufferUsage.INDEX);
+    const shoreVB = upload(shoreMesh.pos, GPUBufferUsage.VERTEX);
+    const shoreIB = upload(shoreMesh.idx, GPUBufferUsage.INDEX);
     const meshVB = upload(packed.vert, GPUBufferUsage.VERTEX);
     const meshIB = upload(packed.idx, GPUBufferUsage.INDEX);
     const grassVB = upload(grassVert, GPUBufferUsage.VERTEX);
@@ -3162,6 +3753,22 @@ async function main() {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: depthOn('depth24plus', false, 'less')
     });
+    pipes.shore = await pipe({
+      layout: waterPL,
+      vertex: { module: mod, entryPoint: 'vsShore', buffers: [{ arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
+      fragment: { module: mod, entryPoint: 'fsWater', targets: [{
+        format: format,
+        blend: {
+          color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+        }
+      }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      // The beach mesh is coarser than the sheet, so a depth test hides the wash
+      // behind the sand it is running over. Trees and cliffs are still rejected
+      // in the fragment shader.
+      depthStencil: depthOn('depth24plus', false, 'always')
+    });
     pipes.blit = await pipe({
       layout: blitPL,
       vertex: { module: blitMod, entryPoint: 'vsBlit' },
@@ -3232,6 +3839,11 @@ async function main() {
       return { size, ub, view, bg };
     }
     const cascades = [oceanCascade(shapeH0, 220), oceanCascade(glintH0, 4)];
+    const shoreSim = await createShore(
+      device, world,
+      shore || { x: -150, z: 6, fx: -1, fz: 0 },
+      cascades[0].view
+    );
     const shadowPass = {
       colorAttachments: [],
       depthStencilAttachment: { view: shadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
@@ -3306,7 +3918,10 @@ async function main() {
           { binding: 1, resource: hview },
           { binding: 2, resource: view },
           { binding: 3, resource: shadowView },
-          { binding: 4, resource: shadowSamp }
+          { binding: 4, resource: shadowSamp },
+          { binding: 5, resource: { buffer: shoreSim.ubuf } },
+          { binding: 6, resource: shoreSim.stateView },
+          { binding: 7, resource: shoreSim.wetView }
         ]
       });
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
@@ -3613,6 +4228,7 @@ async function main() {
           cp.end();
         }
       }
+      if (!wp.paused) shoreSim.encode(enc, time, dt);
       if (mode === 2 && !wp.paused) {
         if (ripClear) {
           for (let i = 0; i < 2; i++) {
@@ -3664,10 +4280,13 @@ async function main() {
         pass.setPipeline(pipes.water); pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgWater);
         pass.setVertexBuffer(0, waterVB); pass.setIndexBuffer(waterIB, 'uint32');
         pass.drawIndexed(water.idx.length);
+        pass.setPipeline(pipes.shore);
+        pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
+        pass.drawIndexed(shoreMesh.idx.length);
         pass.end();
       };
       if (READ && readTex) drawSwap(readTex.createView(), readDepth.createView());
-      drawSwap(context.getCurrentTexture().createView(), swapDepth.createView());
+      if (!(READ && frames === 16)) drawSwap(context.getCurrentTexture().createView(), swapDepth.createView());
       let doRead = false;
       if (READ && readTex && frames === 16) {
         enc.copyTextureToBuffer(
@@ -3764,6 +4383,41 @@ async function main() {
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';
       if (qstr.has('read')) pendingSplat = { x: targetX, z: targetZ, s: 0.5, r: 1.8 };
+    }
+
+    function encodeOcean(enc, t) {
+      for (let ci = 0; ci < cascades.length; ci++) {
+        const c = cascades[ci];
+        oceanU[0] = t;
+        oceanU[1] = c.size;
+        device.queue.writeBuffer(c.ub, 0, oceanU);
+        const steps = ['evolve', 'rows', 'cols', 'slopes'];
+        for (let s = 0; s < steps.length; s++) {
+          const cp = enc.beginComputePass();
+          cp.setPipeline(oceanPipes[steps[s]]);
+          cp.setBindGroup(0, c.bg);
+          if (s === 1 || s === 2) cp.dispatchWorkgroups(OCEAN_N);
+          else cp.dispatchWorkgroups(OCEAN_N / 16, OCEAN_N / 16);
+          cp.end();
+        }
+      }
+    }
+    {
+      const t0 = parseFloat(qstr.get('t') || '2.5') || 0;
+      const seedEnc = device.createCommandEncoder();
+      shoreSim.seed(seedEnc);
+      device.queue.submit([seedEnc.finish()]);
+      const steps = 70;
+      const hdt = 0.04;
+      let t = t0 - steps * hdt;
+      for (let i = 0; i < steps; i++) {
+        t += hdt;
+        const e = device.createCommandEncoder();
+        if (i % 8 === 0) encodeOcean(e, t);
+        shoreSim.encode(e, t, hdt);
+        device.queue.submit([e.finish()]);
+      }
+      await device.queue.onSubmittedWorkDone();
     }
 
     requestAnimationFrame(frame);

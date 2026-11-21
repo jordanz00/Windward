@@ -42,6 +42,26 @@ function shaderCode(res, span) {
 @group(0) @binding(2) var ripTex: texture_2d<f32>;
 @group(0) @binding(3) var shadowMap: texture_depth_2d;
 @group(0) @binding(4) var shadowSamp: sampler_comparison;
+struct ShoreU {
+  origin: vec2<f32>,
+  dx: f32,
+  nx: f32,
+  along: vec2<f32>,
+  sea: vec2<f32>,
+  time: f32,
+  dt: f32,
+  amp: f32,
+  spd: f32,
+  dir: f32,
+  nz: f32,
+  frq: f32,
+  pad: f32,
+  waves: array<vec4<f32>, 4>,
+  steep: vec4<f32>,
+}
+@group(0) @binding(5) var<uniform> SH: ShoreU;
+@group(0) @binding(6) var shoreTex: texture_2d<f32>;
+@group(0) @binding(7) var shoreWet: texture_2d<f32>;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
@@ -72,6 +92,46 @@ fn n2(p: vec2<f32>) -> f32 {
              mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
 }
 
+struct ShoreS {
+  h: f32,
+  vel: vec2<f32>,
+  foam: f32,
+  wet: f32,
+  bed: f32,
+  inside: f32,
+  eta: f32,
+}
+fn shoreFetch(xz: vec2<f32>) -> ShoreS {
+  var o: ShoreS;
+  o.h = 0.0; o.vel = vec2<f32>(0.0); o.foam = 0.0; o.wet = 0.0; o.bed = 0.0; o.inside = 0.0; o.eta = 0.0;
+  let d = xz - SH.origin;
+  let fi = dot(d, SH.along) / SH.dx - 0.5;
+  let fj = dot(d, SH.sea) / SH.dx - 0.5;
+  if (fi < 1.0 || fj < 1.0 || fi > SH.nx - 2.0 || fj > SH.nz - 2.0) { return o; }
+  let x0 = i32(floor(fi));
+  let z0 = i32(floor(fj));
+  let x1 = x0 + 1;
+  let z1 = z0 + 1;
+  let f = fract(vec2<f32>(fi, fj));
+  let a = textureLoad(shoreTex, vec2<i32>(x0, z0), 0);
+  let b = textureLoad(shoreTex, vec2<i32>(x1, z0), 0);
+  let c = textureLoad(shoreTex, vec2<i32>(x0, z1), 0);
+  let d4 = textureLoad(shoreTex, vec2<i32>(x1, z1), 0);
+  let s = mix(mix(a, b, f.x), mix(c, d4, f.x), f.y);
+  let wa = textureLoad(shoreWet, vec2<i32>(x0, z0), 0);
+  let wb = textureLoad(shoreWet, vec2<i32>(x1, z0), 0);
+  let wc = textureLoad(shoreWet, vec2<i32>(x0, z1), 0);
+  let wd = textureLoad(shoreWet, vec2<i32>(x1, z1), 0);
+  let w = mix(mix(wa, wb, f.x), mix(wc, wd, f.x), f.y);
+  o.h = max(s.x, 0.0);
+  o.vel = s.yz;
+  o.foam = s.w;
+  o.wet = w.x;
+  o.bed = w.y;
+  o.inside = 1.0;
+  o.eta = o.bed + o.h;
+  return o;
+}
 fn texel(i: vec2<i32>) -> vec2<f32> { return textureLoad(htex, i, 0).rg; }
 
 fn sampleField(xz: vec2<f32>) -> vec2<f32> {
@@ -382,20 +442,25 @@ struct GeoV {
   let gz = n2(in.world.xz * 5.5 + vec2<f32>(0.0, 0.18)) - g0;
   n = normalize(n + vec3<f32>(gx, 0.0, gz) * (1.0 - slope) * 0.55);
   var alb = terrainAlbedo(in.world.xz, in.world.y, n);
+  let sh = shoreFetch(in.world.xz);
   var washFoam = 0.0;
   var washWet = 0.0;
-  if (in.world.y > -0.02 && in.world.y < 2.2 && slope < 0.62) {
-    let W = washAt(in.world.xz);
-    washWet = W.wet;
-    washFoam = W.foam;
-    alb = mix(alb, alb * vec3<f32>(0.34, 0.36, 0.34), W.wet * smoothstep(0.02, 0.18, in.world.y));
+  if (sh.inside > 0.5 && slope < 0.72) {
+    // Wetness is where the sheet has been, not a contour of the coarse mesh.
+    washWet = sh.wet * smoothstep(0.16, 0.0, sh.h);
+    let streak = smoothstep(0.28, 0.66, n2(in.world.xz * vec2<f32>(1.7, 5.4)));
+    let grain = smoothstep(0.5, 0.84, n2(in.world.xz * 9.0));
+    washFoam = sh.foam * smoothstep(0.06, 0.0, sh.h) * streak * (0.45 + 0.55 * grain);
+    alb = mix(alb, alb * vec3<f32>(0.22, 0.24, 0.23), washWet * smoothstep(0.0, 0.2, in.world.y));
   }
   var col = shade(in.world, n, alb);
-  if (washWet > 0.05 || washFoam > 0.02) {
-    // Darken after the tonemap-bound lighting, or the wet sand stays as bright as the dry.
-    col *= mix(1.0, 0.38, washWet * (1.0 - washFoam * 0.85));
+  if (washWet > 0.04 || washFoam > 0.02) {
+    col *= mix(1.0, 0.62, washWet * (1.0 - washFoam * 0.65));
+    let Vw = normalize(F.camPos - in.world);
+    let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), 24.0) * washWet;
+    col += vec3<f32>(0.22, 0.2, 0.16) * spec;
     let sun = 0.62 + 0.5 * max(dot(n, F.sunDir), 0.0);
-    col = mix(col, vec3<f32>(0.7, 0.74, 0.7) * sun, washFoam * 0.5);
+    col = mix(col, vec3<f32>(0.9, 0.92, 0.9) * sun, washFoam * 0.75);
   }
   return vec4<f32>(col, 1.0);
 }
@@ -716,6 +781,7 @@ struct WaterV {
   @builtin(position) clip: vec4<f32>,
   @location(0) world: vec3<f32>,
   @location(1) xz0: vec2<f32>,
+  @location(2) sheet: f32,
 }
 fn ripAt(xz: vec2<f32>) -> vec3<f32> {
   let dom = max(F.ripO.z, 1.0);
@@ -773,7 +839,32 @@ fn warp(t: f32) -> f32 {
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
+  o.sheet = 0.0;
   o.clip = F.viewProj * vec4<f32>(w, 1.0);
+  return o;
+}
+
+// The surf is its own surface, one vertex per stretch of the shoreline grid,
+// so the sheet can climb the sand instead of being painted onto the sea plane.
+@vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
+  let xz = SH.origin + SH.along * (uv.x * SH.nx * SH.dx) + SH.sea * (uv.y * SH.nz * SH.dx);
+  let sh = shoreFetch(xz);
+  let field = sampleField(xz);
+  let s = seaAt(xz, field.y, max(-field.x, 0.2));
+  var y = s.disp.y + oceanSample(shapeTex, xz, 220.0).x * smoothstep(460.0, 70.0, length(xz - F.camPos.xz));
+  if (sh.inside > 0.5) {
+    // Stay on the sand even where the sheet is dry, so a triangle never stretches
+    // from the water up across the sky. Dry fragments are discarded later.
+    let onBeach = smoothstep(-0.05, 0.12, sh.bed);
+    // The sim bed has small ridges so the wash breaks up. The drawn sheet sits on the
+    // smooth beach, or those ridges read as contour lines from this angle.
+    y = mix(sh.eta + 0.02, field.x + max(sh.h, 0.0) + 0.04, onBeach);
+  }
+  var o: WaterV;
+  o.world = vec3<f32>(xz.x, y, xz.y);
+  o.xz0 = xz;
+  o.sheet = 1.0;
+  o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
   return o;
 }
 
@@ -785,6 +876,13 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
 }
 
 @fragment fn fsWater(in: WaterV) -> @location(0) vec4<f32> {
+  let sh0 = shoreFetch(in.xz0);
+  // The surf sheet only shades the wash. Deep water and dry sand are not its job.
+  // The sheet only draws the water that has climbed onto the sand.
+  // The sea itself stays the spectral mesh, so the domain edge is not a line in the water.
+  if (in.sheet > 0.5 && (sh0.inside < 0.5 || sh0.bed < -0.04)) { discard; }
+  if (in.sheet > 0.5 && sh0.bed > -0.02 && sh0.h < 0.012 && sh0.foam < 0.06) { discard; }
+  if (in.sheet < 0.5 && sh0.inside > 0.5 && sh0.bed > 0.0 && sh0.h > 0.015) { discard; }
   let field = sampleField(in.xz0);
   let scale = field.y;
   let bed = field.x;
@@ -798,14 +896,35 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let open = mix(0.4, 1.0, scale);
   // The reflection follows the swell. Capillary slopes are reserved for the sun glint,
   // otherwise a distant pixel picks one random facet and the sea turns to static.
-  let N = normalize(S.nrm + vec3<f32>(-ocn.y * open + rip.y + cap.x * 0.25, 0.0, -ocn.z * open + rip.z + cap.y * 0.25));
+  var N = normalize(S.nrm + vec3<f32>(-ocn.y * open + rip.y + cap.x * 0.25, 0.0, -ocn.z * open + rip.z + cap.y * 0.25));
+  let sh = shoreFetch(in.xz0);
+  if (sh.inside > 0.5 && sh.bed > -1.5 && (in.sheet > 0.5 || sh.bed < 0.05)) {
+    let e = 0.48;
+    let spx = shoreFetch(in.xz0 + vec2<f32>(e, 0.0));
+    let smx = shoreFetch(in.xz0 - vec2<f32>(e, 0.0));
+    let spz = shoreFetch(in.xz0 + vec2<f32>(0.0, e));
+    let smz = shoreFetch(in.xz0 - vec2<f32>(0.0, e));
+    if (spx.inside > 0.5 && smx.inside > 0.5 && spz.inside > 0.5 && smz.inside > 0.5) {
+      let dmn = in.xz0 - SH.origin;
+      let fi = dot(dmn, SH.along) / SH.dx;
+      let fj = dot(dmn, SH.sea) / SH.dx;
+      let brim = smoothstep(2.0, 20.0, fi) * smoothstep(SH.nx - 2.0, SH.nx - 20.0, fi) * smoothstep(2.0, 14.0, fj);
+      let take = smoothstep(-1.5, -0.45, sh.bed) * brim * mix(0.5, 1.0, in.sheet);
+      // On the sand the sheet is a film. Follow the water thickness, not every ridge in the bed,
+      // or the grazing highlight turns into contour lines.
+      let onBeach = smoothstep(-0.3, 0.08, sh.bed);
+      let dhx = mix(spx.eta - smx.eta, spx.h - smx.h, onBeach);
+      let dhz = mix(spz.eta - smz.eta, spz.h - smz.h, onBeach);
+      let sn = normalize(vec3<f32>(-dhx / (e * 2.0), 1.0, -dhz / (e * 2.0)));
+      N = normalize(mix(N, sn, take));
+    }
+  }
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
   // Schlick, F0 for water against air (IOR 1.333).
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   let reflK = sat(F.mat.y);
   let rough = clamp(0.008 + sat(F.mat.x) * 0.055, 0.006, 0.065);
-  let Wsh = washAt(in.xz0);
   let dir0 = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
   let alongW = dot(in.xz0, dir0);
   let acrossW = dot(in.xz0, vec2<f32>(-dir0.y, dir0.x));
@@ -814,8 +933,24 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let crest = smoothstep(0.58, 0.2, S.jac) * smoothstep(0.2, 0.65, scale);
   let crestFoam = sat(max(crest, S.brk * 0.65) - 0.5) * smoothstep(0.3, 0.72, lace * 0.62 + lace2 * 0.38);
   let breaker = S.brk * smoothstep(2.6, 0.3, max(-bed, 0.0)) * smoothstep(0.34, 0.72, lace);
-  let foam = sat(max(crestFoam * 0.45, max(breaker * (0.55 + 0.45 * lace2), Wsh.foam))) * max(F.mood.w, 0.0);
-  let onSheet = smoothstep(-0.04, 0.05, bed) * Wsh.beach;
+  var foam = sat(max(crestFoam * 0.45, breaker * (0.55 + 0.45 * lace2))) * max(F.mood.w, 0.0);
+  var onSheet = 0.0;
+  if (in.sheet > 0.5 && sh.inside > 0.5 && sh.bed > -0.05) {
+    let nA = n2(in.xz0 * 0.33 + vec2<f32>(F.time * 0.03, 0.2));
+    let nB = n2(in.xz0 * 0.85 + vec2<f32>(3.0, -F.time * 0.04));
+    onSheet = smoothstep(-0.85, -0.15, sh.bed);
+    // Mostly solid, with soft holes. A threshold on the noise becomes contour lines from this angle.
+    let hole = smoothstep(0.58, 0.86, nA) * 0.8 + smoothstep(0.66, 0.9, nB) * 0.45;
+    var mask = sat(1.0 - hole);
+    let adv = sh.foam * mask;
+    foam = sat(mix(foam * (1.0 - onSheet), adv, onSheet));
+  }
+
+  // Dry sand stays the terrain. The water edge is the sim depth, not the mesh.
+  if (sh.inside > 0.5 && sh.bed > -0.02 && sh.h < 0.012 && sh.foam < 0.06) { discard; }
+  // Deep water stays the spectral mesh. The surf sheet takes over as the bed rises.
+  if (in.sheet > 0.5 && sh.bed < -0.04) { discard; }
+  if (in.sheet < 0.5 && sh.inside > 0.5 && sh.bed > 0.0 && sh.h > 0.015) { discard; }
 
   if (F.under > 0.5) {
     let I = normalize(in.world - F.camPos);
@@ -836,12 +971,18 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let px = vec2<i32>(frag.xy);
   let dep = textureLoad(sceneDepth, px, 0);
   // Land, trees and boats in front of this fragment stay as the blit left them.
-  if (dep < 0.999 && dep < frag.z - 0.00015) { discard; }
+  // The sheet is allowed to draw over the sand it is running across.
+  let swash = sh.inside > 0.5 && sh.bed > -0.12 && (sh.h > 0.018 || sh.foam > 0.2);
+  if (!swash && dep < 0.999 && dep < frag.z - 0.00015) { discard; }
 
-  // The reflection image is the mirrored camera. On flat water it lines up with this pixel.
-  // The normal slides that sample, which is what makes the shore move with the surface.
-  var reflCol = skyColor(reflect(-V, N));
-  let Rd = reflect(-V, N);
+  // One facet, not an average. Averaging the nearby sky samples was flattening
+  // the grazing reflection into a single pale column.
+  var reflN = N;
+  if (distS < 95.0) {
+    reflN = normalize(N + vec3<f32>(-gl.y, 0.0, -gl.z) * 0.7);
+  }
+  var reflCol = skyColor(reflect(-V, reflN));
+  let Rd = reflect(-V, reflN);
   if (Rd.y < 0.02) {
     reflCol = mix(F.deepC.rgb, reflCol, sat(Rd.y * 14.0 + 0.2));
   }
@@ -865,7 +1006,19 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     var look = in.clip.xy;
     var sp = worldAt(look, dep);
     var d = in.world.y - sp.y;
-    if (d > -0.05) {
+    let sheet = sh.inside > 0.5 && sh.bed > -0.85 && sh.h < 0.5 && sh.h > 0.006;
+    if (sheet) {
+      let bend = N.xz * sh.h * 5.0 * F.mat.z;
+      let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
+      // The sand is a few centimetres under this pixel. Grazing view does not
+      // turn that into a metre of water, or the sheet goes milky.
+      let depth = max(sh.h, 0.004) / max(ndv, 0.62);
+      let sigma = vec3<f32>(0.55, 0.09, 0.045) * max(F.deepC.w, 0.08);
+      let trans = exp(-depth * sigma);
+      let sceneCol = textureLoad(sceneTex, vec2<i32>(shifted), 0).rgb;
+      let scatter = mix(F.shalC.rgb, F.deepC.rgb, sat(sh.h / 0.45));
+      base = sceneCol * trans + scatter * (1.0 - trans);
+    } else if (d > -0.05) {
       let bend = N.xz * clamp(d, 0.0, 3.0) * 7.0 * F.mat.z;
       let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
       let rd = textureLoad(sceneDepth, vec2<i32>(shifted), 0);
@@ -882,11 +1035,14 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
     }
   }
   base = mix(F.deepC.rgb, base, sat(F.mat.w));
-  let foamCol = mix(vec3<f32>(0.58, 0.66, 0.64), vec3<f32>(0.84, 0.87, 0.85), sat(foam));
-  base = mix(base, foamCol, foam * mix(0.5, 0.72, onSheet));
+  let foamCol = mix(vec3<f32>(0.78, 0.82, 0.8), vec3<f32>(0.97, 0.98, 0.96), sat(foam));
+  base = mix(base, foamCol, foam * mix(0.4, 0.95, onSheet));
 
-  // Fresnel is the only thing that chooses reflection versus the water beneath it.
-  var col = mix(base, reflCol, fres * reflK * (1.0 - foam * 0.55));
+  // On the sheet the wash is whitewater, not a mirror. The open sea keeps its Fresnel.
+  let sheetK = smoothstep(0.5, 1.0, in.sheet);
+  var fresK = fres * reflK * (1.0 - foam * mix(0.5, 0.95, onSheet));
+  fresK = mix(fresK, fresK * (1.0 - smoothstep(0.12, 0.45, foam)) * 0.2, sheetK);
+  var col = mix(base, reflCol, fresK);
   // The sun lights the capillary facets. Close in, one facet per pixel. Farther away a pixel
   // covers many of them, so the brightest facet in that pixel is the glint that survives.
   let foamK = 1.0 - foam * 0.85;
@@ -910,7 +1066,18 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let dens = mix(0.0016, 0.00022, sat(F.camPos.y / 160.0));
   col = mix(F.horiz, col, sat(exp(-distS * dens)));
   col *= mix(0.58, 1.0, sunShadow(in.world));
-  return vec4<f32>(tonemap(col), 1.0);
+  var alpha = 1.0;
+  if (in.sheet > 0.5) {
+    let dmn = in.xz0 - SH.origin;
+    let fi = dot(dmn, SH.along) / SH.dx;
+    let fj = dot(dmn, SH.sea) / SH.dx;
+    let border = smoothstep(1.0, 16.0, fi) * smoothstep(SH.nx - 1.0, SH.nx - 16.0, fi) * smoothstep(1.0, 12.0, fj);
+    let edge = smoothstep(-0.02, 0.08, sh.bed);
+    let body = smoothstep(0.012, 0.04, sh.h);
+    // Foam is opaque. The clear parts of the sheet stay thin so the sand shows through.
+    alpha = border * edge * mix(body * 0.28, 1.0, smoothstep(0.18, 0.55, foam));
+  }
+  return vec4<f32>(tonemap(col), alpha);
 }
 
 `;

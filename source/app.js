@@ -1318,7 +1318,10 @@ async function main() {
         { binding: 1, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 2, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
         { binding: 3, visibility: FS, texture: { sampleType: 'depth' } },
-        { binding: 4, visibility: FS, sampler: { type: 'comparison' } }
+        { binding: 4, visibility: FS, sampler: { type: 'comparison' } },
+        { binding: 5, visibility: VS | FS, buffer: { type: 'uniform' } },
+        { binding: 6, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 7, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
       ]
     });
     const simLayout = device.createBindGroupLayout({
@@ -1361,6 +1364,7 @@ async function main() {
       fn: (x, z) => fieldSample(world, x, z)
     });
     const water = gridMesh(q.water, null);
+    const shoreMesh = gridMesh(112, null);
     const packed = packMesh(staticMesh);
     const g = grassGeom();
     const grassVert = packInterleaved(g.pos, g.uv);
@@ -1371,6 +1375,8 @@ async function main() {
     const terrainIB = upload(terrain.idx, GPUBufferUsage.INDEX);
     const waterVB = upload(water.pos, GPUBufferUsage.VERTEX);
     const waterIB = upload(water.idx, GPUBufferUsage.INDEX);
+    const shoreVB = upload(shoreMesh.pos, GPUBufferUsage.VERTEX);
+    const shoreIB = upload(shoreMesh.idx, GPUBufferUsage.INDEX);
     const meshVB = upload(packed.vert, GPUBufferUsage.VERTEX);
     const meshIB = upload(packed.idx, GPUBufferUsage.INDEX);
     const grassVB = upload(grassVert, GPUBufferUsage.VERTEX);
@@ -1463,6 +1469,22 @@ async function main() {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: depthOn('depth24plus', false, 'less')
     });
+    pipes.shore = await pipe({
+      layout: waterPL,
+      vertex: { module: mod, entryPoint: 'vsShore', buffers: [{ arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
+      fragment: { module: mod, entryPoint: 'fsWater', targets: [{
+        format: format,
+        blend: {
+          color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+        }
+      }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      // The beach mesh is coarser than the sheet, so a depth test hides the wash
+      // behind the sand it is running over. Trees and cliffs are still rejected
+      // in the fragment shader.
+      depthStencil: depthOn('depth24plus', false, 'always')
+    });
     pipes.blit = await pipe({
       layout: blitPL,
       vertex: { module: blitMod, entryPoint: 'vsBlit' },
@@ -1533,6 +1555,11 @@ async function main() {
       return { size, ub, view, bg };
     }
     const cascades = [oceanCascade(shapeH0, 220), oceanCascade(glintH0, 4)];
+    const shoreSim = await createShore(
+      device, world,
+      shore || { x: -150, z: 6, fx: -1, fz: 0 },
+      cascades[0].view
+    );
     const shadowPass = {
       colorAttachments: [],
       depthStencilAttachment: { view: shadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' }
@@ -1607,7 +1634,10 @@ async function main() {
           { binding: 1, resource: hview },
           { binding: 2, resource: view },
           { binding: 3, resource: shadowView },
-          { binding: 4, resource: shadowSamp }
+          { binding: 4, resource: shadowSamp },
+          { binding: 5, resource: { buffer: shoreSim.ubuf } },
+          { binding: 6, resource: shoreSim.stateView },
+          { binding: 7, resource: shoreSim.wetView }
         ]
       });
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
@@ -1914,6 +1944,7 @@ async function main() {
           cp.end();
         }
       }
+      if (!wp.paused) shoreSim.encode(enc, time, dt);
       if (mode === 2 && !wp.paused) {
         if (ripClear) {
           for (let i = 0; i < 2; i++) {
@@ -1965,10 +1996,13 @@ async function main() {
         pass.setPipeline(pipes.water); pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgWater);
         pass.setVertexBuffer(0, waterVB); pass.setIndexBuffer(waterIB, 'uint32');
         pass.drawIndexed(water.idx.length);
+        pass.setPipeline(pipes.shore);
+        pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
+        pass.drawIndexed(shoreMesh.idx.length);
         pass.end();
       };
       if (READ && readTex) drawSwap(readTex.createView(), readDepth.createView());
-      drawSwap(context.getCurrentTexture().createView(), swapDepth.createView());
+      if (!(READ && frames === 16)) drawSwap(context.getCurrentTexture().createView(), swapDepth.createView());
       let doRead = false;
       if (READ && readTex && frames === 16) {
         enc.copyTextureToBuffer(
@@ -2065,6 +2099,41 @@ async function main() {
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';
       if (qstr.has('read')) pendingSplat = { x: targetX, z: targetZ, s: 0.5, r: 1.8 };
+    }
+
+    function encodeOcean(enc, t) {
+      for (let ci = 0; ci < cascades.length; ci++) {
+        const c = cascades[ci];
+        oceanU[0] = t;
+        oceanU[1] = c.size;
+        device.queue.writeBuffer(c.ub, 0, oceanU);
+        const steps = ['evolve', 'rows', 'cols', 'slopes'];
+        for (let s = 0; s < steps.length; s++) {
+          const cp = enc.beginComputePass();
+          cp.setPipeline(oceanPipes[steps[s]]);
+          cp.setBindGroup(0, c.bg);
+          if (s === 1 || s === 2) cp.dispatchWorkgroups(OCEAN_N);
+          else cp.dispatchWorkgroups(OCEAN_N / 16, OCEAN_N / 16);
+          cp.end();
+        }
+      }
+    }
+    {
+      const t0 = parseFloat(qstr.get('t') || '2.5') || 0;
+      const seedEnc = device.createCommandEncoder();
+      shoreSim.seed(seedEnc);
+      device.queue.submit([seedEnc.finish()]);
+      const steps = 70;
+      const hdt = 0.04;
+      let t = t0 - steps * hdt;
+      for (let i = 0; i < steps; i++) {
+        t += hdt;
+        const e = device.createCommandEncoder();
+        if (i % 8 === 0) encodeOcean(e, t);
+        shoreSim.encode(e, t, hdt);
+        device.queue.submit([e.finish()]);
+      }
+      await device.queue.onSubmittedWorkDone();
     }
 
     requestAnimationFrame(frame);
