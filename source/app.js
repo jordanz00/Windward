@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  rocks: 40, stacks: 6,  birds: 5,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  shadow: 4, clouds: 3, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  shadow: 6, clouds: 3, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, shadow: 10, clouds: 4, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -435,21 +435,109 @@ function makeShrub(seed) {
 }
 
 function makeRock(seed) {
-  const m = icosphere(2, 1, [0.42, 0.40, 0.36]);
-  const n = m.pos.length / 3;
+  // A boulder is a lump that has lost pieces along planes. Cutting the sphere and
+  // shading each face on its own gives edges, where a smoothed sphere gives a dome.
+  const src = icosphere(2, 1, [0.4, 0.4, 0.4]);
+  const sd = (seed | 0) || 1;
+  const rnd = seeded(sd * 7 + 3);
+  const planes = [];
+  const count = 7 + (Math.abs(sd) % 4);
+  for (let i = 0; i < count; i++) {
+    const a = rnd() * 6.283, py = rnd() * 1.5 - 0.3;
+    const l = Math.hypot(1, py);
+    planes.push([Math.cos(a) / l, py / l, Math.sin(a) / l, 0.48 + rnd() * 0.38]);
+  }
+  const n = src.pos.length / 3;
+  const P = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
-    const x = m.pos[i * 3], y = m.pos[i * 3 + 1], z = m.pos[i * 3 + 2];
-    const nx = m.nrm[i * 3], ny = m.nrm[i * 3 + 1], nz = m.nrm[i * 3 + 2];
-    const rough = vnoise(x * 2.4 + seed, z * 2.4) * 0.22 + vnoise(x * 6.5, y * 6.5 + seed) * 0.08;
-    const crevice = vnoise(x * 1.3 + 4.0, z * 1.3) > 0.72 ? -0.08 : 0;
-    m.pos[i * 3] = x + nx * (rough + crevice);
-    m.pos[i * 3 + 1] = (y + ny * rough) * (y < 0 ? 0.45 : 0.72);
-    m.pos[i * 3 + 2] = z + nz * (rough + crevice);
-    const lichen = ny > 0.45 ? vnoise(x * 3.0, z * 3.0) : 0;
-    const shade = 0.72 + rough * 1.4;
-    m.col[i * 3] = (0.40 * shade) * (1 - lichen * 0.35);
-    m.col[i * 3 + 1] = (0.38 * shade) * (1 - lichen * 0.1) + lichen * 0.08;
-    m.col[i * 3 + 2] = 0.34 * shade * (1 - lichen * 0.2);
+    let x = src.pos[i * 3], y = src.pos[i * 3 + 1], z = src.pos[i * 3 + 2];
+    const lump = 1 + (vnoise(x * 1.6 + sd, z * 1.6 + y * 1.3) - 0.5) * 0.55;
+    x *= lump; y *= lump; z *= lump;
+    for (let k = 0; k < planes.length; k++) {
+      const pl = planes[k];
+      const d = x * pl[0] + y * pl[1] + z * pl[2] - pl[3];
+      if (d > 0) { x -= pl[0] * d; y -= pl[1] * d; z -= pl[2] * d; }
+    }
+    const fine = (vnoise(x * 6.5 + sd, z * 6.5 + y * 5.1) - 0.5) * 0.07;
+    x += src.nrm[i * 3] * fine; z += src.nrm[i * 3 + 2] * fine;
+    y = (y + src.nrm[i * 3 + 1] * fine) * (y < 0 ? 0.45 : 0.8);
+    P[i * 3] = x; P[i * 3 + 1] = y; P[i * 3 + 2] = z;
+  }
+  const m = new Mesh();
+  for (let f = 0; f < src.idx.length; f += 3) {
+    const ia = src.idx[f], ib = src.idx[f + 1], ic = src.idx[f + 2];
+    const ax = P[ia * 3], ay = P[ia * 3 + 1], az = P[ia * 3 + 2];
+    const bx = P[ib * 3], by = P[ib * 3 + 1], bz = P[ib * 3 + 2];
+    const cx = P[ic * 3], cy = P[ic * 3 + 1], cz = P[ic * 3 + 2];
+    let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+    let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+    let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    const my = (ay + by + cy) / 3, mx = (ax + bx + cx) / 3, mz = (az + bz + cz) / 3;
+    // Bedding lines, weathering on top, a dark tide stain at the foot.
+    const strata = 0.84 + 0.16 * Math.sin(my * 11 + vnoise(mx * 2.1 + sd, mz * 2.1) * 5);
+    const patch = 0.8 + 0.4 * vnoise(mx * 3.3 + sd, mz * 3.3 + my * 2.7);
+    const top = ny > 0.55 ? vnoise(mx * 4 + 9, mz * 4) : 0;
+    const foot = 1 - 0.45 * smooth01(0.05, -0.3, my);
+    const k = strata * patch * foot;
+    const r = 0.31 * k * (1 - top * 0.2), g = 0.285 * k * (1 + top * 0.08), b = 0.25 * k * (1 - top * 0.25);
+    const va = m.v(ax, ay, az, nx, ny, nz, r, g, b, 0);
+    const vb = m.v(bx, by, bz, nx, ny, nz, r, g, b, 0);
+    const vc = m.v(cx, cy, cz, nx, ny, nz, r, g, b, 0);
+    m.tri(va, vb, vc);
+  }
+  return m;
+}
+
+// The same clearings in the tree placement and in the ground under the trees.
+// Sines, so the shader can evaluate exactly what this does.
+function forestNoise(x, z) {
+  return Math.sin(x * 0.031 + 1.3) * Math.sin(z * 0.027 + 0.5)
+    + 0.6 * Math.sin((x + z) * 0.053 + 2.1) * Math.sin((x - z) * 0.047 + 0.4)
+    + 0.35 * Math.sin(x * 0.11 + 3.0) * Math.sin(z * 0.13 + 1.0);
+}
+function forestMask(x, z, h, grad) {
+  return smooth01(1.9, 4.4, h) * (1 - smooth01(0.55, 1.0, grad)) * smooth01(-0.62, -0.12, forestNoise(x, z));
+}
+
+// A forest tree seen from outside: a trunk and a crown of overlapping leaf masses.
+// The shader breaks the outline of each mass into leaves.
+function makeTree(seed) {
+  const sd = (seed | 0) || 1;
+  const rnd = seeded(sd * 13 + 5);
+  const m = new Mesh();
+  const th = 0.42 + rnd() * 0.2;
+  const lean = (rnd() - 0.5) * 0.12;
+  const trunk = cylinder(5, 3, 0.04 + rnd() * 0.012, 0.022, th + 0.12, [0.17, 0.13, 0.09], 0.015);
+  appendMesh(m, trunk, 0, 0, 0, rnd() * 3, 1, null, 1);
+  const lobes = 4 + (Math.abs(sd) % 4);
+  const spread = 0.16 + rnd() * 0.12;
+  const hue = rnd();
+  for (let i = 0; i < lobes; i++) {
+    const blob = icosphere(1, 1, [0.1, 0.1, 0.1]);
+    const n = blob.pos.length / 3;
+    const ang = i * 2.399 + rnd() * 0.8;
+    const rr = i === 0 ? 0 : spread * (0.55 + rnd() * 0.7);
+    const size = (i === 0 ? 0.3 : 0.2) + rnd() * 0.1;
+    const cy = th + (i === 0 ? 0.16 : rnd() * 0.16) + size * 0.3;
+    const cx = Math.cos(ang) * rr + lean, cz = Math.sin(ang) * rr;
+    const flat = 0.58 + rnd() * 0.2;
+    for (let v = 0; v < n; v++) {
+      const x = blob.pos[v * 3], y = blob.pos[v * 3 + 1], z = blob.pos[v * 3 + 2];
+      const lump = 0.8 + 0.45 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9);
+      const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.6 : flat), pz = z * lump * size;
+      blob.pos[v * 3] = px + cx; blob.pos[v * 3 + 1] = py + cy; blob.pos[v * 3 + 2] = pz + cz;
+      // Lit leaves on top, the shaded inside of the crown underneath.
+      const up = Math.max(0, Math.min(1, y * 0.5 + 0.5));
+      const lightK = 0.35 + 0.65 * up * up;
+      blob.col[v * 3] = (0.05 + hue * 0.025) * lightK;
+      blob.col[v * 3 + 1] = (0.115 + hue * 0.03) * lightK;
+      blob.col[v * 3 + 2] = (0.03 + (1 - hue) * 0.012) * lightK;
+      // 10 marks a leaf mass. The remainder is how far the wind moves it.
+      blob.sway[v] = 10 + 0.03 + up * 0.035;
+    }
+    appendMesh(m, blob, 0, 0, 0, 0, 1, null, 1);
   }
   return m;
 }
@@ -731,7 +819,7 @@ function waveY(world, x, z, time) {
     const k = Math.PI * 2 / len;
     const feel = 1 - smooth01(len * 0.08, len * 0.45, D);
     let As = w[2] * wp.amp * damp * (1 + feel * 0.85);
-    if (i < 2) As *= 0.3 + 0.7 * (1 - smooth01(2, 8, D));
+    if (i < 2) As *= 1 - 0.74 * smooth01(2, 9, D);
     if (i >= 4) As *= wp.cx;
     const Q = Math.min(w[4] + feel * 0.45, 1.05);
     const steep = k * As * Q;
@@ -1367,6 +1455,23 @@ async function main() {
         broads++;
       }
     }
+    // The interior is forest. Crowns touch, with clearings where the mask opens.
+    const treeKinds = [];
+    for (let k = 0; k < 9; k++) treeKinds.push(makeTree(31 + k * 17));
+    let trees = 0;
+    for (let i = 0; i < q.forest * 30 && trees < q.forest; i++) {
+      const x = (rnd() - 0.5) * 470;
+      const z = (rnd() - 0.5) * 410;
+      const h = fieldSample(world, x, z);
+      if (h < 1.9) continue;
+      const fm = forestMask(x, z, h, fieldSlope(world, x, z));
+      if (fm < 0.25 + rnd() * 0.5) continue;
+      // Taller in the sheltered middle, lower and wind-pressed near the coast.
+      const tall = 7.5 + smooth01(3, 14, h) * 6 + rnd() * 5;
+      const tint = [0.8 + rnd() * 0.45, 0.82 + rnd() * 0.36, 0.75 + rnd() * 0.5];
+      appendMesh(staticMesh, treeKinds[(rnd() * treeKinds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, 0.85 + rnd() * 0.4);
+      trees++;
+    }
     for (let i = 0; i < q.rocks * 20 && rocks < q.rocks; i++) {
       const x = (rnd() - 0.5) * 500;
       const z = (rnd() - 0.5) * 420;
@@ -1384,8 +1489,8 @@ async function main() {
       const z = (rnd() - 0.5) * 220;
       const h = fieldSample(world, x, z);
       if (h < -6 || h > -0.4) continue;
-      const sc = 2.2 + rnd() * 4.2;
-      appendMesh(staticMesh, stackRock, x, h - sc * 0.2, z, rnd() * 6, sc, [0.62, 0.58, 0.52], 1.15 + rnd() * 0.9);
+      const sc = 1.5 + rnd() * 2.8;
+      appendMesh(staticMesh, stacks % 2 ? stackRock : rock, x, h - sc * 0.2, z, rnd() * 6, sc, [0.9, 0.86, 0.8], 1.05 + rnd() * 0.9);
       stacks++;
     }
     // Skiff and a buoy, so the beach and the bay have a scale.
@@ -1688,7 +1793,7 @@ async function main() {
       cols: await oceanEntry('ifft_cols'),
       slopes: await oceanEntry('slopes')
     };
-    const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 80], 0.4, 0, 11);
+    const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 56], 0.3, 0, 11);
     const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
     const oceanU = new Float32Array(4);
     function oceanCascade(h0, size) {

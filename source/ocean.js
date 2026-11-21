@@ -214,10 +214,17 @@ function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed, tilt) {
       const sdz = wdx * 0.91 + wdz * 0.41;
       const swell = (kx * sdx + kz * sdz) / k;
       const longW = Math.max(0, Math.min(1, (lambda - 12) / 30));
-      const dir = spread(kd, 2) * 0.8 + spread(swell, 6) * (0.35 + longW * 0.4);
+      // The second heading stays broad. A tile holds only a handful of long modes, and
+      // a narrow lobe of them is a ruled grid from the air.
+      const dir = spread(kd, 2) * 0.8 + spread(swell, 3) * (0.3 + longW * 0.15);
       // tilt lifts the short end of the band. Wind chop keeps its slope there.
       const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * dir * (tilt ? Math.pow(k, tilt) : 1);
-      const amp = Math.sqrt(Math.max(phillips, 0) * 0.5);
+      // Phillips puts nearly all the energy in the longest waves the band allows, and
+      // a tile has only a few of those. Rolling them off moves the peak to wavelengths
+      // the tile holds dozens of, in many directions, so no single train is visible.
+      const u = Math.max(0, Math.min(1, (lambda - band[1] * 0.42) / (band[1] * 0.58)));
+      const roll = 1 - u * u * (3 - 2 * u);
+      const amp = Math.sqrt(Math.max(phillips, 0) * 0.5) * roll;
       h0[o] = oceanGauss(rnd) * amp;
       h0[o + 1] = oceanGauss(rnd) * amp;
     }
