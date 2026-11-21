@@ -70,24 +70,24 @@ function envLight(cover) {
   const dayK = smooth01(-0.1, 0.4, sy), low = 1 - smooth01(0, 0.35, sy);
   if (day) {
     // Photographic key: midday restrained; golden hour warm without clipping highlights.
-    const rad = (1.35 + 0.82 * dayK) * (1 - 0.58 * cover) * (1 + 0.32 * gold);
+    const rad = (1.22 + 0.72 * dayK) * (1 - 0.58 * cover) * (1 + 0.28 * gold);
     env.keyCol = [
-      1.08 * tr[0] * up * rad * (1 + 0.58 * gold),
-      0.96 * tr[1] * up * rad * (1 + 0.1 * gold),
-      0.8 * tr[2] * up * rad * (1 - 0.38 * gold)
+      1.02 * tr[0] * up * rad * (1 + 0.52 * gold),
+      0.94 * tr[1] * up * rad * (1 + 0.08 * gold),
+      0.78 * tr[2] * up * rad * (1 - 0.36 * gold)
     ];
   } else {
     env.keyCol = [0.55 * mk, 0.7 * mk, mk];
   }
   const tw = smooth01(-0.24, -0.04, sy) * (1 - smooth01(-0.04, 0.2, sy)), nk = night * (0.5 + 0.5 * moonUp);
-  // Cooler blue ambient in open shade; warmer only from the key, not the whole hemisphere.
+  // Cooler, quieter ambient — fill light that is too high flattens the island into a game render.
   const amb = [
-    dayK * (0.30 + 0.04 * low) * (1 - 0.22 * gold) + tw * 0.045 + nk * 0.004,
-    dayK * (0.46 - 0.02 * low) * (1 + 0.06 * gold) + tw * 0.055 + nk * 0.006,
-    dayK * (0.72 - 0.08 * low) * (1 + 0.38 * gold) + tw * 0.11 + nk * 0.012
+    dayK * (0.24 + 0.03 * low) * (1 - 0.22 * gold) + tw * 0.04 + nk * 0.004,
+    dayK * (0.38 - 0.02 * low) * (1 + 0.05 * gold) + tw * 0.05 + nk * 0.006,
+    dayK * (0.6 - 0.07 * low) * (1 + 0.32 * gold) + tw * 0.1 + nk * 0.012
   ];
   // Under cloud the whole sky is the lamp: grey, and about as bright as a clear sky's blue.
-  const g = envLum(amb) * 1.12, oc = cover * 0.85;
+  const g = envLum(amb) * 1.05, oc = cover * 0.85;
   env.amb = [amb[0] + (g * 0.96 - amb[0]) * oc, amb[1] + (g - amb[1]) * oc, amb[2] + (g * 1.05 - amb[2]) * oc];
   // All the light reaching open ground, and the same thing as a colour for whatever has no
   // light of its own in the shaders: foam, and the glow of the water's own body.

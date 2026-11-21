@@ -347,21 +347,22 @@ function makePalm(seed, lod) {
   const nf = 18 + ((rnd() * 7 + age * 4) | 0), nd = 1 + ((rnd() * 3 + age) | 0);
   const nseg = [18, 8, 4][lod], lseg = [4, 3, 2][lod];
   // Whole-crown bias: real palms lean and pack fronds toward the light, not a perfect spiral.
-  const crownBias = (rnd() - 0.5) * 0.55;
-  const crownGap = 0.12 + rnd() * 0.2;
+  const crownBias = (rnd() - 0.5) * 0.7;
+  // Sky gaps between fronds — solid fans look like game props against the sky.
+  const crownGap = 0.18 + rnd() * 0.28;
   for (let j = 0; j < nf + nd; j++) {
     const dead = j >= nf;
     // 0 has just opened at the top of the crown. 1 is about to fall.
     const age = dead ? 1.1 : (j + rnd() * 0.85) / nf;
     // Irregular azimuth / elevation: real crowns are not a perfect spiral of feathers.
-    const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 1.35 + Math.sin(j * 1.7 + seed) * 0.35;
-    const el0 = dead ? -1.25 - rnd() * 0.3 : 1.05 - Math.pow(age, 1.08) * 1.95 + (rnd() - 0.5) * 0.42 + crownBias * 0.15;
-    const L = dead ? 2.5 + rnd() : 3.9 + 1.85 * Math.sin(Math.min(1, age * 1.2 + 0.08) * Math.PI) + rnd() * 0.55;
+    const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 1.55 + Math.sin(j * 1.7 + seed) * 0.45;
+    const el0 = dead ? -1.25 - rnd() * 0.3 : 1.05 - Math.pow(age, 1.08) * 1.95 + (rnd() - 0.5) * 0.5 + crownBias * 0.18;
+    const L = dead ? 2.5 + rnd() : 3.7 + 2.1 * Math.sin(Math.min(1, age * 1.2 + 0.08) * Math.PI) + rnd() * 0.7;
     // Outer half droops harder; some fronds are more wind-swept than others.
-    const droop = dead ? 0.15 : 0.85 + age * 1.0 + rnd() * 0.45;
-    const curl = (rnd() - 0.5) * 1.25 + crownBias * 0.35, twist = (rnd() - 0.5) * 2.8 * (0.25 + age);
+    const droop = dead ? 0.15 : 0.9 + age * 1.15 + rnd() * 0.55;
+    const curl = (rnd() - 0.5) * 1.4 + crownBias * 0.4, twist = (rnd() - 0.5) * 3.1 * (0.25 + age);
     const tipSway = 0.16 + rnd() * 0.22;
-    const widthK = 0.02 + rnd() * 0.012, lenK = 0.85 + rnd() * 0.48, hang0 = rnd() * 0.45;
+    const widthK = 0.016 + rnd() * 0.01, lenK = 0.8 + rnd() * 0.55, hang0 = rnd() * 0.5;
     // Leaflets draw from their own stream, so every level builds the same fronds.
     const fr = seeded(seed * 131 + j * 977 + 5);
     // The rachis starts in the crown and bends over under its own weight, twisting as it goes.
@@ -403,12 +404,12 @@ function makePalm(seed, lod) {
     const lift = dead ? -0.2 : 0.35 - age * 0.55;
     const hang = dead ? 2.5 : 0.35 + age * 1.65 + hang0;
     const young = sat(1 - age / 0.3), old = sat((age - 0.72) / 0.28);
-    const green = dead ? [0.3, 0.22, 0.1] : [
-      0.085 + young * 0.085 + old * 0.11, 0.185 + young * 0.085 + old * 0.02, 0.045 + young * 0.015 + old * 0.015];
+    const green = dead ? [0.28, 0.2, 0.1] : [
+      0.07 + young * 0.07 + old * 0.1, 0.15 + young * 0.07 + old * 0.025, 0.04 + young * 0.012 + old * 0.012];
     for (let side = -1; side <= 1; side += 2) {
       for (let i = 0; i < per; i++) {
-        // Skip a few leaflets so the silhouette has sky gaps, not a solid fan.
-        if (!dead && fr() < crownGap * (0.35 + age)) continue;
+        // Skip leaflets so the silhouette has sky gaps, not a solid fan.
+        if (!dead && fr() < crownGap * (0.45 + age * 0.9)) continue;
         // Paired leaflets with irregular spacing and slight stagger along the rachis.
         const u = (i + 0.35 + (fr() - 0.5) * 0.85 + (side < 0 ? 0.08 : 0)) / per, t = 0.12 + u * 0.88;
         const f = Math.min(nseg - 1e-4, t * nseg), k0 = f | 0, A = pts[k0];
@@ -1130,13 +1131,13 @@ function smooth01(e0, e1, x) {
   return t * t * (3 - 2 * t);
 }
 const PLACES = {
-  lagoon: { title: 'Tropical Lagoon', line: 'Clear water over pale sand', swatch: 'linear-gradient(#cfe7ea, #2f9d96 46%, #e4d2ae)', amp: 0.55, spd: 0.85, frq: 0.9, dir: 0.08, layers: 7, cx: 0.9, rough: 0.06, refl: 0.9, refr: 1.2, alpha: 1, depthK: 0.55, sun: 1.08, sky: 1.05, sunAng: -0.1, sim: 1, rip: 0.75, ripSpd: 0.95, disturb: 0.85, ripSize: 1.15, deep: [0.01, 0.1, 0.13], shal: [0.06, 0.34, 0.3], mood: [0.55, 0, 0.12, 0.65], dist: 22, pitch: 0.36, spot: 3 },
-  ocean: { title: 'Open Ocean', line: 'Long swell running to the horizon', swatch: 'linear-gradient(#b7cbe4, #1d5f98 42%, #0c335c)', amp: 1.15, spd: 0.78, frq: 0.62, dir: 0.04, layers: 8, cx: 0.72, rough: 0.14, refl: 1.12, refr: 0.68, alpha: 0.9, depthK: 1.35, sun: 1, sky: 1, sunAng: 0.05, sim: 0.9, rip: 0.5, ripSpd: 0.8, disturb: 0.75, ripSize: 1.7, deep: [0.006, 0.028, 0.075], shal: [0.02, 0.09, 0.13], mood: [0.22, 0.04, 0.32, 0.8], dist: 52, pitch: 0.16, spot: 4 },
-  cove: { title: 'Hidden Cove', line: 'Quiet water under the cliff', swatch: 'linear-gradient(#c5d0c4, #6e9084 44%, #314e4c)', amp: 0.58, spd: 0.92, frq: 1.02, dir: 0.32, layers: 6, cx: 0.78, rough: 0.1, refl: 0.86, refr: 1.02, alpha: 1, depthK: 0.82, sun: 0.96, sky: 0.98, sunAng: 0.22, sim: 0.95, rip: 0.65, ripSpd: 0.85, disturb: 0.8, ripSize: 1.05, deep: [0.012, 0.055, 0.09], shal: [0.05, 0.2, 0.18], mood: [0.32, 0.1, 0.22, 1.0], dist: 18, pitch: 0.4, spot: 1 },
-  lake: { title: 'Calm Lake', line: 'A glass surface and a long reflection', swatch: 'linear-gradient(#e4ebe6, #8aa4a6 52%, #3c5552)', amp: 0.1, spd: 0.38, frq: 0.88, dir: 0.2, layers: 4, cx: 0.4, rough: 0.03, refl: 1.28, refr: 0.7, alpha: 0.94, depthK: 1.05, sun: 0.9, sky: 0.96, sunAng: 0.16, sim: 0.65, rip: 0.32, ripSpd: 0.5, disturb: 0.5, ripSize: 1.7, deep: [0.014, 0.042, 0.05], shal: [0.04, 0.11, 0.09], mood: [0.12, 0.14, 0.48, 0.2], dist: 30, pitch: 0.12, spot: 3 },
-  storm: { title: 'Stormy Ocean', line: 'A heavy sky and a short, steep sea', swatch: 'linear-gradient(#8b9094, #2a3842 48%, #141c22)', amp: 1.42, spd: 1.18, frq: 0.92, dir: 0.35, layers: 8, cx: 1.15, rough: 0.2, refl: 0.78, refr: 0.55, alpha: 0.8, depthK: 1.2, sun: 0.46, sky: 0.66, sunAng: 0.42, sim: 1.05, rip: 0.9, ripSpd: 1.15, disturb: 1.05, ripSize: 1.6, deep: [0.01, 0.025, 0.04], shal: [0.025, 0.06, 0.07], mood: [0, 0.62, 0.38, 1.05], dist: 34, pitch: 0.4, spot: 4 },
-  reef: { title: 'Shallow Reef', line: 'The bottom showing through turquoise', swatch: 'linear-gradient(#d7f0ea, #2eae9e 40%, #e7d3a4)', amp: 0.26, spd: 0.95, frq: 1.18, dir: 0, layers: 6, cx: 0.95, rough: 0.05, refl: 0.55, refr: 1.45, alpha: 1, depthK: 0.28, sun: 1.12, sky: 1.06, sunAng: -0.04, sim: 1, rip: 0.85, ripSpd: 1, disturb: 0.75, ripSize: 0.95, deep: [0.02, 0.15, 0.15], shal: [0.22, 0.46, 0.32], mood: [0.62, 0, 0.08, 0.35], dist: 16, pitch: 0.78, tx: 196, tz: -2, yaw: 2.6 },
-  pool: { title: 'Swimming Pool', line: 'Still water, and the sand underneath', swatch: 'linear-gradient(#e7f2f2, #8fd0cc 58%, #d5e0cf)', amp: 0.035, spd: 0.32, frq: 1.7, dir: 0, layers: 2, cx: 0.22, rough: 0.02, refl: 1.1, refr: 1.5, alpha: 1, depthK: 0.2, sun: 1.1, sky: 1.06, sunAng: 0.18, sim: 1, rip: 0.5, ripSpd: 0.6, disturb: 0.55, ripSize: 0.65, deep: [0.02, 0.18, 0.22], shal: [0.28, 0.52, 0.46], mood: [0.35, 0, 0.04, 0.12], dist: 9, pitch: 1.02, spot: 3 }
+  lagoon: { title: 'Tropical Lagoon', line: 'Clear water over pale sand', swatch: 'linear-gradient(#cfe7ea, #2f9d96 46%, #e4d2ae)', amp: 0.55, spd: 0.85, frq: 0.9, dir: 0.08, layers: 7, cx: 0.9, rough: 0.09, refl: 0.82, refr: 1.15, alpha: 1, depthK: 0.55, sun: 1.02, sky: 1.02, sunAng: -0.1, sim: 1, rip: 0.75, ripSpd: 0.95, disturb: 0.85, ripSize: 1.15, deep: [0.012, 0.08, 0.11], shal: [0.05, 0.26, 0.24], mood: [0.55, 0, 0.12, 0.65], dist: 22, pitch: 0.36, spot: 3 },
+  ocean: { title: 'Open Ocean', line: 'Long swell running to the horizon', swatch: 'linear-gradient(#b7cbe4, #1d5f98 42%, #0c335c)', amp: 1.15, spd: 0.78, frq: 0.62, dir: 0.04, layers: 8, cx: 0.72, rough: 0.16, refl: 1.02, refr: 0.68, alpha: 0.9, depthK: 1.35, sun: 0.96, sky: 0.98, sunAng: 0.05, sim: 0.9, rip: 0.5, ripSpd: 0.8, disturb: 0.75, ripSize: 1.7, deep: [0.008, 0.026, 0.065], shal: [0.018, 0.075, 0.11], mood: [0.22, 0.04, 0.32, 0.8], dist: 52, pitch: 0.16, spot: 4 },
+  cove: { title: 'Hidden Cove', line: 'Quiet water under the cliff', swatch: 'linear-gradient(#c5d0c4, #6e9084 44%, #314e4c)', amp: 0.58, spd: 0.92, frq: 1.02, dir: 0.32, layers: 6, cx: 0.78, rough: 0.12, refl: 0.8, refr: 1.02, alpha: 1, depthK: 0.82, sun: 0.94, sky: 0.96, sunAng: 0.22, sim: 0.95, rip: 0.65, ripSpd: 0.85, disturb: 0.8, ripSize: 1.05, deep: [0.014, 0.05, 0.08], shal: [0.045, 0.17, 0.15], mood: [0.32, 0.1, 0.22, 1.0], dist: 18, pitch: 0.4, spot: 1 },
+  lake: { title: 'Calm Lake', line: 'A glass surface and a long reflection', swatch: 'linear-gradient(#e4ebe6, #8aa4a6 52%, #3c5552)', amp: 0.1, spd: 0.38, frq: 0.88, dir: 0.2, layers: 4, cx: 0.4, rough: 0.045, refl: 1.18, refr: 0.7, alpha: 0.94, depthK: 1.05, sun: 0.88, sky: 0.94, sunAng: 0.16, sim: 0.65, rip: 0.32, ripSpd: 0.5, disturb: 0.5, ripSize: 1.7, deep: [0.016, 0.04, 0.048], shal: [0.038, 0.1, 0.085], mood: [0.12, 0.14, 0.48, 0.2], dist: 30, pitch: 0.12, spot: 3 },
+  storm: { title: 'Stormy Ocean', line: 'A heavy sky and a short, steep sea', swatch: 'linear-gradient(#8b9094, #2a3842 48%, #141c22)', amp: 1.42, spd: 1.18, frq: 0.92, dir: 0.35, layers: 8, cx: 1.15, rough: 0.22, refl: 0.72, refr: 0.55, alpha: 0.8, depthK: 1.2, sun: 0.46, sky: 0.66, sunAng: 0.42, sim: 1.05, rip: 0.9, ripSpd: 1.15, disturb: 1.05, ripSize: 1.6, deep: [0.01, 0.025, 0.04], shal: [0.025, 0.06, 0.07], mood: [0, 0.62, 0.38, 1.05], dist: 34, pitch: 0.4, spot: 4 },
+  reef: { title: 'Shallow Reef', line: 'The bottom showing through turquoise', swatch: 'linear-gradient(#d7f0ea, #2eae9e 40%, #e7d3a4)', amp: 0.26, spd: 0.95, frq: 1.18, dir: 0, layers: 6, cx: 0.95, rough: 0.07, refl: 0.5, refr: 1.4, alpha: 1, depthK: 0.28, sun: 1.05, sky: 1.02, sunAng: -0.04, sim: 1, rip: 0.85, ripSpd: 1, disturb: 0.75, ripSize: 0.95, deep: [0.022, 0.12, 0.13], shal: [0.16, 0.36, 0.28], mood: [0.62, 0, 0.08, 0.35], dist: 16, pitch: 0.78, tx: 196, tz: -2, yaw: 2.6 },
+  pool: { title: 'Swimming Pool', line: 'Still water, and the sand underneath', swatch: 'linear-gradient(#e7f2f2, #8fd0cc 58%, #d5e0cf)', amp: 0.035, spd: 0.32, frq: 1.7, dir: 0, layers: 2, cx: 0.22, rough: 0.03, refl: 1.0, refr: 1.45, alpha: 1, depthK: 0.2, sun: 1.05, sky: 1.02, sunAng: 0.18, sim: 1, rip: 0.5, ripSpd: 0.6, disturb: 0.55, ripSize: 0.65, deep: [0.022, 0.15, 0.19], shal: [0.22, 0.42, 0.38], mood: [0.35, 0, 0.04, 0.12], dist: 9, pitch: 1.02, spot: 3 }
 };
 const PLACE_ALIAS = { tropical: 'lagoon', calm: 'ocean', deep: 'ocean', shallow: 'reef', storm: 'storm', pool: 'pool', lake: 'lake', lagoon: 'lagoon', ocean: 'ocean', cove: 'cove', reef: 'reef' };
 const WP_KEYS = ['amp', 'spd', 'frq', 'dir', 'layers', 'cx', 'rough', 'refl', 'refr', 'alpha', 'depthK', 'sun', 'sky', 'sunAng', 'sim', 'rip', 'ripSpd', 'disturb', 'ripSize'];
@@ -2260,13 +2261,14 @@ async function main() {
       if (h < 1.9) continue;
       const s = fieldSlope(world, x, z);
       const fm = forestMask(x, z, h, s);
-      if (fm < 0.22 + rnd() * 0.48) continue;
-      // Competition-like spacing: skip if a coarse noise cell is already "taken".
-      if (vnoise(x * 0.045 + 2, z * 0.045) < 0.22 && rnd() < 0.55) continue;
+      if (fm < 0.28 + rnd() * 0.5) continue;
+      // Competition-like spacing + clearings — real forests are not uniform game scatter.
+      if (vnoise(x * 0.045 + 2, z * 0.045) < 0.28 && rnd() < 0.62) continue;
+      if (vnoise(x * 0.012 + 5, z * 0.012) < 0.32 && rnd() < 0.45) continue;
       const inland = smooth01(3, 14, h);
       const tall = (h < 4 ? 6.2 : 7.2) + inland * (5.5 + rnd() * 3) + rnd() * 4;
       const sy = 0.78 + rnd() * 0.5;
-      const tint = [0.75 + rnd() * 0.5, 0.78 + rnd() * 0.4, 0.7 + rnd() * 0.45];
+      const tint = [0.72 + rnd() * 0.4, 0.74 + rnd() * 0.32, 0.68 + rnd() * 0.35];
       // Habitat bias: slender coastal (seed%6==5), emergent/round inland dense (1,2).
       const seeds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218];
       let pickIds = treeIds;
