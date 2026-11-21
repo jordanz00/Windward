@@ -919,6 +919,8 @@ function bindStudio() {
     showHint = 6;
     $('hint').classList.add('show');
   });
+  const musicBtn = $('musicbtn');
+  if (musicBtn) musicBtn.addEventListener('click', () => { musicOn = !musicOn; paintMusic(); });
   $('watchbtn').addEventListener('click', () => {
     const on = !document.body.classList.contains('cinema');
     document.body.classList.toggle('cinema', on);
@@ -978,7 +980,10 @@ struct SV { @builtin(position) clip: vec4<f32> }
 `;
 
 let audio = null;
+let score = null;
 let muted = false;
+let musicOn = true;
+let musicVol = 0.72;
 function makeAudio() {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
@@ -1078,7 +1083,20 @@ function makeAudio() {
     if (Math.random() < 0.4) setTimeout(() => chirp(kind), 160 + Math.random() * 420);
   }, 2.2, 8.5);
   later(crash, 4.0, 12.0);
+  try {
+    score = createScore(ac, under);
+    score.start();
+  } catch (err) {
+    console.error(err);
+  }
   return api;
+}
+
+function paintMusic() {
+  const b = $('musicbtn');
+  if (!b) return;
+  b.textContent = musicOn ? 'Music' : 'Quiet';
+  b.setAttribute('aria-pressed', musicOn ? 'true' : 'false');
 }
 
 const K = Object.create(null);
@@ -1088,8 +1106,12 @@ let lookX = 0, lookY = 0, dragging = false, touchN = 0;
 function bootKeys() {
   addEventListener('keydown', (e) => {
     if (K[e.code] != null) { K[e.code] = 1; e.preventDefault(); }
+    if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+      musicVol = Math.min(1, Math.max(0.15, musicVol + (e.code === 'BracketRight' ? 0.08 : -0.08)));
+    }
     if (e.repeat) return;
     if (e.code === 'KeyM') { muted = !muted; if (audio) audio.master.gain.value = muted ? 0 : 0.9; }
+    if (e.code === 'KeyN') { musicOn = !musicOn; paintMusic(); }
     if (e.code === 'KeyH') statsEl.hidden = !statsEl.hidden;
     if (e.code === 'KeyF' && mode === 2 && !orbit) fly = !fly;
     if (e.code === 'Escape') {
@@ -2193,6 +2215,7 @@ async function main() {
         const fps = (ftN / sum).toFixed(0);
         statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH;
       }
+      if (score) score.setAudible(mode > 0 && musicOn && !muted, musicVol);
       if (audio && mode > 0) {
         const alt = Math.max(camY, 0);
         const shore = Math.exp(-Math.abs(camY) * 0.08) * (0.35 + 0.65 * fieldDamp(world, camX, camZ));

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
-const js = [read('island.js'), read('shaders.js'), read('ocean.js'), read('shore.js'), read('app.js')].join('\n');
+const js = [read('island.js'), read('shaders.js'), read('ocean.js'), read('shore.js'), read('score.js'), read('app.js')].join('\n');
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -38,6 +38,7 @@ ${css}
     <b>Walk</b><span>Step onto the sand. WASD, Q to dive, F to fly.</span>
     <b>Watch</b><span>Hide the interface. C does the same.</span>
     <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
+    <b>Music</b><span>N quiets the score. [ and ] set how present it is.</span>
     <b>Esc</b><span>This card</span>
   </div>
   <p class="fine">Best in Chrome. On a phone, drag to look and tap the water. One HTML file, MIT licensed.</p>
@@ -47,6 +48,7 @@ ${css}
   <button id="placebtn" type="button">Places</button>
   <button id="walkbtn" type="button">Walk</button>
   <button id="watchbtn" type="button">Watch</button>
+  <button id="musicbtn" type="button" aria-pressed="true">Music</button>
 </div>
 <div id="caption"></div>
 <button id="menubtn" type="button">Menu</button>
