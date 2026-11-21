@@ -527,7 +527,7 @@ fn sunShadow(p: vec3<f32>) -> f32 {
   let cn = F.nearVP * vec4<f32>(p + F.sunDir * 0.06, 1.0);
   let un = vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5);
   let zn = clamp(cn.z, 0.0, 1.0);
-  let tn = 1.7 / 2048.0;
+  let tn = 2.6 / 2048.0;
   var sn = 0.0;
   for (var y = -1; y <= 1; y++) {
     for (var x = -1; x <= 1; x++) {
@@ -536,6 +536,16 @@ fn sunShadow(p: vec3<f32>) -> f32 {
   }
   let wn = 1.0 - smoothstep(0.8, 0.97, max(abs(cn.x), abs(cn.y)));
   return mix(far, sn / 9.0, wn);
+}
+
+// Diffuse light from the sky panorama. Three taps stand in for the hemisphere: along
+// the normal, toward the zenith, and a little toward the sun. Without this, sand and
+// leaves are a flat fill with a hard sun.
+fn skyIrradiance(n: vec3<f32>) -> vec3<f32> {
+  let n0 = normalize(n + vec3<f32>(0.0, 0.4, 0.0));
+  let n1 = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.7));
+  let n2 = normalize(n + F.sunDir * 0.35 + vec3<f32>(0.0, 0.15, 0.0));
+  return (skyLook(n0, 0.0) + skyLook(n1, 0.0) * 1.15 + skyLook(n2, 0.0) * 0.85) * 0.333;
 }
 
 // leaf is 1 for a thin blade, which is lit from whichever side the sun is on: by
@@ -549,9 +559,14 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // Under the forest the crowns hide half the sky from the ground, the trunks and the low leaves.
   let fld = sampleField(world.xz);
   let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz)) * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
-  let sky = F.amb.rgb * mix(hemi, 0.75, leaf) * (1.0 - 0.3 * roof);
-  let ground = vec3<f32>(0.26, 0.19, 0.11) * F.amb.w * (1.0 - hemi);
-  var light = F.sunCol * max(nl, 0.0) * sh * 1.2 + sky * 0.7 + ground * 0.4;
+  let open = 1.0 - 0.55 * roof;
+  // The same panorama that paints the sky and the water lights the ground. Leaves take more
+  // of the upper sky; a face turned down takes more of the sand bounce.
+  let sky = skyIrradiance(n) * mix(mix(0.45, 1.0, hemi), 0.9, leaf) * open;
+  let ground = vec3<f32>(0.42, 0.34, 0.22) * F.amb.w * (1.0 - hemi) * open;
+  // Soften the lit / unlit edge a little so a hard sun does not cut every trunk in half.
+  let sunTerm = mix(max(nl, 0.0), sat(nl * 0.5 + 0.5) * max(nl, 0.0), 0.35);
+  var light = F.sunCol * sunTerm * sh * 1.05 + sky * 0.85 + ground * 0.55;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
     let absorb = exp(-depth * vec3<f32>(0.19, 0.06, 0.05));
@@ -577,7 +592,8 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
     let ndv = max(dot(n, V), 0.0);
     let fr = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
     col += F.sunCol * pow(max(dot(n, H), 0.0), mix(36.0, 70.0, wet)) * step(0.0, nl) * sh * sheen * (0.55 + 0.6 * wet);
-    col += F.amb.rgb * fr * max(gloss, wet * mix(0.1, 0.2, leaf) * sat(n.y * 1.5)) * 0.55;
+    // A wet or waxy face mirrors the sky, not a flat ambient colour.
+    col += skyLook(reflect(-V, n), 0.0) * fr * max(gloss, wet * mix(0.1, 0.25, leaf) * sat(n.y * 1.5)) * 0.45;
   }
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let spec = pow(max(dot(n, H), 0.0), 56.0);
