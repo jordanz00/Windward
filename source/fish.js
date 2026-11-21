@@ -395,27 +395,27 @@ function makeCoral(kind, seed, lod, form) {
   return m;
 }
 
-// A sea anemone: a low column with a crown of tentacles that lean with the surge.
+// A sea anemone: a squat column all but hidden under a crown of tentacles that lean with the surge.
 function makeAnemone(seed, lod) {
   const rnd = seeded(seed * 71 + 3);
   const m = new Mesh();
   const base = [0.40, 0.17, 0.32], tent = [0.50, 0.38, 0.20], tip = [0.80, 0.72, 0.56];
-  coralTube(m, [[0, -0.04, 0], [0, 0.03, 0], [0, 0.07, 0]], 0.13, 0.17, lod ? 6 : 12, base, 0.6, 1, 0, 0.12);
+  coralTube(m, [[0, -0.04, 0], [0, 0.005, 0], [0, 0.03, 0]], 0.12, 0.16, lod ? 6 : 12, base, 0.6, 1, 0, 0.1);
   for (let i = 0; i < m.uv.length; i += 2) m.uv[i] = 3;
-  const n = lod ? 60 : 170;
+  const n = lod ? 80 : 230;
   for (let i = 0; i < n; i++) {
-    const a = rnd() * 6.2832, rr = Math.sqrt(rnd()) * 0.17;
+    const a = rnd() * 6.2832, rr = Math.pow(rnd(), 0.4) * 0.17;
     const ox = Math.cos(a) * rr, oz = Math.sin(a) * rr;
-    const len = 0.06 + rnd() * 0.06, out = 0.25 + rr * 5, bow = (rnd() - 0.5) * 0.02;
+    const len = 0.07 + rnd() * 0.07, out = 0.25 + rr * 8, bow = (rnd() - 0.5) * 0.02;
     const first = m.pos.length / 3;
     const pts = [];
     for (let j = 0; j <= (lod ? 2 : 4); j++) {
       const t = j / (lod ? 2 : 4), d = len * 0.55 * out * t * t + bow * Math.sin(t * 3.1416);
-      pts.push([ox + Math.cos(a) * d - Math.sin(a) * bow * t, 0.06 + len * t, oz + Math.sin(a) * d + Math.cos(a) * bow * t]);
+      pts.push([ox + Math.cos(a) * d - Math.sin(a) * bow * t, 0.025 + len * t * (1 - 0.35 * t * rr * 5), oz + Math.sin(a) * d + Math.cos(a) * bow * t]);
     }
-    coralTube(m, pts, 0.006, 0.0045, lod ? 3 : 5, [1, 1, 1], 0, 1);
+    coralTube(m, pts, 0.007, 0.005, lod ? 3 : 5, [1, 1, 1], 0, 1);
     for (let k = first; k < m.pos.length / 3; k++) {
-      const t = Math.min(1, Math.max(0, (m.pos[k * 3 + 1] - 0.06) / len));
+      const t = Math.min(1, Math.max(0, (m.pos[k * 3 + 1] - 0.025) / len));
       m.col[k * 3] = tent[0] + (tip[0] - tent[0]) * t * t;
       m.col[k * 3 + 1] = tent[1] + (tip[1] - tent[1]) * t * t;
       m.col[k * 3 + 2] = tent[2] + (tip[2] - tent[2]) * t * t;
@@ -513,11 +513,12 @@ function plantReef(world, scatter, q) {
       }
     }
     if (rnd() < 0.45) {
-      const a = rnd() * 6.2832, px = x + Math.cos(a) * r * 0.9, pz = z + Math.sin(a) * r * 0.9, pb = fieldSample(world, px, pz);
+      // On the sand at the foot of the mound, clear of it.
+      const a = rnd() * 6.2832, px = x + Math.cos(a) * r * 1.08, pz = z + Math.sin(a) * r * 1.08, pb = fieldSample(world, px, pz);
       if (pb < -0.9) {
         const sc = 1 + rnd() * 0.8;
         scatter.add(anem, px, pb, pz, rnd() * 6.28, sc, [0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2], 1);
-        head.anemone = [px, pb + 0.16 * sc, pz];
+        head.anemone = [px, pb + 0.15 * sc, pz];
       }
     }
     heads.push(head);
@@ -1170,10 +1171,10 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
     through = (1.0 - ray * 0.5) * (0.35 + 0.45 * in.uv.y);
     if (clear) {
       // The fins a fish rows with are clear film on fine rays: mostly you see through them.
-      let keep = mix(0.12, 0.5, ray) * (1.0 - 0.3 * in.uv.y);
+      let keep = mix(0.08, 0.42, ray) * (1.0 - 0.3 * in.uv.y);
       if (hash22(floor(in.clip.xy)).x > keep) { discard; }
-      alb = mix(alb, vec3<f32>(0.5, 0.56, 0.56), 0.6);
-      through = 0.8;
+      alb *= 0.8;
+      through = 0.6;
     }
     shine = 0.1;
   } else {
