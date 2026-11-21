@@ -298,6 +298,11 @@ fn atmosphere(rd: vec3<f32>) -> vec3<f32> {
 fn cloudDrift() -> vec2<f32> {
   return fract(F.windOff.xy / 48.0) * 48.0;
 }
+// Higher slabs ride the trades faster so layers do not slide as one sheet.
+fn cloudDriftH(h: f32) -> vec2<f32> {
+  let wind = normalize(F.wind.xy + vec2<f32>(1e-5, 0.0));
+  return cloudDrift() + wind * (0.15 + h * 0.55);
+}
 // Weather mix of cloud families: cumulus, towering, cirrus, stratocumulus.
 fn cloudMix() -> vec4<f32> {
   let cover = sat(F.mood.y);
@@ -311,57 +316,78 @@ fn cloudMix() -> vec4<f32> {
   return vec4<f32>(cumu, tower, cirrus, strato) / s;
 }
 fn cloudCover(p: vec2<f32>) -> f32 {
-  let pd = p + cloudDrift();
   let m = cloudMix();
-  // Low-frequency domain warp — coherent masses, not boiling noise.
-  let warp = (vec2<f32>(n2(pd * 0.22 + vec2<f32>(3.1, 0.0)), n2(pd * 0.22 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.8;
-  let q = pd + warp;
-  // Scattered cumulus: distinct cells with clear blue between them (not a noise carpet).
-  let cell = n2(q * 0.95) * 0.62 + n2(q * 2.1 + vec2<f32>(4.0, 9.0)) * 0.38;
-  let billow = n2(q * 3.8 + vec2<f32>(1.2, 5.5)) * 0.58 + n2(q * 6.6 + vec2<f32>(8.0, 2.0)) * 0.42;
-  let gap = smoothstep(0.28, 0.62, cell);
-  let cumu = cell * gap * (0.5 + 0.5 * billow) * (0.7 + 0.42 * n2(pd * 0.055 + vec2<f32>(5.0, 2.0)));
-  // Towering cumulus: larger footprints, irregular cauliflower tops.
-  let tw = n2(q * 0.42 + vec2<f32>(11.0, 3.0)) * 0.68 + n2(q * 1.55 + vec2<f32>(2.0, 8.0)) * 0.32;
-  let tower = tw * smoothstep(0.22, 0.58, tw) * (0.48 + 0.52 * n2(q * 2.9 + vec2<f32>(6.0, 1.0)));
-  // Cirrus: thin elongated streaks at a rotated scale.
-  let r = vec2<f32>(q.x * 0.42 + q.y * 0.11, -q.x * 0.08 + q.y * 0.95);
-  let cirrus = n2(r * 1.9) * 0.55 + n2(r * 4.8 + vec2<f32>(3.0, 7.0)) * 0.3 + n2(r * 11.0) * 0.15;
-  // Stratocumulus: soft layered field with broken openings.
-  let strato = n2(q * 0.62) * 0.5 + n2(q * 1.55 + vec2<f32>(4.0, 2.0)) * 0.35 + n2(q * 3.8) * 0.15;
+  let pd = p + cloudDrift();
+  // Macro clearings — large blue gaps between cloud provinces (not a noise carpet).
+  let province = n2(pd * 0.07 + vec2<f32>(1.7, 4.2)) * 0.7 + n2(pd * 0.17 + vec2<f32>(9.0, 2.0)) * 0.3;
+  let region = smoothstep(0.34, 0.62, province);
+  // Dual-scale domain warp — coherent masses without wallpaper repetition.
+  let w1 = (vec2<f32>(n2(pd * 0.16 + vec2<f32>(3.1, 0.0)), n2(pd * 0.16 + vec2<f32>(7.7, 1.3))) - 0.5) * 3.6;
+  let w2 = (vec2<f32>(n2((pd + w1) * 0.48 + vec2<f32>(2.0, 8.0)), n2((pd + w1) * 0.48 + vec2<f32>(5.0, 1.0))) - 0.5) * 1.15;
+  let q = pd + w1 + w2;
+  // Cumulus: sparse cellular mounds with soft billow fill and clear blue between.
+  let cell = n2(q * 0.68) * 0.72 + n2(q * 1.55 + vec2<f32>(4.0, 9.0)) * 0.28;
+  let billow = n2(q * 3.1 + vec2<f32>(1.2, 5.5)) * 0.58 + n2(q * 5.8 + vec2<f32>(8.0, 2.0)) * 0.42;
+  let mound = pow(sat((cell - 0.4) / 0.48), 1.4);
+  let frag = pow(sat((n2(q * 2.4 + vec2<f32>(12.0, 3.0)) - 0.55) / 0.4), 1.8) * 0.55;
+  let cumu = max(mound * (0.52 + 0.48 * billow), frag) * (0.55 + 0.45 * region);
+  // Towering tropical cumulus: rarer, larger footprints that punch upward.
+  let tw = n2(q * 0.26 + vec2<f32>(11.0, 3.0)) * 0.78 + n2(q * 0.85 + vec2<f32>(2.0, 8.0)) * 0.22;
+  let tower = pow(sat((tw - 0.5) / 0.4), 1.7)
+    * (0.4 + 0.6 * n2(q * 2.2 + vec2<f32>(6.0, 1.0)))
+    * smoothstep(0.38, 0.72, region);
+  // Cirrus: thin elongated streaks on a faster upper-level drift.
+  let pdC = p + cloudDriftH(1.2);
+  let r = vec2<f32>(pdC.x * 0.38 + pdC.y * 0.1, -pdC.x * 0.07 + pdC.y * 0.92);
+  let cirrus = n2(r * 1.7) * 0.5 + n2(r * 4.2 + vec2<f32>(3.0, 7.0)) * 0.32 + n2(r * 9.5) * 0.18;
+  // Stratocumulus: soft layered field with broken openings, slower low drift.
+  let pdS = p + cloudDriftH(0.15);
+  let qs = pdS + w1 * 0.55;
+  let strato = n2(qs * 0.55) * 0.48 + n2(qs * 1.35 + vec2<f32>(4.0, 2.0)) * 0.34 + n2(qs * 3.2) * 0.18;
   let c = cumu * m.x + tower * m.y + cirrus * m.z + strato * m.w;
-  let thr = 0.7 - 0.4 * sat(F.mood.y) - 0.3 * smoothstep(0.45, 0.95, F.mood.y);
+  // Sharper threshold keeps wide blue gaps; cover only fills them when weather asks.
+  let thr = 0.74 - 0.38 * sat(F.mood.y) - 0.28 * smoothstep(0.45, 0.95, F.mood.y);
   return (c - thr) / max(1.0 - thr, 0.08);
 }
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   let amt = cloudCover(p.xz);
   if (amt <= 0.0) { return 0.0; }
   let m = cloudMix();
-  // Height profiles: flat strato bases, tall towers, thin high cirrus sheets.
-  let thick = 0.1 + (0.55 * m.x + 1.35 * m.y + 0.22 * m.z + 0.4 * m.w) * pow(sat(amt), 0.5);
-  let baseY = CLOUD_BASE + 0.55 * m.z - 0.06 * m.w;
+  let grow = sat(amt);
+  // Per-column peak height so some masses are flat and some tower into cauliflower.
+  let peak = 0.65 + 0.7 * n2(p.xz * 0.95 + cloudDrift() * 0.4);
+  let thick = (0.1 + (0.48 * m.x + 1.65 * m.y + 0.18 * m.z + 0.36 * m.w) * pow(grow, 0.42))
+    * mix(0.75, peak, sat(m.x + m.y));
+  let baseY = CLOUD_BASE + 0.58 * m.z - 0.05 * m.w + 0.07 * n2(p.xz * 0.35 + vec2<f32>(2.0, 6.0));
   let h = (p.y - baseY) / max(thick, 0.08);
-  if (h < -0.05 || h > 1.15) { return 0.0; }
+  if (h < -0.06 || h > 1.2) { return 0.0; }
   let hh = clamp(h, 0.0, 1.0);
-  let base = smoothstep(0.0, mix(0.06, 0.14, m.w), hh);
-  // Dome for cumulus/tower; flatter for strato; wispy for cirrus.
-  let dome = mix(1.0 - pow(hh, mix(1.35, 2.1, m.y)), 1.0 - abs(hh - 0.35) * 1.6, m.w);
-  let wispy = mix(dome, exp(-pow((hh - 0.55) * 3.2, 2.0)), m.z);
-  var d = base * wispy * sat(amt * mix(3.8, 5.2, m.y));
+  let base = smoothstep(0.0, mix(0.05, 0.13, m.w), hh);
+  // Stacked soft lobes — rounded billows instead of a single dome.
+  let lobePh = hh * mix(5.5, 7.5, m.y) + n2(p.xz * 2.1 + cloudDrift() * 0.2) * 3.2;
+  let lobe = 0.55 + 0.45 * sin(lobePh);
+  let dome = (1.0 - pow(hh, mix(1.2, 2.35, m.y))) * mix(1.0, lobe, 0.55 * sat(m.x + m.y));
+  let flat = 1.0 - abs(hh - 0.32) * 1.55;
+  let profile = mix(mix(dome, flat, m.w), exp(-pow((hh - 0.52) * 3.0, 2.0)), m.z);
+  var d = base * profile * sat(amt * mix(3.6, 5.4, m.y));
+  // Soft radial falloff from the horizontal density core — edges read as volume, not cutouts.
+  let core = sat(amt * 1.8);
+  d *= 0.35 + 0.65 * smoothstep(0.0, 0.55, core) * (1.0 - 0.35 * hh * hh * (1.0 - m.z));
   if (fine > 0.5) {
-    let w = p + vec3<f32>(cloudDrift().x, 0.0, cloudDrift().y);
-    // Prefer mid scales over boiling fine noise — keeps silhouettes stable frame to frame.
-    let large = n3(w * 2.0);
-    let mid = n3(w * 5.4 + vec3<f32>(4.0, 1.0, 7.0));
-    let fineN = n3(w * 11.0 + vec3<f32>(2.0, 9.0, 5.0));
-    let b = large * 0.5 + mid * 0.38 + fineN * 0.12;
-    // Cellular breakup of edges; towers erode more on top.
-    let erode = sat(0.5 + (b - 0.5) * 3.1) * (0.14 + 0.9 * hh * hh * (0.6 + 0.8 * m.y));
-    d -= erode * (1.0 - 0.35 * m.z);
+    let drift = cloudDriftH(hh);
+    let w = p + vec3<f32>(drift.x, hh * 0.08, drift.y);
+    // Mid-scale cauliflower over sparse fine noise — soft and stable, not boiling.
+    let large = n3(w * 1.7);
+    let mid = n3(w * 4.6 + vec3<f32>(4.0, 1.0, 7.0));
+    let fineN = n3(w * 9.5 + vec3<f32>(2.0, 9.0, 5.0));
+    let b = large * 0.52 + mid * 0.36 + fineN * 0.12;
+    // Tops erode into irregular rims; bases stay denser.
+    let erode = sat(0.48 + (b - 0.5) * 3.4) * (0.1 + 1.05 * hh * hh * (0.55 + 0.9 * m.y));
+    d -= erode * (1.0 - 0.4 * m.z);
   } else {
-    d -= 0.18 + 0.26 * hh;
+    d -= 0.16 + 0.3 * hh;
   }
-  return sat(d * 1.9);
+  return sat(d * 2.05);
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
@@ -383,7 +409,8 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let sinE = max(rd.y, 0.0) + 0.012;
   let hz = normalize(rd.xz + vec2<f32>(1e-5, 0.0)) * sqrt(1.0 - sinE * sinE);
   let t0 = CLOUD_BASE / sinE;
-  let big = min(1.9 / sinE, 14.0) / 20.0;
+  // Slightly taller slab so tropical towers have room without adding march steps.
+  let big = min(2.25 / sinE, 15.5) / 20.0;
   let ds = big / 7.0;
   // Direct sunlight fades out below the horizon; night clouds keep shape via amb/moon only.
   let dayK = smoothstep(-0.04, 0.1, F.sunTrue.y);
@@ -391,10 +418,10 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let mu = dot(rd, normalize(sunAim + vec3<f32>(1e-5, 1e-5, 0.0)));
   let gold = sat(F.day.w);
   // Warm sun-facing cloud light; cooler ambient for undersides — not a global orange filter.
-  let sunWarm = mix(vec3<f32>(1.0), vec3<f32>(1.35, 0.95, 0.62), gold);
-  let sunL = F.sunCol * sunWarm * 1.55 * dayK * (1.0 + 2.2 * pow(sat(mu), 5.0) + 1.1 * gold);
+  let sunWarm = mix(vec3<f32>(1.0), vec3<f32>(1.38, 0.94, 0.58), gold);
+  let sunL = F.sunCol * sunWarm * 1.65 * dayK * (1.0 + 2.4 * pow(sat(mu), 5.0) + 1.2 * gold);
   let moonL = F.amb.rgb * vec3<f32>(0.55, 0.62, 0.78) * (1.0 - dayK) * (0.35 + 0.65 * F.moon.w);
-  let skyL = F.amb.rgb * mix(vec3<f32>(0.88, 0.83, 0.8), vec3<f32>(0.55, 0.62, 0.95), gold * 0.55);
+  let skyL = F.amb.rgb * mix(vec3<f32>(0.82, 0.86, 0.95), vec3<f32>(0.5, 0.58, 0.92), gold * 0.5);
   var C = vec3<f32>(0.0);
   var tm = 0.0;
   var wsum = 0.0;
@@ -426,19 +453,24 @@ struct SkyBake { @location(0) c: vec4<f32> }
       }
       let d = cloudAt(p, 1.0);
       if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
-      let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.02, 0.0));
-      var ls = cloudAt(p + lightDir * 0.06, 1.0) * 0.1;
-      ls += cloudAt(p + lightDir * 0.22, 0.0) * 0.2;
-      ls += cloudAt(p + lightDir * 0.6, 0.0) * 0.5;
-      let hK = sat((p.y - CLOUD_BASE) / 1.3);
-      let sunT = exp(-ls * 12.0);
-      // Sun-facing rims warm; thin edges silver-lined when backlit; interiors cooler.
-      let phase = 0.7 + 0.65 * pow(sat(mu), 3.5);
-      let silver = pow(sat(mu), 7.0) * sunT * (1.0 - d * 0.55) * (0.6 + 1.0 * gold);
-      let L = sunL * (sunT * 0.95 * phase + 0.12 * exp(-ls * 1.3) + silver * 1.65)
-        + skyL * (0.22 + 0.55 * hK + 0.28 * (1.0 - hK))
-        + moonL * (0.45 + 0.55 * hK);
-      let al = 1.0 - exp(-d * ds * 34.0);
+      let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.03, 0.0));
+      // Soft self-shadow along the sun ray — longer reach for tower depth.
+      var ls = cloudAt(p + lightDir * 0.05, 1.0) * 0.08;
+      ls += cloudAt(p + lightDir * 0.16, 0.0) * 0.16;
+      ls += cloudAt(p + lightDir * 0.4, 0.0) * 0.32;
+      ls += cloudAt(p + lightDir * 0.95, 0.0) * 0.55;
+      let hK = sat((p.y - CLOUD_BASE) / 1.55);
+      let sunT = exp(-ls * 15.0);
+      // Approximate multiple scattering (powder) so thin lit edges glow without clipping.
+      let powder = 1.0 - exp(-d * 5.2);
+      let phase = 0.65 + 0.75 * pow(sat(mu), 3.2);
+      let silver = pow(sat(mu), 6.0) * sunT * powder * (0.7 + 1.1 * gold);
+      // Darker bases, brighter sun-facing tops — interiors have depth, not flat white.
+      let baseAO = mix(0.42, 1.0, sat(hK * 1.15 + sunT * 0.25));
+      let L = sunL * (sunT * (0.55 + 0.55 * powder) * phase + silver * 1.85) * baseAO
+        + skyL * (0.18 + 0.5 * hK + 0.32 * (1.0 - hK) * (0.55 + 0.45 * sunT))
+        + moonL * (0.4 + 0.6 * hK);
+      let al = 1.0 - exp(-d * ds * 36.0);
       C += T * al * L;
       tm += T * al * t;
       wsum += T * al;
@@ -448,8 +480,8 @@ struct SkyBake { @location(0) c: vec4<f32> }
   }
   if (wsum > 0.0) {
     // Distant cloud is seen through the same air as the horizon.
-    let keep = exp(-(tm / wsum) * 0.028);
-    col = air * T + C * keep + air * (1.0 - T) * (1.0 - keep);
+    let keep = exp(-(tm / wsum) * 0.032);
+    col = air * T + C * keep + air * (1.0 - T) * (1.0 - keep) * 0.85;
   }
   var o: SkyBake;
   o.c = vec4<f32>(col, T);
@@ -469,8 +501,8 @@ fn skyLook(rd: vec3<f32>, disc: f32) -> vec3<f32> {
   col = mix(col, col * vec3<f32>(1.08, 0.97, 0.9) + vec3<f32>(0.04, 0.02, 0.0) * F.amb.w, warmK * 0.4);
   // Horizon haze warms at golden hour without painting the zenith orange.
   col = mix(col, col * vec3<f32>(1.12, 0.96, 0.82) + vec3<f32>(0.06, 0.02, 0.0), goldK * (1.0 - up) * 0.65);
-  // A cloud deck is grey whatever colour the light under it has been given.
-  col = mix(col, vec3<f32>(0.98, 1.0, 1.04) * dot(F.amb.rgb, vec3<f32>(0.37, 0.55, 0.23)) * (0.45 + 0.7 * up), over * 0.82);
+  // Heavy overcast greys the deck slightly — keep baked volumetric lighting visible.
+  col = mix(col, vec3<f32>(0.96, 0.98, 1.02) * dot(F.amb.rgb, vec3<f32>(0.37, 0.55, 0.23)) * (0.5 + 0.65 * up), over * 0.28);
   return col * max(F.lit.y, 0.0);
 }
 fn skyColor(rd: vec3<f32>) -> vec3<f32> { return skyLook(rd, 1.0); }
