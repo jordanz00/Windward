@@ -62,6 +62,8 @@ struct ShoreU {
 @group(0) @binding(5) var<uniform> SH: ShoreU;
 @group(0) @binding(6) var shoreTex: texture_2d<f32>;
 @group(0) @binding(7) var shoreWet: texture_2d<f32>;
+@group(0) @binding(8) var skyMap: texture_2d<f32>;
+@group(0) @binding(9) var skySamp: sampler;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_2d;
@@ -91,6 +93,21 @@ fn n2(p: vec2<f32>) -> f32 {
   let u = f * f * (3.0 - 2.0 * f);
   return mix(mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u.x),
              mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
+}
+
+fn hash31(p: vec3<f32>) -> f32 {
+  var q = fract(p * 0.1031);
+  q += dot(q, q.zyx + 31.32);
+  return fract((q.x + q.y) * q.z);
+}
+fn n3(p: vec3<f32>) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let e = vec2<f32>(0.0, 1.0);
+  return mix(
+    mix(mix(hash31(i), hash31(i + e.yxx), u.x), mix(hash31(i + e.xyx), hash31(i + e.yyx), u.x), u.y),
+    mix(mix(hash31(i + e.xxy), hash31(i + e.yxy), u.x), mix(hash31(i + e.xyy), hash31(i + e.yyy), u.x), u.y), u.z);
 }
 
 struct ShoreS {
@@ -195,90 +212,182 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
   return pow(y, vec3<f32>(0.4545));
 }
 
-fn cloudDens(p: vec2<f32>) -> f32 {
-  var v = 0.0;
-  var a = 0.56;
-  var q = p;
-  let oct = i32(F.cloudOct);
-  for (var i = 0; i < 4; i++) {
-    if (i >= oct) { break; }
-    v += a * n2(q);
-    q = q * 2.07 + vec2<f32>(1.7, 8.3);
-    a *= 0.5;
+// ---- Sky. One panorama holds the air and the clouds. It is baked a strip at a time
+// and read by everything that looks at the sky: the sky itself, reflections, haze.
+// u is azimuth; v is elevation, with most of its rows near the horizon.
+const SKYW: f32 = 1536.0;
+const SKYH: f32 = 384.0;
+const SKY_E0: f32 = 0.05;
+const CLOUD_BASE: f32 = 0.85;
+fn skyUV(rd: vec3<f32>) -> vec2<f32> {
+  let el = asin(clamp(rd.y, -1.0, 1.0));
+  let v = sqrt(sat((el + SKY_E0) / (1.5708 + SKY_E0)));
+  return vec2<f32>(atan2(rd.z, rd.x) / 6.2831853 + 0.5, clamp(v, 0.5 / SKYH, 1.0 - 0.5 / SKYH));
+}
+
+// Rayleigh and Mie single scattering through the shell of air. Kilometres.
+fn airHit(p: vec3<f32>, d: vec3<f32>) -> f32 {
+  let b = dot(p, d);
+  return -b + sqrt(max(b * b - dot(p, p) + 6420.0 * 6420.0, 0.0));
+}
+fn atmosphere(rd: vec3<f32>) -> vec3<f32> {
+  let bR = vec3<f32>(5.8e-3, 13.5e-3, 33.1e-3);
+  // Ozone takes green out of the long horizontal paths, which keeps the horizon from going teal.
+  let bO = vec3<f32>(1.3e-3, 3.8e-3, 0.2e-3);
+  let bM = 21e-3 * mix(0.7, 2.4, sat(F.mood.z));
+  let d = normalize(vec3<f32>(rd.x, max(rd.y, 0.0), rd.z));
+  let o = vec3<f32>(0.0, 6360.002, 0.0);
+  let tmax = airHit(o, d);
+  var odR = 0.0;
+  var odM = 0.0;
+  var sR = vec3<f32>(0.0);
+  var sM = vec3<f32>(0.0);
+  for (var i = 0; i < 14; i++) {
+    // Steps grow with distance, so the dense air near the ground is resolved.
+    let f0 = pow(f32(i) / 14.0, 2.0);
+    let f1 = pow(f32(i + 1) / 14.0, 2.0);
+    let p = o + d * tmax * (f0 + f1) * 0.5;
+    let dt = tmax * (f1 - f0);
+    let h = length(p) - 6360.0;
+    let dR = exp(-h / 8.0) * dt;
+    let dM = exp(-h / 1.2) * dt;
+    odR += dR;
+    odM += dM;
+    let dl = airHit(p, F.sunDir) / 5.0;
+    var lR = 0.0;
+    var lM = 0.0;
+    for (var j = 0; j < 5; j++) {
+      let hh = length(p + F.sunDir * dl * (f32(j) + 0.5)) - 6360.0;
+      lR += exp(-hh / 8.0) * dl;
+      lM += exp(-hh / 1.2) * dl;
+    }
+    let att = exp(-((bR + bO) * (odR + lR) + bM * 1.1 * (odM + lM)));
+    sR += att * dR;
+    sM += att * dM;
   }
-  return v;
+  let mu = dot(d, F.sunDir);
+  let pR = 0.0597 * (1.0 + mu * mu);
+  let g = 0.8;
+  let pM = 0.1194 * ((1.0 - g * g) * (1.0 + mu * mu)) / ((2.0 + g * g) * pow(1.0 + g * g - 2.0 * g * mu, 1.5));
+  return 20.0 * (sR * bR * pR + sM * bM * pM);
+}
+
+// Trade-wind cumulus. The cover is a field of separate cells with clear gaps between
+// them; each cell is a dome standing on a flat base, taller toward its middle.
+fn cloudCover(p: vec2<f32>) -> f32 {
+  let pd = p + vec2<f32>(F.time * 0.008, F.time * 0.003);
+  let q = pd + (vec2<f32>(n2(pd * 0.31 + vec2<f32>(3.1, 0.0)), n2(pd * 0.31 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.2;
+  let cells = n2(q * 1.5) * 0.6 + n2(q * 3.7 + vec2<f32>(4.0, 9.0)) * 0.4;
+  let c = cells * (0.62 + 0.6 * n2(pd * 0.09 + vec2<f32>(5.0, 2.0)));
+  let thr = mix(0.66, 0.3, sat(F.mood.y));
+  return (c - thr) / (1.0 - thr);
+}
+fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
+  let amt = cloudCover(p.xz);
+  if (amt <= 0.0) { return 0.0; }
+  let h = (p.y - CLOUD_BASE) / (0.1 + 1.25 * amt);
+  if (h < 0.0 || h > 1.0) { return 0.0; }
+  var d = smoothstep(0.0, 0.2, h) * (1.0 - h * h) * sat(amt * 6.0);
+  // Billows eat into the sides and the top. The base stays flat.
+  if (fine > 0.5) {
+    let b = n3(p * 4.1) * 0.5 + n3(p * 9.7 + vec3<f32>(4.0, 1.0, 7.0)) * 0.3 + n3(p * 23.0 + vec3<f32>(2.0, 9.0, 5.0)) * 0.2;
+    d -= b * (0.2 + 0.65 * h);
+  }
+  return sat(d * 3.0);
+}
+struct SkyBake { @location(0) c: vec4<f32> }
+@fragment fn fsSkyBake(in: SkyV) -> SkyBake {
+  let uv = in.clip.xy / vec2<f32>(SKYW, SKYH);
+  let az = (uv.x - 0.5) * 6.2831853;
+  let el = uv.y * uv.y * (1.5708 + SKY_E0) - SKY_E0;
+  let rd = vec3<f32>(cos(el) * cos(az), sin(el), cos(el) * sin(az));
+  let air = atmosphere(rd);
+  var col = air;
+  var T = 1.0;
+  // The slab is lifted a little toward the horizon, standing in for the curve of the earth.
+  let sinE = max(rd.y, 0.0) + 0.012;
+  let hz = normalize(rd.xz + vec2<f32>(1e-5, 0.0)) * sqrt(1.0 - sinE * sinE);
+  let t0 = CLOUD_BASE / sinE;
+  let dt = min(1.9 / sinE, 14.0) / 48.0;
+  // A different offset for every texel and every bake. The bakes are blended, so it averages out.
+  let jit = fract(52.9829189 * fract(dot(in.clip.xy, vec2<f32>(0.06711056, 0.00583715))) + F.time * 7.137);
+  let mu = dot(rd, F.sunDir);
+  let sunL = F.sunCol * 1.35 * (1.0 + 1.6 * pow(sat(mu), 6.0));
+  let skyL = vec3<f32>(0.30, 0.40, 0.56);
+  var C = vec3<f32>(0.0);
+  var tm = 0.0;
+  var wsum = 0.0;
+  let org = F.camPos.xz * 0.001;
+  if (rd.y > -0.004) {
+    for (var i = 0; i < 48; i++) {
+      let t = t0 + dt * (f32(i) + jit);
+      let p = vec3<f32>(org.x + hz.x * t, sinE * t, org.y + hz.y * t);
+      let d = cloudAt(p, 1.0);
+      if (d > 0.004) {
+        var ls = 0.0;
+        ls += cloudAt(p + F.sunDir * 0.10, 0.0) * 0.14;
+        ls += cloudAt(p + F.sunDir * 0.30, 0.0) * 0.26;
+        ls += cloudAt(p + F.sunDir * 0.70, 0.0) * 0.5;
+        let hK = sat((p.y - CLOUD_BASE) / 1.6);
+        let sunT = exp(-ls * 13.0);
+        // Light that scatters many times still gets out, so the shaded side is grey, not black.
+        let L = sunL * (sunT * 0.85 + 0.1 * exp(-ls * 1.5)) + skyL * (0.32 + 0.68 * hK);
+        let a = 1.0 - exp(-d * dt * 22.0);
+        C += T * a * L;
+        tm += T * a * t;
+        wsum += T * a;
+        T *= 1.0 - a;
+        if (T < 0.02) { break; }
+      }
+    }
+  }
+  if (wsum > 0.0) {
+    // Distant cloud is seen through the same air as the horizon.
+    let keep = exp(-(tm / wsum) * 0.028);
+    col = air * T + C * keep + air * (1.0 - T) * (1.0 - keep);
+  }
+  var o: SkyBake;
+  o.c = vec4<f32>(col, T);
+  return o;
 }
 
 fn skyColor(rd: vec3<f32>) -> vec3<f32> {
   let up = sat(rd.y);
   let mu = dot(rd, F.sunDir);
-  // Deep overhead, pale and slightly warm at the horizon, the way a humid afternoon looks.
-  let zenith = vec3<f32>(0.07, 0.22, 0.58);
-  let mid = vec3<f32>(0.30, 0.50, 0.82);
-  let haze = vec3<f32>(0.73, 0.79, 0.84);
-  var col = mix(zenith, mid, smoothstep(0.02, 0.55, up));
-  col = mix(haze, col, smoothstep(0.0, 0.16, up));
-  let air = pow(1.0 - up, 1.5);
-  let warm = vec3<f32>(1.05, 0.68, 0.34);
-  col += warm * (pow(sat(mu), 5.0) * 0.16 + pow(sat(mu), 32.0) * 0.38) * (0.25 + air);
+  let s = textureSampleLevel(skyMap, skySamp, skyUV(rd), 0.0);
+  var col = s.rgb;
   let over = sat(F.mood.y);
-  col += vec3<f32>(1.2, 1.02, 0.88) * pow(sat(mu), 2200.0) * 18.0 * (1.0 - over);
-  if (rd.y > 0.012) {
-    let t = (480.0 - F.camPos.y) / rd.y;
-    if (t > 0.0 && t < 12000.0) {
-      let hit = F.camPos.xz + rd.xz * t;
-      let uv = hit * 0.00022 + vec2<f32>(F.time * 0.0022, F.time * 0.0009);
-      let d = cloudDens(uv);
-      let dens = smoothstep(mix(0.40, 0.22, over), mix(0.72, 0.5, over), d);
-      let dl = cloudDens(uv + F.sunDir.xz * 0.012);
-      let lit = sat(0.22 + (dl - d) * 3.6);
-      var cc = mix(vec3<f32>(0.46, 0.50, 0.56), vec3<f32>(1.05, 1.02, 0.98), lit);
-      cc += vec3<f32>(1.0, 0.78, 0.48) * pow(sat(mu), 3.0) * dens * 0.22;
-      let fade = smoothstep(0.012, 0.18, rd.y) * sat(1.0 - t / 11000.0);
-      col = mix(col, cc, dens * fade * mix(0.92, 1.0, over));
-    }
-  }
+  col += vec3<f32>(1.2, 1.02, 0.88) * pow(sat(mu), 2200.0) * 18.0 * (1.0 - over) * s.a;
   let warmK = sat(F.mood.x);
   col = mix(col, col * vec3<f32>(1.08, 0.97, 0.9) + vec3<f32>(0.04, 0.02, 0.0), warmK * 0.55);
   col = mix(col, vec3<f32>(0.50, 0.53, 0.56) * (0.45 + 0.7 * up), over * 0.82);
-  col = mix(F.horiz, col, 1.0 - sat(F.mood.z) * 0.28 * (1.0 - up));
   return col * max(F.lit.y, 0.0);
 }
+// The air a distant thing is seen through: the sky just above the horizon, that way.
+fn hazeColor(dir: vec3<f32>) -> vec3<f32> {
+  return skyColor(normalize(vec3<f32>(dir.x, 0.03, dir.z) + vec3<f32>(1e-5, 0.0, 0.0)));
+}
 
-// The reflection only. The drawn sky keeps its wide horizon. A reflection that
-// uses that wide haze stays one pale color for every slope this sea actually has.
+// What a tilted piece of water or wet sand mirrors. A ray that dips under the
+// horizon is looking at more sea.
 fn skyReflect(rd: vec3<f32>) -> vec3<f32> {
-  let up = rd.y;
-  let mu = dot(rd, F.sunDir);
-  let zenith = vec3<f32>(0.07, 0.22, 0.58);
-  let mid = vec3<f32>(0.30, 0.50, 0.82);
-  let haze = vec3<f32>(0.78, 0.82, 0.84);
-  var col = mix(mid, zenith, smoothstep(0.05, 0.62, max(up, 0.0)));
-  // A thin rim, then a continuous climb into the blue. Not a slab of one color.
-  let rim = exp(-max(up, 0.0) * 36.0);
-  col = mix(col, haze, rim * 0.45);
-  if (up < 0.0) {
-    col = mix(F.deepC.rgb, col, exp(up * 22.0));
+  var col = skyColor(normalize(vec3<f32>(rd.x, max(rd.y, 0.004), rd.z)));
+  if (rd.y < 0.0) {
+    col = mix(F.deepC.rgb, col, exp(rd.y * 22.0));
   }
-  let air = pow(1.0 - sat(up), 1.5);
-  col += vec3<f32>(1.05, 0.7, 0.38) * pow(sat(mu), 64.0) * 0.42 * (0.3 + air);
-  let over = sat(F.mood.y);
-  col += vec3<f32>(1.15, 1.0, 0.9) * pow(sat(mu), 1400.0) * 8.0 * (1.0 - over);
-  col = mix(col, vec3<f32>(0.50, 0.53, 0.56) * (0.5 + 0.6 * sat(up)), over * 0.75);
-  return col * max(F.lit.y, 0.0);
+  return col;
 }
 
 fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
-  let shift = F.sunDir.xz * (480.0 - y) / max(F.sunDir.y, 0.25);
-  let uv = (xz - shift) * 0.00022 + vec2<f32>(F.time * 0.0022, F.time * 0.0009);
-  let dens = smoothstep(0.5, 0.75, cloudDens(uv));
-  return mix(1.0, 0.55, dens);
+  let up = (CLOUD_BASE * 1000.0 + 250.0 - y) / max(F.sunDir.y, 0.25);
+  let amt = cloudCover((xz + F.sunDir.xz * up) * 0.001);
+  return mix(1.0, 0.42, smoothstep(0.0, 0.3, amt));
 }
 
 fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
   let dist = length(world - F.camPos);
   var dens = mix(0.00055, 0.00018, sat(F.camPos.y / 160.0));
-  var fc = F.horiz;
+  var fc = hazeColor(world - F.camPos);
   if (F.under > 0.5) {
     dens = mix(0.028, 0.07, sat(F.camDamp));
     fc = vec3<f32>(0.025, 0.16, 0.20);
@@ -886,7 +995,7 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   var col = mix(base, reflCol, fres * (1.0 - foam * 0.5));
   col += ggxSun(N, V, rough, fres) * (1.0 - foam);
   let dens = mix(0.00055, 0.00018, sat(F.camPos.y / 160.0));
-  return mix(F.horiz, col, sat(exp(-distS * dens)));
+  return mix(hazeColor(-V), col, sat(exp(-distS * dens)));
 }
 
 @fragment fn fsSky(in: SkyV) -> @location(0) vec4<f32> {
@@ -1252,7 +1361,7 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   col += F.sunCol * vec3<f32>(0.45, 0.62, 0.55) * crestLight * 0.12;
 
   let dens = mix(0.00055, 0.00018, sat(F.camPos.y / 160.0));
-  col = mix(F.horiz, col, sat(exp(-distS * dens)));
+  col = mix(hazeColor(-V), col, sat(exp(-distS * dens)));
   col *= mix(0.58, 1.0, lit);
   var alpha = 1.0;
   if (in.sheet > 0.5) {

@@ -1456,7 +1456,9 @@ async function main() {
         { binding: 4, visibility: FS, sampler: { type: 'comparison' } },
         { binding: 5, visibility: VS | FS, buffer: { type: 'uniform' } },
         { binding: 6, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 7, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } }
+        { binding: 7, visibility: VS | FS, texture: { sampleType: 'unfilterable-float' } },
+        { binding: 8, visibility: FS, texture: { sampleType: 'float' } },
+        { binding: 9, visibility: FS, sampler: { type: 'filtering' } }
       ]
     });
     const simLayout = device.createBindGroupLayout({
@@ -1510,13 +1512,22 @@ async function main() {
     const pipe = (name, desc) => { jobs.push(device.createRenderPipelineAsync(desc).then((p) => { pipes[name] = p; })); };
     const sceneFmt = 'rgba16float';
     const skyDesc = {
-      layout: skyPL,
+      layout: geoPL,
       vertex: { module: mod, entryPoint: 'vsSky' },
       fragment: { module: mod, entryPoint: 'fsSky', targets: [{ format: sceneFmt }] },
       primitive: { topology: 'triangle-list' },
       depthStencil: depthOn('depth32float', true, 'always')
     };
     pipe('sky', skyDesc);
+    pipe('skyBake', {
+      layout: skyPL,
+      vertex: { module: mod, entryPoint: 'vsSky' },
+      fragment: { module: mod, entryPoint: 'fsSkyBake', targets: [{ format: sceneFmt, blend: {
+        color: { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' },
+        alpha: { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' }
+      } }] },
+      primitive: { topology: 'triangle-list' }
+    });
     pipe('terrain', {
       layout: geoPL,
       vertex: { module: mod, entryPoint: 'vsTerrain', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
@@ -1913,6 +1924,15 @@ async function main() {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
     const shadowView = shadowTex.createView();
+    // The sky panorama. Sizes match SKYW and SKYH in the shader.
+    const SKYW = 1536, SKYH = 384, SKY_STRIPS = 16;
+    const skyView = device.createTexture({
+      size: [SKYW, SKYH], format: sceneFmt,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    }).createView();
+    const skySamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
+    const skyPass = { colorAttachments: [{ view: skyView, loadOp: 'load', storeOp: 'store' }] };
+    let skyStrip = 0, skyFor = null, skyFresh = 0, skySettle = 0;
     const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 56], 0.3, 0, 11);
     const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
     const oceanU = new Float32Array(4);
@@ -2027,7 +2047,9 @@ async function main() {
           { binding: 4, resource: shadowSamp },
           { binding: 5, resource: { buffer: shoreSim.ubuf } },
           { binding: 6, resource: shoreSim.stateView },
-          { binding: 7, resource: shoreSim.wetView }
+          { binding: 7, resource: shoreSim.wetView },
+          { binding: 8, resource: skyView },
+          { binding: 9, resource: skySamp }
         ]
       });
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
@@ -2066,7 +2088,7 @@ async function main() {
     };
 
     function drawWorld(pass, ub, geo, birds, draws) {
-      pass.setPipeline(pipes.sky); pass.setBindGroup(0, ub); pass.draw(3);
+      pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3);
       pass.setPipeline(pipes.terrain); pass.setBindGroup(0, geo);
       pass.setVertexBuffer(0, terrainVB); pass.setIndexBuffer(terrainIB, 'uint32');
       pass.drawIndexed(terrain.idx.length);
@@ -2381,6 +2403,30 @@ async function main() {
         ripIndex = 1 - ripIndex;
       }
       const geoNow = bgGeoSet[ripIndex];
+      {
+        // The whole sky at once the first time. After the sun or the weather moves it is
+        // replaced a quarter at a time, then each bake is blended into the last so the
+        // march's sampling noise averages away. After that, one strip a frame.
+        const key = wp.sunAng * 7 + wp.mood[1] * 3 + wp.mood[2];
+        let strips = 8;
+        if (skyFor === null) strips = SKY_STRIPS;
+        if (key !== skyFor) { skyFor = key; skyFresh = SKY_STRIPS; skySettle = 24; }
+        const fresh = skyFresh > 0;
+        if (fresh) skyFresh -= strips;
+        else if (skySettle > 0) skySettle--;
+        else strips = 1;
+        const bp = enc.beginRenderPass(skyPass);
+        bp.setPipeline(pipes.skyBake); bp.setBindGroup(0, bgUB);
+        const mixK = fresh ? 1 : 0.3;
+        bp.setBlendConstant([mixK, mixK, mixK, mixK]);
+        const sw = SKYW / SKY_STRIPS;
+        for (let k = 0; k < strips; k++) {
+          bp.setScissorRect(skyStrip * sw, 0, sw, SKYH);
+          bp.draw(3);
+          skyStrip = (skyStrip + 1) % SKY_STRIPS;
+        }
+        bp.end();
+      }
       if (shadowFor !== wp.sunAng) {
         shadowFor = wp.sunAng;
         const spass = enc.beginRenderPass(shadowPass);
@@ -2509,6 +2555,12 @@ async function main() {
       if (qstr.get('shot') !== '0') {
         goSpot(idx - 1);
         if (qstr.get('shot') === '3') fly = true;
+        // Framing offsets for captures: turn, tilt, step forward or sideways, rise.
+        const num = (k) => parseFloat(qstr.get(k) || '0') || 0;
+        yaw += num('dyaw'); pitch += num('dpitch');
+        camX += Math.sin(yaw) * num('fwd') + Math.cos(yaw) * num('side');
+        camZ += -Math.cos(yaw) * num('fwd') + Math.sin(yaw) * num('side');
+        if (qstr.has('up')) { fly = true; camY += num('up'); }
       }
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';
