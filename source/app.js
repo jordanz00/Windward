@@ -2747,9 +2747,16 @@ async function main() {
         barEl.parentElement.hidden = true;
       }
       ft[ftI] = dt; ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
-      if (frames === 50 && adaptLeft > 0 && !qstr.has('shot')) {
+      // Abyssal-style progressive quality: resolution first, then cloud samples, then shadows.
+      // Never shrink large-plant reach (that reintroduces tree pop-in).
+      if (adaptLeft > 0 && !qstr.has('shot') && (frames === 50 || (frames > 50 && frames % 90 === 0))) {
         let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
-        if (sum / ftN > 0.028 && q.scale > 0.45) { q.scale = Math.max(0.45, q.scale * 0.8); adaptLeft--; resize(); }
+        const avg = sum / Math.max(ftN, 1);
+        if (avg > 0.03) {
+          if (q.scale > 0.5) { q.scale = Math.max(0.5, q.scale * 0.82); adaptLeft--; resize(); }
+          else if (q.clouds > 2) { q.clouds--; adaptLeft--; }
+          else if (q.shadow > 4) { q.shadow = Math.max(4, q.shadow - 2); adaptLeft--; }
+        }
       }
 
       envStep(dt, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);

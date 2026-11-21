@@ -557,6 +557,23 @@ fn waterFill(depth: f32) -> vec3<f32> {
   return W_COL * 0.55 * F.under * sat(depth * 3.0) * sunDeep * max(F.lit.y, 0.0) * F.day.rgb
     * mix(0.55, 1.0, cloudShade(F.camPos.xz, 0.0));
 }
+// Lightweight environmental lighting field — Abyssal vol() idea without a 3D texture.
+// r = skylight openness, g = in-scatter density, b = warm canopy/ground bounce.
+fn envVol(p: vec3<f32>) -> vec3<f32> {
+  let h = sampleField(p.xz).x;
+  let above = p.y - h;
+  let forest = smoothstep(1.8, 4.6, h) * smoothstep(-0.65, -0.1, forestNoise(p.xz));
+  let canopy = forest * smoothstep(14.0, 1.5, above) * smoothstep(-0.4, 2.8, above);
+  let hx = sampleField(p.xz + vec2<f32>(2.2, 0.0)).x - sampleField(p.xz - vec2<f32>(2.2, 0.0)).x;
+  let hz = sampleField(p.xz + vec2<f32>(0.0, 2.2)).x - sampleField(p.xz - vec2<f32>(0.0, 2.2)).x;
+  let cliff = sat(length(vec2<f32>(hx, hz)) * 0.22) * smoothstep(6.0, 1.0, above);
+  let cloudOcc = sat(cloudCover(p.xz * 0.001) * 0.55 + 0.15);
+  let open = sat(1.0 - 0.7 * canopy - 0.22 * cliff - 0.18 * cloudOcc * sat(above / 40.0));
+  let dens = 0.32 + 0.5 * canopy + 0.22 * sat(F.wx.w) + 0.18 * sat(F.mood.y) + 0.12 * cliff;
+  let bounce = sat(canopy * 0.6 + cliff * 0.2);
+  return vec3<f32>(open, dens, bounce);
+}
+
 // Aerial perspective. Air scatters blue out of the line of sight first, and the damp air
 // near the sea adds a pale veil that thins with height and thickens with humidity and rain.
 // What replaces the lost light is the sky in that direction, so the haze is bright toward
@@ -571,8 +588,8 @@ fn airKeep(dist: f32, dy: f32) -> vec3<f32> {
   let humid = sat(F.wx.w);
   let mist = sat(F.wx.z);
   // Humidity + mist thicken the veil; rain greys it; night softens scattering.
-  let veil = (0.00038 + 0.0016 * humid * humid + 0.0011 * mist + 0.0028 * F.wx.x
-    + 0.00035 * gold) * min(lay, 4.0) * mix(1.0, 0.45, night);
+  let veil = (0.00042 + 0.0017 * humid * humid + 0.0012 * mist + 0.0028 * F.wx.x
+    + 0.0004 * gold) * min(lay, 4.0) * mix(1.0, 0.45, night);
   // Rayleigh-ish: blue drops first. Warm a little toward the horizon at golden hour.
   let ray = vec3<f32>(0.42, 1.05, 2.75) * 1e-4 * mix(1.0, 0.82, gold);
   // Protect the first ~25 m so palms and shoreline stay sharp.
@@ -580,11 +597,21 @@ fn airKeep(dist: f32, dy: f32) -> vec3<f32> {
   return exp(-dist * (ray + veil) * near);
 }
 fn airMix(col: vec3<f32>, dir: vec3<f32>, dist: f32) -> vec3<f32> {
-  let keep = airKeep(dist, dir.y * dist);
+  var keep = airKeep(dist, dir.y * dist);
   var haze = hazeColor(dir);
   let gold = sat(F.day.w);
   // Horizon haze warms at golden hour without orange-washing the whole frame.
   haze = mix(haze, haze * vec3<f32>(1.18, 0.95, 0.78) + vec3<f32>(0.04, 0.015, 0.0), gold * sat(1.0 - dir.y * 2.5) * 0.55);
+  // Abyssal-style sun phase: in-scatter brightens toward the sun.
+  let mu = max(dot(dir, F.sunDir), 0.0);
+  haze *= 0.82 + 0.4 * mu * mu + 0.25 * pow(mu, 6.0) * (1.0 - gold * 0.3);
+  // Env density along the first 150 m (same budget idea as Abyssal fog sampling).
+  if (dist > 28.0) {
+    let mid = F.camPos + dir * min(dist, 150.0) * 0.55;
+    let ev = envVol(mid);
+    haze = mix(haze, haze * vec3<f32>(0.9, 1.04, 0.96) + F.amb.rgb * 0.1, ev.g * 0.4);
+    keep *= mix(1.0, 0.86, ev.g * sat((dist - 28.0) / 90.0));
+  }
   return col * keep + haze * (1.0 - keep);
 }
 fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
@@ -698,8 +725,9 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // Under the forest the crowns hide half the sky from the ground, the trunks and the low leaves.
   let fld = sampleField(world.xz);
   let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz)) * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
-  // Deeper canopy occlusion under the forest roof; crowns still catch open sky.
-  let open = 1.0 - mix(0.62, 0.28, sat(leaf)) * roof;
+  // Env field (Abyssal vol idea): skylight openness + warm bounce under canopy/cliffs.
+  let ev = envVol(world);
+  let open = sat((1.0 - mix(0.58, 0.22, sat(leaf)) * roof) * mix(0.75, 1.0, ev.r) + 0.08);
   // The same panorama that paints the sky and the water lights the ground. Leaves take more
   // of the upper sky; a face turned down takes more of the sand bounce.
   let sky = skyIrradiance(n) * mix(mix(0.42, 1.0, hemi), 0.95, leaf) * open;
@@ -710,6 +738,8 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // Warm key on lit faces; sky fill stays cooler so golden hour is directional, not a filter.
   let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.18, 0.95, 0.72), gold * sunTerm);
   var light = F.sunCol * keyTint * sunTerm * sh * 1.12 + sky * mix(0.85, 0.95, gold) + ground * 0.5;
+  // Canopy/cliff bounce: litter green-brown under trees, cooler rock bounce on cliffs.
+  light += mix(vec3<f32>(0.18, 0.22, 0.1), vec3<f32>(0.28, 0.24, 0.18), gold) * F.amb.w * ev.b * (0.35 + 0.4 * (1.0 - hemi));
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
     // Sun energy attenuated along the beam path through water (Abyssal sunE).
@@ -1018,6 +1048,14 @@ fn plantShift(L: vec2<f32>, sway: f32) -> vec3<f32> {
   let d = F.wind.xy * L.x + vec2<f32>(-F.wind.y, F.wind.x) * L.y;
   return vec3<f32>(d.x * sway * 1.15, -length(d) * sway * sway * 0.28, d.y * sway * 1.15);
 }
+// Height-powered tip flutter (Abyssal sway) — independent of plant lean direction.
+fn tipSway(at: vec2<f32>, h: f32) -> vec2<f32> {
+  let ph = dot(at, vec2<f32>(0.031, 0.017));
+  let a = 0.016 * pow(max(h, 0.0), 1.25);
+  let t = F.time;
+  return a * (vec2<f32>(sin(t * 0.5 + ph + h * 0.09), cos(t * 0.37 + ph * 1.3 + h * 0.07))
+    + 0.35 * vec2<f32>(sin(t * 1.3 + ph * 3.0 + h * 0.3), cos(t * 1.1 + ph * 2.0 + h * 0.23)));
+}
 // How one vertex of a plant gives to the wind. i1.z is how exposed the plant stands. A leaf
 // has no mass: on top of the plant's lean it streams downwind and flutters, faster in a
 // harder blow, out of step along the plant.
@@ -1059,7 +1097,15 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
     // Palm trunks barely move; frond bark (low sway verts) still ride plant lean.
     along *= 0.32; across *= 0.32;
   }
-  return w + plantShift(vec2<f32>(along, across), in.c.w);
+  var out = w + plantShift(vec2<f32>(along, across), in.c.w);
+  // Secondary tip flutter on leaves / crowns — not locked to the lean axis.
+  if (k == 2 || k == 3 || (k == 0 && in.c.w > 0.04)) {
+    let h = max(out.y - in.i0.y, 0.0) * (0.55 + 0.7 * sat(in.c.w * 8.0));
+    let tw = tipSway(in.i0.xz + vec2<f32>(id * 3.1, id * 1.7), h) * mix(0.55, 1.15, sat(v / 6.0));
+    out.x += tw.x; out.z += tw.y;
+    out.y -= (abs(tw.x) + abs(tw.y)) * 0.12;
+  }
+  return out;
 }
 @vertex fn vsMesh(in: MeshIn) -> MeshV {
   var o: MeshV;
