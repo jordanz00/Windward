@@ -107,7 +107,7 @@ For captures, `?tod=<hour>` sets the clock, `?wx=<clear|clouds|gusts|overcast|dr
 
 `?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
 
-Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, 1.2 to 1.5 s with the reef and the fish, 1.4 to 1.6 s with the weather, the flowering shrubs and the insects (0.1 to 0.2 s more), and 1.5 s with the rebuilt forest trees (1.45 s for the build before them, measured the same way). The built page is 430 KB, 131 KB gzipped; the environment, the insects and their sound are 99 KB of that, the reef and fish 67 KB. Frame rate on real GPUs has not been measured.
+Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, 1.2 to 1.5 s with the reef and the fish, 1.4 to 1.6 s with the weather, the flowering shrubs and the insects (0.1 to 0.2 s more), and 1.5 s with the rebuilt forest trees (1.45 s for the build before them, measured the same way). The built page is 429 KB, 131 KB gzipped; the environment, the insects and their sound are 99 KB of that, the reef and fish 67 KB. Frame rate on real GPUs has not been measured.
 
 ## License
 

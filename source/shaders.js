@@ -354,24 +354,15 @@ struct SkyBake { @location(0) c: vec4<f32> }
     // Long strides through clear air. Where the ray enters a cloud the surface is found
     // by bisection and the short steps are counted from there, so the samples sit at
     // the same depths under the surface for every texel and leave no banding or grain.
-    // The strides through clear air land on the same columns of sky for every row of the
-    // panorama, or looking up on the same levels, so a small cloud is found by every row
-    // that crosses it or by none, and does not come out in stripes.
-    let ch = sqrt(1.0 - sinE * sinE);
-    let level = ch > sinE;
-    let gs = select(0.05 / sinE, 0.05 / ch, level);
-    let g0 = select(t0, 0.0, level);
-    var t = g0 + ceil((t0 - g0) / gs) * gs;
+    var t = t0;
     var tp = t0;
     var inside = false;
-    for (var i = 0; i < 230; i++) {
+    for (var i = 0; i < 150; i++) {
       if (t > t0 + big * 20.0 || T < 0.02) { break; }
       let p = org + dir * t;
       if (!inside) {
-        let g = gs * select(1.0, 2.0, t * ch > 4.0);
-        let nx = g0 + (floor((t - g0) / g + 0.001) + 1.0) * g;
-        if (cloudCover(p.xz) < -0.12) { tp = t; t = nx + 2.0 * g; continue; }
-        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t = nx; continue; }
+        if (cloudCover(p.xz) < -0.12) { tp = t; t += ds * 3.0; continue; }
+        if (cloudAt(p, 1.0) <= 0.004) { tp = t; t += ds; continue; }
         var a = tp;
         var b = t;
         for (var k = 0; k < 5; k++) {
@@ -383,7 +374,7 @@ struct SkyBake { @location(0) c: vec4<f32> }
         continue;
       }
       let d = cloudAt(p, 1.0);
-      if (d <= 0.004) { inside = false; tp = t; t = g0 + (floor((t - g0) / gs + 0.001) + 1.0) * gs; continue; }
+      if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
       var ls = cloudAt(p + F.sunDir * 0.06, 1.0) * 0.1;
       ls += cloudAt(p + F.sunDir * 0.22, 0.0) * 0.2;
       ls += cloudAt(p + F.sunDir * 0.6, 0.0) * 0.5;
