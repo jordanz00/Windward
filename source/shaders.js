@@ -161,24 +161,24 @@ fn laceCell(p: vec2<f32>, t: f32) -> f32 {
 fn foamCover(xz: vec2<f32>, dens: f32, foot: f32) -> f32 {
   if (dens <= 0.012) { return 0.0; }
   let d = sat(dens);
-  // Bend the coordinates first. Straight cell walls read as cracked tile, not foam.
-  let bend = vec2<f32>(n2(xz * 1.3 + vec2<f32>(0.0, F.time * 0.05)), n2(xz * 1.3 + vec2<f32>(9.1, 4.3))) - 0.5;
+  // Advected domain: foam moves with a slow current so patches stretch and tear.
+  let flow = vec2<f32>(n2(xz * 0.08 + vec2<f32>(F.time * 0.02, 1.0)), n2(xz * 0.08 + vec2<f32>(4.0, F.time * 0.015))) - 0.5;
+  let bend = vec2<f32>(n2(xz * 1.3 + flow * 2.0 + vec2<f32>(0.0, F.time * 0.04)), n2(xz * 1.3 + vec2<f32>(9.1, 4.3))) - 0.5;
   let bend2 = vec2<f32>(n2(xz * 4.4 + vec2<f32>(2.0, 7.0)), n2(xz * 4.4 + vec2<f32>(5.5, 1.5))) - 0.5;
-  let q = xz + bend * 0.85 + bend2 * 0.2;
-  // Holes a hand to an arm wide, drifting slowly.
-  let size = 1.7;
-  let e2 = laceCell(q * size + vec2<f32>(3.7, 1.1), F.time * 0.45);
+  let q = xz + flow * 0.55 + bend * 0.9 + bend2 * 0.22;
+  // Large patches, medium filaments, fine holes.
+  let e3 = laceCell(q * 0.85 + vec2<f32>(1.1, 0.4), F.time * 0.22);
+  let e2 = laceCell(q * 1.7 + vec2<f32>(3.7, 1.1), F.time * 0.45);
   let e1 = laceCell(q * 7.3 + bend * 2.0, F.time * 0.9);
-  let t2 = pow(d, 1.25) * 1.05;
-  let w2 = clamp(foot * size, 0.06, 0.3);
-  let sharp = 1.0 - smoothstep(t2 - w2, t2 + w2, e2 + (e1 - 0.3) * 0.3);
-  // Once a pixel is wider than a hole, it shows the share of foam, not the pattern.
-  // Widening the edge instead would turn a trace of foam into a grey wash.
-  let ribbon = mix(sharp, sat(pow(d, 1.6) * 1.15), smoothstep(0.25, 0.9, foot * size));
+  let t2 = pow(d, 1.2) * 1.02;
+  let w2 = clamp(foot * 1.7, 0.05, 0.28);
+  let sharp = 1.0 - smoothstep(t2 - w2, t2 + w2, e2 + (e1 - 0.28) * 0.28 + (e3 - 0.2) * 0.18);
+  let ribbon = mix(sharp, sat(pow(d, 1.55) * 1.1), smoothstep(0.25, 0.9, foot * 1.7));
   let fineW = sat(foot * 7.3 + 0.25);
-  let bubbles = mix(0.8 + 0.2 * smoothstep(0.0, 0.3, e1), 0.92, fineW);
-  // Thin foam is also translucent foam.
-  return sat(ribbon * bubbles) * smoothstep(0.02, 0.28, d);
+  let bubbles = mix(0.78 + 0.22 * smoothstep(0.0, 0.3, e1), 0.92, fineW);
+  // Sparse density stays as isolated fragments, not a continuous band.
+  let frag = smoothstep(0.03, 0.22, d) * (0.55 + 0.45 * smoothstep(0.15, 0.55, e3 + 0.5));
+  return sat(ribbon * bubbles) * frag;
 }
 
 fn shoreFetch(xz: vec2<f32>) -> ShoreS {
@@ -293,32 +293,44 @@ fn atmosphere(rd: vec3<f32>) -> vec3<f32> {
 
 // Trade-wind cumulus. The cover is a field of separate cells with clear gaps between
 // them; each cell is a dome standing on a flat base, taller toward its middle.
+// Cloud drift wraps so long sessions do not push noise into float-precision jitter.
+fn cloudDrift() -> vec2<f32> {
+  return fract(F.windOff.xy / 48.0) * 48.0;
+}
 fn cloudCover(p: vec2<f32>) -> f32 {
-  let pd = p + F.windOff.xy;
-  let q = pd + (vec2<f32>(n2(pd * 0.31 + vec2<f32>(3.1, 0.0)), n2(pd * 0.31 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.2;
-  let cells = n2(q * 1.5) * 0.74 + n2(q * 3.7 + vec2<f32>(4.0, 9.0)) * 0.26;
-  let c = cells * (0.62 + 0.6 * n2(pd * 0.09 + vec2<f32>(5.0, 2.0)));
-  // Past half cover the gaps between the cells close up, and a rain sky has none.
-  let thr = 0.71 - 0.41 * sat(F.mood.y) - 0.35 * smoothstep(0.45, 0.95, F.mood.y);
+  let pd = p + cloudDrift();
+  let warp = (vec2<f32>(n2(pd * 0.28 + vec2<f32>(3.1, 0.0)), n2(pd * 0.28 + vec2<f32>(7.7, 1.3))) - 0.5) * 2.4;
+  let q = pd + warp;
+  // Large cells: separate cumulus masses with clear gaps.
+  let large = n2(q * 1.15) * 0.7 + n2(q * 2.4 + vec2<f32>(4.0, 9.0)) * 0.3;
+  // Medium: cauliflower billow inside each mass.
+  let mid = n2(q * 4.6 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 8.1 + vec2<f32>(8.0, 2.0)) * 0.45;
+  let c = large * (0.58 + 0.42 * mid) * (0.7 + 0.45 * n2(pd * 0.07 + vec2<f32>(5.0, 2.0)));
+  let thr = 0.70 - 0.40 * sat(F.mood.y) - 0.34 * smoothstep(0.45, 0.95, F.mood.y);
   return (c - thr) / (1.0 - thr);
 }
 fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   let amt = cloudCover(p.xz);
   if (amt <= 0.0) { return 0.0; }
-  let h = (p.y - CLOUD_BASE) / (0.1 + 0.95 * pow(amt, 0.62));
+  // Flatter base, rounded dome top — photographic cumulus profile.
+  let thick = 0.12 + 1.05 * pow(sat(amt), 0.55);
+  let h = (p.y - CLOUD_BASE) / thick;
   if (h < 0.0 || h > 1.0) { return 0.0; }
-  var d = smoothstep(0.0, 0.12, h) * (1.0 - h * h) * sat(amt * 5.0);
-  // Billows eat into the sides and the top, in four sizes from a few hundred metres
-  // down to a few tens. The base stays flat.
+  let base = smoothstep(0.0, 0.08, h);
+  let dome = 1.0 - pow(h, 1.65);
+  var d = base * dome * sat(amt * 4.6);
   if (fine > 0.5) {
-    let w = p + vec3<f32>(F.windOff.x, 0.0, F.windOff.y);
-    let b = n3(w * 3.1) * 0.42 + n3(w * 7.3 + vec3<f32>(4.0, 1.0, 7.0)) * 0.28
-      + n3(w * 17.0 + vec3<f32>(2.0, 9.0, 5.0)) * 0.18 + n3(w * 39.0 + vec3<f32>(8.0, 3.0, 1.0)) * 0.12;
-    d -= sat(0.5 + (b - 0.5) * 3.4) * (0.22 + 0.95 * h);
+    let w = p + vec3<f32>(cloudDrift().x, 0.0, cloudDrift().y);
+    let large = n3(w * 2.4);
+    let mid = n3(w * 6.8 + vec3<f32>(4.0, 1.0, 7.0));
+    let fineN = n3(w * 18.0 + vec3<f32>(2.0, 9.0, 5.0)) * 0.55 + n3(w * 42.0 + vec3<f32>(8.0, 3.0, 1.0)) * 0.45;
+    let b = large * 0.45 + mid * 0.35 + fineN * 0.2;
+    // Erode sides and top; leave the base flatter.
+    d -= sat(0.5 + (b - 0.5) * 3.2) * (0.18 + 0.95 * h * h);
   } else {
-    d -= 0.25 + 0.3 * h;
+    d -= 0.22 + 0.28 * h;
   }
-  return sat(d * 1.8);
+  return sat(d * 1.85);
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
@@ -342,12 +354,17 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let t0 = CLOUD_BASE / sinE;
   let big = min(1.9 / sinE, 14.0) / 20.0;
   let ds = big / 7.0;
-  let mu = dot(rd, F.sunDir);
-  let sunL = F.sunCol * 1.35 * (1.0 + 1.6 * pow(sat(mu), 6.0));
+  // Direct sunlight fades out below the horizon; night clouds keep shape via amb/moon only.
+  let dayK = smoothstep(-0.04, 0.1, F.sunTrue.y);
+  let sunAim = mix(F.moon.xyz, F.sunTrue.xyz, dayK);
+  let mu = dot(rd, normalize(sunAim + vec3<f32>(1e-5, 1e-5, 0.0)));
+  let sunL = F.sunCol * 1.35 * dayK * (1.0 + 1.6 * pow(sat(mu), 6.0));
+  let moonL = F.amb.rgb * vec3<f32>(0.55, 0.62, 0.78) * (1.0 - dayK) * (0.35 + 0.65 * F.moon.w);
   let skyL = F.amb.rgb * vec3<f32>(0.88, 0.83, 0.8);
   var C = vec3<f32>(0.0);
   var tm = 0.0;
   var wsum = 0.0;
+  // Camera-relative only for precision; cloud field itself is world-anchored via cloudDrift.
   let org = vec3<f32>(F.camPos.x * 0.001, 0.0, F.camPos.z * 0.001);
   let dir = vec3<f32>(hz.x, sinE, hz.y);
   if (rd.y > -0.004) {
@@ -375,13 +392,17 @@ struct SkyBake { @location(0) c: vec4<f32> }
       }
       let d = cloudAt(p, 1.0);
       if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
-      var ls = cloudAt(p + F.sunDir * 0.06, 1.0) * 0.1;
-      ls += cloudAt(p + F.sunDir * 0.22, 0.0) * 0.2;
-      ls += cloudAt(p + F.sunDir * 0.6, 0.0) * 0.5;
+      let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.02, 0.0));
+      var ls = cloudAt(p + lightDir * 0.06, 1.0) * 0.1;
+      ls += cloudAt(p + lightDir * 0.22, 0.0) * 0.2;
+      ls += cloudAt(p + lightDir * 0.6, 0.0) * 0.5;
       let hK = sat((p.y - CLOUD_BASE) / 1.3);
       let sunT = exp(-ls * 13.0);
-      // Light that scatters many times still gets out, so the shaded side is grey, not black.
-      let L = sunL * (sunT * 0.85 + 0.1 * exp(-ls * 1.5)) + skyL * (0.32 + 0.68 * hK);
+      // Single scatter + soft multiple scatter: bright sun-facing rims, grey interiors.
+      let phase = 0.75 + 0.55 * pow(sat(mu), 4.0);
+      let L = sunL * (sunT * 0.9 * phase + 0.12 * exp(-ls * 1.4))
+        + skyL * (0.28 + 0.72 * hK)
+        + moonL * (0.45 + 0.55 * hK);
       let al = 1.0 - exp(-d * ds * 34.0);
       C += T * al * L;
       tm += T * al * t;
@@ -433,10 +454,13 @@ fn skyReflect(rd: vec3<f32>) -> vec3<f32> {
 }
 
 fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
-  let up = (CLOUD_BASE * 1000.0 + 250.0 - y) / max(F.sunDir.y, 0.25);
-  let amt = cloudCover((xz + F.sunDir.xz * up) * 0.001);
-  // Fair-weather cumulus lets a good deal through. A rain cloud lets almost nothing.
-  return mix(1.0, mix(0.42, 0.06, sat(F.mood.y * 1.3)), smoothstep(0.0, 0.3, amt));
+  let dayK = smoothstep(-0.02, 0.08, F.sunTrue.y);
+  // Project along the true sun while it is up; at night there is no solar occlusion.
+  let sy = max(F.sunTrue.y, 0.08);
+  let up = (CLOUD_BASE * 1000.0 + 250.0 - y) / sy;
+  let amt = cloudCover((xz + F.sunTrue.xz * up) * 0.001);
+  let shade = mix(1.0, mix(0.42, 0.06, sat(F.mood.y * 1.3)), smoothstep(0.0, 0.3, amt));
+  return mix(1.0, shade, dayK);
 }
 
 // The colour clear tropical water goes to with distance: lit from above, so it dims under a cloud.
@@ -587,13 +611,14 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let H = normalize(V + F.sunDir);
   // A wet leaf glints in the sun; wet bark and soil are mostly just dark. The sky shows in
   // a wet face only if the face is turned up to it, not round the edge of every shape.
-  let sheen = max(gloss, wet * mix(0.15, 0.8, leaf));
+  let sheen = max(gloss, wet * mix(0.1, 0.55, leaf));
   if (sheen > 0.0) {
     let ndv = max(dot(n, V), 0.0);
-    let fr = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
-    col += F.sunCol * pow(max(dot(n, H), 0.0), mix(36.0, 70.0, wet)) * step(0.0, nl) * sh * sheen * (0.55 + 0.6 * wet);
-    // A wet or waxy face mirrors the sky, not a flat ambient colour.
-    col += skyLook(reflect(-V, n), 0.0) * fr * max(gloss, wet * mix(0.1, 0.25, leaf) * sat(n.y * 1.5)) * 0.45;
+    let fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
+    // Tighter specular on leaves; wet bark still glints modestly.
+    let hard = mix(mix(48.0, 90.0, leaf), 70.0, wet);
+    col += F.sunCol * pow(max(dot(n, H), 0.0), hard) * step(0.0, nl) * sh * sheen * mix(0.35, 0.55, leaf);
+    col += skyLook(reflect(-V, n), 0.0) * fr * max(gloss * 0.7, wet * mix(0.06, 0.18, leaf) * sat(n.y * 1.5)) * 0.35;
   }
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let spec = pow(max(dot(n, H), 0.0), 56.0);
@@ -980,19 +1005,20 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     if (back) { n = -n; alb *= 0.4; gloss = 0.0; }
     n = normalize(n + tilt);
   } else if (kind == 2) {
-    // A blade. Upper face is duller than a plastic sheen; underside is paler and takes more sky.
+    // Leaflet: dull upper wax, pale underside, thin-film transmission — not green plastic.
     let upper = dot(n, Vv) > 0.0;
     if (!upper) {
       n = -n;
-      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.3, 0.6, 0.1))), 0.28) * 1.25;
+      alb = mix(alb, vec3<f32>(dot(alb, vec3<f32>(0.28, 0.58, 0.12))), 0.32) * 1.22;
     }
-    let rib = smoothstep(0.28, 0.0, abs(in.uv.x));
-    alb = mix(alb, alb * 1.35 + vec3<f32>(0.02, 0.02, 0.0), rib * 0.45);
-    alb *= 0.88 + 0.12 * sin(in.uv.x * 9.0 + in.uv.y * 3.0);
-    // More light through the blade, less hard wax — a real leaflet is a film, not a painted card.
-    leaf = select(1.15, 0.95, upper);
-    gloss = select(0.08, 0.35, upper);
-    if (in.world.y < -0.1) { gloss *= 0.2; leaf *= 0.5; }
+    let rib = smoothstep(0.26, 0.0, abs(in.uv.x));
+    alb = mix(alb, alb * 1.28 + vec3<f32>(0.015, 0.02, 0.0), rib * 0.4);
+    let grit = 0.9 + 0.1 * sin(in.uv.x * 11.0 + in.uv.y * 4.0) + 0.04 * sin(in.uv.y * 29.0);
+    alb *= grit;
+    leaf = select(1.25, 0.9, upper);
+    // Narrow specular lobe only near the midrib; broad faces stay matte.
+    gloss = select(0.04, 0.18 + 0.12 * rib, upper);
+    if (in.world.y < -0.1) { gloss *= 0.15; leaf *= 0.45; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
     if (kind == 1) {
@@ -1729,9 +1755,9 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
     return vec4<f32>(L, 1.0);
   }
   if (rd.y < -1e-4) { far = min(far, F.camPos.y / -rd.y); }
-  // Droplets throw most of their light nearly straight on, so lit air is brightest close
-  // round the sun: that is where a shaft through the fronds shows.
-  let ph = 0.3 + 1.7 * pow(0.5 + 0.5 * mu, 6.0) + 5.0 * pow(0.5 + 0.5 * mu, 48.0);
+  // God rays: forward scatter + occlusion by fronds and cloud gaps. Absent at night.
+  let dayK = smoothstep(0.0, 0.1, F.sunTrue.y);
+  let ph = 0.25 + 1.6 * pow(0.5 + 0.5 * mu, 6.0) + 6.5 * pow(0.5 + 0.5 * mu, 56.0);
   let amb = F.amb.rgb * 0.9;
   let cloud0 = cloudShade(F.camPos.xz, F.camPos.y);
   let nearEnd = min(far, 46.0);
@@ -1739,10 +1765,12 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   for (var i = 0; i < 12; i++) {
     let p = F.camPos + rd * (dn * (f32(i) + jit));
     let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * dn * f32(i), F.camPos.y + rd.y * dn * f32(i + 1), dn));
-    // The water in the air changes slowly along the ray; what the fronds let through does
-    // not, so each step asks the shadow map three times along its length.
     let lit = (sunVis(p - rd * (dn * 0.333)) + sunVis(p) + sunVis(p + rd * (dn * 0.333))) / 3.0;
-    L += T * a * (F.sunCol * lit * cloud0 * ph + amb);
+    let cP = cloudShade(p.xz, p.y);
+    // Stronger shafts where the view crosses a cloud-shadow boundary (sun through gaps).
+    let gap = sat((cP - cloud0) * 3.5) + sat((cloud0 - cP) * 2.0) * 0.35;
+    let shaft = lit * cP * (1.0 + 2.8 * gap * dayK);
+    L += T * a * (F.sunCol * shaft * ph * dayK + amb);
     T *= 1.0 - a;
   }
   if (far > 46.0) {
@@ -1752,9 +1780,9 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
       let t1 = 46.0 + span * f32((i + 1) * (i + 1)) / 64.0;
       let p = F.camPos + rd * mix(t0, t1, jit);
       let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * t0, F.camPos.y + rd.y * t1, t1 - t0));
-      // Past the reach of the near shadows only cloud shades the air: a step this long
-      // would smear one tree's shadow into a streak.
-      L += T * a * (F.sunCol * cloudShade(p.xz, p.y) * ph + amb);
+      let cP = cloudShade(p.xz, p.y);
+      let gap = sat(abs(cP - cloud0) * 2.5);
+      L += T * a * (F.sunCol * cP * ph * dayK * (1.0 + 1.8 * gap) + amb);
       T *= 1.0 - a;
     }
   }
@@ -1858,7 +1886,8 @@ struct BlitOut {
   // Schlick, F0 for water against air (IOR 1.333).
   let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
   let reflK = sat(F.mat.y);
-  let rough = clamp(0.008 + sat(F.mat.x) * 0.055, 0.006, 0.065);
+  // Microfacet roughness rises with chop scale so the sea is not polished glass.
+  let rough = clamp(0.012 + sat(F.mat.x) * 0.06 + 0.01 * scale, 0.008, 0.08);
   let dir0 = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
   let alongW = dot(in.xz0, dir0);
   let acrossW = dot(in.xz0, vec2<f32>(-dir0.y, dir0.x));
@@ -1869,20 +1898,22 @@ struct BlitOut {
   let breaker = S.brk * smoothstep(2.6, 0.3, max(-bed, 0.0)) * smoothstep(0.34, 0.72, lace);
   var foam = foamCover(in.xz0, sat(max(crestFoam * 0.45, breaker * (0.55 + 0.45 * lace2))) * max(F.mood.w, 0.0), foot);
   var onSheet = 0.0;
-  if (sh.inside > 0.5 && sh.foam > 0.025 && shoreOff < 0.72) {
-    // Structure comes from the transported field sampled along the flow.
-    // A patch that is thinner across the current reads as a tongue, not a band.
-    let dir = sh.vel / max(length(sh.vel), 0.2);
-    let alongF = shoreFetch(in.xz0 - dir * 0.64).foam;
-    let acrossF = shoreFetch(in.xz0 + vec2<f32>(-dir.y, dir.x) * 0.42).foam;
-    let tongue = sat(sh.foam * 1.25 - acrossF * 0.7);
-    let trail = sat(min(sh.foam, alongF * 1.15));
-    let grain = n2(in.xz0 * 6.5 + vec2<f32>(F.time * 0.1, 2.0));
-    let adv = sat(max(tongue, trail * 0.75) * mix(0.9, 1.0, grain));
-    let band = 1.0 - smoothstep(0.46, 0.7, shoreOff);
-    // Low concentration stays clear water. The field has to be dense before it reads as foam.
-    let patches = foamCover(in.xz0, adv * 0.92, foot);
-    foam = sat(mix(foam * (1.0 - band), patches, band));
+  if (sh.inside > 0.5 && sh.foam > 0.02 && shoreOff < 0.78) {
+    // Foam follows the shallow-water velocity: tongues along flow, holes across it.
+    let spd = length(sh.vel);
+    let dir = sh.vel / max(spd, 0.15);
+    let alongF = shoreFetch(in.xz0 - dir * (0.55 + 0.35 * sat(spd))).foam;
+    let acrossF = shoreFetch(in.xz0 + vec2<f32>(-dir.y, dir.x) * 0.48).foam;
+    let backF = shoreFetch(in.xz0 + dir * 0.5).foam;
+    let tongue = sat(sh.foam * 1.35 - acrossF * 0.85);
+    let trail = sat(min(sh.foam, alongF * 1.2));
+    // Backwash: retreating flow leaves sparse fragments behind the front.
+    let retreat = sat(-dot(dir, SH.sea)) * sat(backF * 0.9 - sh.foam * 0.35);
+    let grain = n2(in.xz0 * 5.8 + dir * F.time * 0.35 + vec2<f32>(2.0, 0.0));
+    let adv = sat(max(tongue, trail * 0.8) * mix(0.85, 1.05, grain) + retreat * 0.55 * grain);
+    let band = 1.0 - smoothstep(0.5, 0.78, shoreOff);
+    let patches = foamCover(in.xz0 + dir * (F.time * 0.08), adv * 0.95, foot);
+    foam = sat(mix(foam * (1.0 - band * 0.92), patches, band));
     onSheet = band * patches;
   }
 

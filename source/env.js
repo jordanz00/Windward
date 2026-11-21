@@ -53,8 +53,9 @@ function envLight(cover) {
   // Sunlight reddens with the length of its path: blue is scattered out of the beam first.
   const k = envAirMass(sy) - envAirMass(SUN[1]);
   const tr = [Math.exp(-0.045 * k), Math.exp(-0.085 * k), Math.exp(-0.17 * k)];
-  const up = smooth01(-0.035, 0.03, sy);
-  const night = smooth01(0, -0.2, sy), moonUp = smooth01(0.02, 0.2, moon[1]);
+  // Direct solar contribution is fully off once the disc is gone; twilight is amb-only.
+  const up = smooth01(-0.02, 0.05, sy);
+  const night = smooth01(0.02, -0.18, sy), moonUp = smooth01(0.02, 0.2, moon[1]);
   // Whichever is up lights the ground. Through twilight neither does, and the sky is all there is.
   const day = sy > -0.06, src = day ? sun : moon, ky = Math.max(src[1], day ? 0.12 : 0.2);
   const f = src[1] >= ky ? 1 : Math.sqrt(1 - ky * ky) / (Math.hypot(src[0], src[2]) || 1);
@@ -124,6 +125,9 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   env.sea = 0.75 + 0.25 * v[4] / 4.5;
   // Cloud rides faster air than the ground feels. Gust cells travel slower than the wind in them.
   env.cloud[0] += env.wx0 * env.speed * 1.9e-3 * dt; env.cloud[1] += env.wz0 * env.speed * 1.9e-3 * dt;
+  // Wrap so cloud noise stays in a stable coordinate domain overnight and across long sessions.
+  env.cloud[0] = ((env.cloud[0] % 48) + 48) % 48;
+  env.cloud[1] = ((env.cloud[1] % 48) + 48) % 48;
   env.gustOff[0] += env.wx0 * env.speed * 0.6 * dt; env.gustOff[1] += env.wz0 * env.speed * 0.6 * dt;
   envLight(env.cover);
 }

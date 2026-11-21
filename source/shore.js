@@ -274,10 +274,11 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   // flow do, so the break comes apart along the beach instead of as one band.
   let peakGate = smoothstep(0.004, 0.045, peak);
   let conv = smoothstep(0.08, 0.7, -div);
-  foamN += brk * (0.035 + 0.9 * max(peakGate, conv * 0.65)) * (0.12 + lost * 0.6) * dt * 8.0;
-  let dilute = smoothstep(0.26, 0.045, foamN);
-  // Expansion and shear tear dilute foam apart. Dense patches last longer.
-  foamN *= exp(-dt * (0.2 + 3.4 * max(div, 0.0) + 1.15 * abs(shear) + dilute * 1.15));
+  // Foam prefers crest peaks and converging flow — not a uniform shoreline mask.
+  foamN += brk * (0.02 + 1.05 * max(peakGate, conv * 0.75)) * (0.1 + lost * 0.7) * dt * 8.0;
+  let dilute = smoothstep(0.3, 0.04, foamN);
+  // Expansion, shear and retreat tear dilute foam into fragments.
+  foamN *= exp(-dt * (0.22 + 3.8 * max(div, 0.0) + 1.35 * abs(shear) + dilute * 1.35));
   // A uniform collapse stays a clear sheet. Only the locally stronger
   // parts of the front throw foam, so the wash is not one white band.
   foamN = clamp(foamN + spill * (0.12 + 1.7 * peakGate), 0.0, 1.25);
