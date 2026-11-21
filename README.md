@@ -1,6 +1,6 @@
 # Windward
 
-A small island you can walk, swim, and fly, drawn in the browser with WebGPU. The coast, the swell, the reef, the trees, and the sound are all computed when the page opens. There are no image files, no 3D models, and no audio files. The page you open is one HTML file.
+A small island you can walk, swim, and fly, drawn in the browser with WebGPU. The coast, the swell, the reef, the trees, the insects, the weather, and the sound are all computed when the page opens. The day passes, and the weather comes and goes. There are no image files, no 3D models, and no audio files. The page you open is one HTML file.
 
 It is in the same spirit as [Abyssal Garden](https://github.com/Noniv/abyssal-garden): one self-contained page, no engine, everything procedural. The place is different. This one is above the water, with a real swell, a beach, and a bay.
 
@@ -25,6 +25,8 @@ Wait for the coast to finish generating, then press **Enter**. You arrive over t
 | Walk the island | Walk, then mouse look. `F` flies. `1`–`6` are places |
 | Dive / rise | `Q` / `E` while walking (Space also rises) |
 | Just watch | Watch, or `C`. Esc brings the controls back |
+| Time of day | Hour, or `T` for the next part of the day (Shift goes back) |
+| Weather | Weather, or `R` for the next kind (Shift goes back) |
 | Mute | `M` |
 | Frame time | `H` |
 | Menu | `Esc` |
@@ -46,6 +48,8 @@ You stay on the sand. Step into the water and you swim; hold `Q` to go under and
 | `source/ocean.js` | The spectral sea: two FFT wave tiles and the slopes that glitter |
 | `source/shore.js` | Shallow water on the beach: run-up, foam, and the sand it leaves wet |
 | `source/fish.js` | The reef and what lives on it: coral, seagrass, eight kinds of fish, and how they behave |
+| `source/env.js` | The one state everything reads: the hour, the sun and moon, the weather, the wind |
+| `source/insects.js` | Ten kinds of insect, the flowering shrubs they visit, and how they behave |
 | `source/app.js` | WebGPU, the camera, the boats and trees, the sound |
 | `source/ui.css` | The card on top of the picture |
 
@@ -75,9 +79,32 @@ Nothing is allocated per frame on purpose: the uniform buffer, the bird list, an
 - **Cost.** Schools near you are stepped every frame with every rule. Further out they are stepped one frame in three without the neighbour rules. Beyond that only the school moves, and its fish are carried along when they come back into range. Fish are culled against the view and drawn in one buffer, one draw per species and level of detail.
 - **Light.** Under water the sun loses its red with depth, the ripples gather it into caustics, the water itself lights the shaded side of things, and distance fades everything toward the colour of the water. Outside the window of sky, the underside of the surface mirrors the bottom.
 
-For captures, `?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
+### The day, the weather and the air
 
-Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, and 1.2 to 1.5 s across runs with the reef and the fish (building their meshes adds about 0.1 s). The built page is 319 KB, 98 KB gzipped; the reef and fish are 67 KB of that. Frame rate on real GPUs has not been measured.
+- **One environment.** `env.js` holds a clock, a weather state and a wind, and everything else reads them: the sun and sky, the sea's height and chop, the plants, the rain, the insects and the sound. Nothing has a time of day of its own.
+- **The day.** The sun rides a tilted circle through the sky, rising at six and setting at eighteen. Its colour is what is left after its path through the air, so it reddens as it drops; the sky's own light is tracked separately and takes over through twilight; after that a pale moon lights the ground. Exposure opens as the light goes, but not all the way, so night is dark. A full day takes about an hour and a half unless you step it. The stops are first light, morning, midday, afternoon, golden hour, sunset, blue hour and night.
+- **Weather.** Clear, passing clouds, gusty, overcast, light rain, a tropical shower, the hour after rain, and morning mist. Each is a row of numbers: cloud cover, rain, mist, humidity, wind speed, gustiness. The state eases from one row to the next over a minute or so, and left alone it wanders between kinds that follow one another. Ground gets wet while it rains and dries afterwards; dew and mist form at dawn and burn off as the sun climbs.
+- **Wind.** One field: a prevailing direction that meanders, a speed, and gusts that travel downwind as patches a few tens of metres across. Palms lean and rock at a rate set by their own size, fronds and leaves flutter on top of that, plants in the lee of the forest move less, grass bends, the small chop on the sea grows with the wind, clouds drift with it, rain slants with it, and insects are carried by it.
+- **Air.** Distance fades toward the colour of the horizon in that direction, with blue scattered out first and a low humid layer that thickens with moisture and rain. On top of that a half-resolution pass marches each view ray through the near air against the shadow maps, so where there is mist, damp forest air, spray over the surf or rain, sunlight shows as shafts between whatever is shading it and disappears when the sun is covered. Each step asks the shadow map three times, since what the leaves let through changes faster along a ray than the air does. Droplets throw their light forward, so the shafts are brightest looking toward the sun. Under water the same pass draws the rays that come down through the surface.
+- **Rain and spray.** Rain is streaks that fall at the speed and slant the wind gives them, in a volume that moves with you, with a splash where a drop meets the ground and rings on still water. Wet sand and leaves darken and shine. Spray is thrown where the surf simulation says water is breaking, and blown downwind. Fine motes show in humid air against the light.
+
+### Insects
+
+- **Kinds.** Dragonflies and damselflies over still shallows, butterflies, bees and dusk moths at blossoms, gnats dancing in loose balls at the forest edge, mosquitoes in shade, beetles and ants in the leaf litter, fireflies under the trees after dark. Each is a mesh built from lobes, limbs and wings: segmented bodies, compound eyes, six legs, antennae, veined clear wings or scaled patterned ones.
+- **Flowers.** Hibiscus-like shrubs grow in the sun: arching woody stems, glossy leaves, five-petalled blossoms with a column of stamens. Every open blossom is a place a bee or a butterfly can go.
+- **Behaviour.** A dragonfly hovers, snaps round, darts to another point over the water, and sometimes settles on the bank with its wings held flat. A butterfly flies an unsteady line to a blossom and rests with its wings shut, opening them slowly. A bee flies straight to a shrub, hangs in front of a blossom, lands, and moves to the next one along. Gnats rise and fall on their own beat round a point that drifts. Ants keep to a trail, a little off the line, and some carry a piece of leaf home. Fireflies on the wing flash on their own count and the ones sitting in the leaves answer.
+- **When and where.** How many of each kind are out follows the sun, the rain, the wind and the cloud: bees and butterflies in bright calm hours, gnats and moths toward dusk, fireflies in the dark, almost nothing flying in a shower. Only the animals near you are simulated and drawn; when you move on they are given homes where you have gone. Nothing flies at the camera: within arm's reach it veers off.
+- **Cost.** An insect instance is twenty-four floats. The vertex shader beats the wings, swings the legs and places the animal. All insects are one buffer and one draw per kind and level of detail, drawn after the water so a clear wing over the lagoon is a film over the lagoon.
+
+### Sound
+
+Surf, wind and birds were there before. Now cicada-like rasps sing in bouts through the heat of the day, loudest among trees; crickets chirp after dusk, each with its own pitch, pulse count and pace; a far chorus shimmers at night; birds sing most at first light and stop for rain; rain has a hiss and a patter, with single drops off the leaves under trees; gusts rustle the canopy; and a bee, a mosquito or a dragonfly that comes close can be heard. Every layer is driven by the same hour, weather and place as the picture, and none of it is a recording or a loop.
+
+For captures, `?tod=<hour>` sets the clock, `?wx=<clear|clouds|gusts|overcast|drizzle|shower|after|mist>` sets the weather, and `&flow` lets both run. `&bug=<kind>` frames the nearest insect of that kind (`bd` is the distance in metres, `bst` its state, `hold` keeps it there, `bat=<n>` goes to the n-th place that kind lives first). `&sunview=<0..1>` faces the sun, pitched up by that share of its height, and `&shade` stands in the shadow of the nearest palm crown.
+
+`?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
+
+Measured on a software rasterizer (lavapipe, no GPU), from navigation to a settled frame: 10.1 s before this structure, 1.2 s after, 1.2 to 1.5 s with the reef and the fish, and 1.4 to 1.6 s with the weather, the flowering shrubs and the insects (0.1 to 0.2 s more). The built page is 418 KB, 127 KB gzipped; the environment, the insects and their sound are 99 KB of that, the reef and fish 67 KB. Frame rate on real GPUs has not been measured.
 
 ## License
 
