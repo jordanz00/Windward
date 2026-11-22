@@ -1074,28 +1074,46 @@ fn plantShift(L: vec2<f32>, sway: f32) -> vec3<f32> {
   let d = F.wind.xy * L.x + vec2<f32>(-F.wind.y, F.wind.x) * L.y;
   return vec3<f32>(d.x * sway * 1.15, -length(d) * sway * sway * 0.28, d.y * sway * 1.15);
 }
-// Height-powered tip flutter (Abyssal sway) — independent of plant lean direction.
+// Height-powered tip flutter — capped so tall palm crowns do not tear at the tips.
 fn tipSway(at: vec2<f32>, h: f32) -> vec2<f32> {
-  // Hierarchical: slow trunk lean + mid crown + fast tip flutter (Abyssal multi-frequency).
   let ph = dot(at, vec2<f32>(0.031, 0.017));
-  let hh = max(h, 0.0);
-  let a0 = 0.01 * pow(hh, 1.05);
-  let a1 = 0.012 * pow(hh, 1.25);
-  let a2 = 0.007 * pow(hh, 1.55);
+  let hh = min(max(h, 0.0), 4.2);
+  let a0 = 0.006 * pow(hh, 1.05);
+  let a1 = 0.007 * pow(hh, 1.2);
+  let a2 = 0.0028 * pow(hh, 1.35);
   let t = F.time;
   return a0 * vec2<f32>(sin(t * 0.22 + ph), cos(t * 0.18 + ph * 1.2))
     + a1 * vec2<f32>(sin(t * 0.55 + ph + hh * 0.09), cos(t * 0.42 + ph * 1.3 + hh * 0.07))
-    + a2 * vec2<f32>(sin(t * 1.45 + ph * 3.1 + hh * 0.35), cos(t * 1.2 + ph * 2.2 + hh * 0.28));
+    + a2 * vec2<f32>(sin(t * 1.35 + ph * 2.8 + hh * 0.28), cos(t * 1.1 + ph * 2.0 + hh * 0.22));
 }
-// How one vertex of a plant gives to the wind. i1.z is how exposed the plant stands. A leaf
-// has no mass: on top of the plant's lean it streams downwind and flutters, faster in a
-// harder blow, out of step along the plant.
+// Shared plant lean only — used by shadow passes (cheaper, no tip flicker in maps).
+fn meshPlaceLean(in: MeshIn) -> vec3<f32> {
+  var w = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
+  if (in.c.w <= 0.0) { return w; }
+  if (in.i0.y < -0.3) {
+    let h = max(w.y - in.i0.y, 0.0);
+    let ph = w.x * 0.031 + w.z * 0.017;
+    let a = 0.02 * pow(h + in.c.w, 1.15);
+    let gust = a * sin(F.time * 0.55 + ph + h * 0.09);
+    let gustZ = a * cos(F.time * 0.42 + ph * 1.3 + h * 0.07);
+    w.x += gust; w.z += gustZ;
+    w.y -= (abs(gust) + abs(gustZ)) * in.c.w * 0.15;
+    return w;
+  }
+  let L = plantLean(in.i0.xz, in.i1.x, in.i1.z, in.i1.w);
+  let k = i32(in.n.w + 0.5);
+  var along = L.x;
+  var across = L.y;
+  if (k == 1) { along *= 0.32; across *= 0.32; }
+  // Leaves take lean sway only — no per-vertex flutter in shadow maps.
+  let sw = in.c.w * select(0.55, 1.0, k == 2 || k == 3);
+  return w + plantShift(vec2<f32>(along, across), sw);
+}
+// How one vertex of a plant gives to the wind. Leaflet verts of one blade must share phase.
 fn meshPlace(in: MeshIn) -> vec3<f32> {
   var w = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
   if (in.c.w <= 0.0) { return w; }
-  // Under water there is no wind. Things lean one way and then the other with the surge.
   if (in.i0.y < -0.3) {
-    // Height-powered surge sway (Abyssal kelp): slow lean + faster tip flutter.
     let h = max(w.y - in.i0.y, 0.0);
     let ph = w.x * 0.031 + w.z * 0.017;
     let a = 0.028 * pow(h + in.c.w, 1.2);
@@ -1110,31 +1128,34 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   let v = L.z;
   let id = L.w;
   let k = i32(in.n.w + 0.5);
+  // Fade high-frequency flutter with distance — cheaper + stops distant crown sparkle.
+  let dist = length(in.i0.xyz - F.camPos);
+  let nearW = 1.0 - smoothstep(35.0, 120.0, dist);
   var along = L.x;
   var across = L.y;
   if (k == 2) {
-    // Leaflet / petal: tip-weighted multi-frequency flutter (Abyssal-style), out of step per blade.
+    // CRITICAL: phase from leaflet uv + instance only — never vertex xyz (that stretched blades).
     let tip = sat(in.uv.y);
-    let ph = F.time * (2.55 + 0.85 * v) + in.p.x * 5.1 + in.p.y * 2.6 + in.p.z * 4.2 + id * 19.0 + in.i2.w * 11.0;
-    let fl = (sin(ph) + 0.48 * sin(ph * 2.41 + 1.2) + 0.22 * sin(ph * 5.3 + in.p.y * 3.1))
-      * (0.012 + 0.02 * v) * tip * tip * select(1.0, 0.14, in.uv.y < -0.5);
+    let ph = F.time * (1.55 + 0.45 * v) + id * 19.0 + in.i2.w * 11.0 + in.uv.y * 2.4 + abs(in.uv.x) * 0.15;
+    let fl = (sin(ph) + 0.32 * sin(ph * 2.15 + 1.1))
+      * (0.005 + 0.009 * v) * tip * tip * nearW * select(1.0, 0.12, in.uv.y < -0.5);
     along += fl;
-    across += fl * 0.85 * cos(ph * 0.68 + 0.5);
+    across += fl * 0.45 * cos(ph * 0.68 + 0.5);
   } else if (k == 3) {
-    // Crown masses: delayed, soft wiggle — not locked to leaf flutter.
-    along += sin(F.time * (1.45 + 0.45 * id) + w.x * 0.65 + w.z * 0.5 + w.y) * 0.0065 * v;
-    across += sin(F.time * (0.85 + 0.35 * id) + w.z * 0.42) * 0.0035 * v;
+    along += sin(F.time * (1.2 + 0.35 * id) + id * 7.0) * 0.004 * v * nearW;
+    across += sin(F.time * (0.75 + 0.3 * id) + id * 5.0) * 0.0025 * v * nearW;
   } else if (k == 1) {
-    // Palm trunks barely move; frond bark (low sway verts) still ride plant lean.
     along *= 0.32; across *= 0.32;
   }
   var out = w + plantShift(vec2<f32>(along, across), in.c.w);
-  // Secondary tip flutter on leaves / crowns — not locked to the lean axis.
-  if (k == 2 || k == 3 || (k == 0 && in.c.w > 0.04)) {
-    let h = max(out.y - in.i0.y, 0.0) * (0.55 + 0.7 * sat(in.c.w * 8.0));
-    let tw = tipSway(in.i0.xz + vec2<f32>(id * 3.1, id * 1.7), h) * mix(0.55, 1.15, sat(v / 6.0));
+  // Secondary tip motion: shared plant-space phase, capped height, tip-weighted for leaflets.
+  if ((k == 2 || k == 3 || (k == 0 && in.c.w > 0.05)) && nearW > 0.02) {
+    let tipK = select(sat(in.uv.y) * sat(in.uv.y), 0.65, k != 2);
+    let h = min(max(out.y - in.i0.y, 0.0), 4.5) * (0.35 + 0.65 * sat(in.c.w * 6.0));
+    let tw = tipSway(in.i0.xz + vec2<f32>(id * 3.1, id * 1.7), h)
+      * mix(0.28, 0.55, sat(v / 7.0)) * tipK * nearW;
     out.x += tw.x; out.z += tw.y;
-    out.y -= (abs(tw.x) + abs(tw.y)) * 0.12;
+    out.y -= (abs(tw.x) + abs(tw.y)) * 0.1;
   }
   return out;
 }
@@ -1166,7 +1187,8 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
 }
 @vertex fn vsShadowMesh(in: MeshIn) -> ShadowV {
   var o: ShadowV;
-  o.clip = F.shadowVP * vec4<f32>(meshPlace(in), 1.0);
+  // Lean-only placement: avoids tip flicker and heavy flutter in shadow maps.
+  o.clip = F.shadowVP * vec4<f32>(meshPlaceLean(in), 1.0);
   return o;
 }
 // Leaves lying over a surface: the nearest of a scatter of leaves, each longer than it is

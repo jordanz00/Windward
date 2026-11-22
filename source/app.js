@@ -357,39 +357,37 @@ function makePalm(seed, lod) {
     : 18 + ((rnd() * 7) | 0);
   const nd = family === 3 ? 2 + ((rnd() * 3) | 0) : 1 + ((rnd() * 2 + age) | 0);
   const nseg = [18, 8, 4][lod], lseg = [4, 3, 2][lod];
-  // Whole-crown bias: pack fronds toward light / wind — asymmetric silhouettes.
-  const crownBias = (rnd() - 0.5) * (family === 2 ? 1.0 : 0.65);
-  const crownGap = family === 0 ? 0.08 + rnd() * 0.12
-    : family === 3 ? 0.28 + rnd() * 0.32
-    : 0.16 + rnd() * 0.26;
-  const frondLen0 = family === 0 ? 3.2 : family === 3 ? 4.4 : 3.8;
+  // Whole-crown bias — irregular but coherent attachment around the trunk tip.
+  const crownBias = (rnd() - 0.5) * (family === 2 ? 0.75 : 0.5);
+  const crownGap = family === 0 ? 0.1 + rnd() * 0.12
+    : family === 3 ? 0.24 + rnd() * 0.28
+    : 0.15 + rnd() * 0.22;
+  const frondLen0 = family === 0 ? 3.2 : family === 3 ? 4.2 : 3.7;
   for (let j = 0; j < nf + nd; j++) {
     const dead = j >= nf;
     // 0 has just opened at the top of the crown. 1 is about to fall.
-    const age = dead ? 1.1 : (j + rnd() * 0.85) / nf;
-    // Irregular azimuth / elevation: real crowns are not a perfect spiral of feathers.
-    const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 1.65 + Math.sin(j * 1.7 + seed) * 0.5;
-    const el0 = dead ? -1.3 - rnd() * 0.35
-      : (family === 0 ? 1.15 : 1.02) - Math.pow(age, family === 3 ? 0.95 : 1.1) * (family === 3 ? 2.15 : 1.9)
-        + (rnd() - 0.5) * 0.55 + crownBias * 0.2;
-    const L = dead ? 2.4 + rnd()
-      : frondLen0 + (family === 3 ? 2.4 : 2.0) * Math.sin(Math.min(1, age * 1.2 + 0.08) * Math.PI) + rnd() * 0.75;
-    // Outer half droops harder; old/coastal hang more.
-    const droop = dead ? 0.15
-      : (family === 3 ? 1.15 : family === 2 ? 1.05 : 0.85) + age * 1.2 + rnd() * 0.55;
-    const curl = (rnd() - 0.5) * 1.5 + crownBias * 0.45, twist = (rnd() - 0.5) * 3.2 * (0.25 + age);
-    const tipSway = 0.14 + rnd() * 0.24;
-    const widthK = (family === 0 ? 0.018 : 0.014) + rnd() * 0.01;
-    const lenK = 0.75 + rnd() * 0.6, hang0 = rnd() * 0.55 + (family === 3 ? 0.2 : 0);
-    // Leaflets draw from their own stream, so every level builds the same fronds.
+    const age = dead ? 1.1 : (j + rnd() * 0.7) / nf;
+    // Milder azimuth/elevation jitter — extreme random el0 created spiked / broken silhouettes.
+    const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 0.85 + Math.sin(j * 1.7 + seed) * 0.28;
+    const el0 = dead ? -1.2 - rnd() * 0.25
+      : (family === 0 ? 1.1 : 0.98) - Math.pow(age, family === 3 ? 0.98 : 1.08) * (family === 3 ? 2.0 : 1.82)
+        + (rnd() - 0.5) * 0.28 + crownBias * 0.12;
+    const L = dead ? 2.3 + rnd() * 0.8
+      : frondLen0 + (family === 3 ? 2.1 : 1.85) * Math.sin(Math.min(1, age * 1.15 + 0.1) * Math.PI) + rnd() * 0.5;
+    const droop = dead ? 0.12
+      : Math.min(1.85, (family === 3 ? 1.0 : family === 2 ? 0.95 : 0.8) + age * 1.05 + rnd() * 0.35);
+    const curl = (rnd() - 0.5) * 1.05 + crownBias * 0.35, twist = (rnd() - 0.5) * 2.2 * (0.25 + age);
+    // Restrained tip sway weights — large values tore crowns under wind shaders.
+    const tipSwayAmt = 0.08 + rnd() * 0.1;
+    const widthK = (family === 0 ? 0.017 : 0.014) + rnd() * 0.008;
+    const lenK = 0.78 + rnd() * 0.45, hang0 = rnd() * 0.35 + (family === 3 ? 0.12 : 0);
     const fr = seeded(seed * 131 + j * 977 + 5);
-    // The rachis starts in the crown and bends over under its own weight, twisting as it goes.
+    // Rachis rooted at crown — continuous attachment, no floating stubs.
     const pts = [];
-    let p = [C[0] + Math.cos(az0) * 0.1, C[1] - 0.3 + (1 - Math.min(age, 1)) * 0.4, C[2] + Math.sin(az0) * 0.1];
+    let p = [C[0] + Math.cos(az0) * 0.08, C[1] - 0.18 + (1 - Math.min(age, 1)) * 0.28, C[2] + Math.sin(az0) * 0.08];
     for (let k = 0; k <= nseg; k++) {
       const t = k / nseg;
-      // Natural rachis: gentle near the crown, steep droop past mid-frond.
-      const e = el0 - droop * Math.pow(t, 1.85), az = az0 + curl * t * t * (0.7 + t), ro = twist * t;
+      const e = el0 - droop * Math.pow(t, 1.75), az = az0 + curl * t * t * (0.65 + t), ro = twist * t;
       const ce = Math.cos(e), se = Math.sin(e), ca = Math.cos(az), sa = Math.sin(az);
       const T = [ce * ca, se, ce * sa], S0 = [-sa, 0, ca], U0 = [-se * ca, ce, -se * sa];
       const cr = Math.cos(ro), sr = Math.sin(ro);
@@ -403,11 +401,12 @@ function makePalm(seed, lod) {
     let prev = null;
     for (let k = 0; k <= nseg; k++) {
       const q = pts[k], t = k / nseg;
-      const w = 0.006 + 0.034 * (1 - t) + 0.05 * Math.max(0, 1 - t / 0.12), hgt = w * 0.55;
+      const w = 0.006 + 0.032 * (1 - t) + 0.045 * Math.max(0, 1 - t / 0.12), hgt = w * 0.5;
       const row = ring.map((ab) => {
         const o = add(add(q.p, q.S, ab[0] * w), q.U, ab[1] * hgt);
-        const n = lod === 0 ? add(add([0, 0, 0], q.S, ab[0]), q.U, ab[1]) : q.U;
-        return m.v(o[0], o[1], o[2], n[0], n[1], n[2], rc[0], rc[1], rc[2], topSway + tipSway * t * t, SOLID);
+        const n0 = lod === 0 ? add(add([0, 0, 0], q.S, ab[0]), q.U, ab[1]) : q.U;
+        const n = unit(n0);
+        return m.v(o[0], o[1], o[2], n[0], n[1], n[2], rc[0], rc[1], rc[2], topSway + tipSwayAmt * t * t, SOLID);
       });
       if (prev) for (let i = 0; i < (ring.length > 2 ? ring.length : 1); i++) {
         const i1 = (i + 1) % ring.length;
@@ -415,56 +414,61 @@ function makePalm(seed, lod) {
       }
       prev = row;
     }
-    // Close to, the leaflets must fill the silhouette: denser, wider, and overlapping so the
-    // crown is a mass of leaves, not a starburst of flat blades.
-    const per = Math.max(3, Math.round(L * [14, 5.2, 1.6][lod]));
-    const W = widthK * [1.4, 3.0, 7][lod] * (dead ? 0.6 : 1);
-    const lift = dead ? -0.2 : 0.35 - age * 0.55;
-    const hang = dead ? 2.5 : 0.35 + age * 1.65 + hang0;
+    // Leaflet density by LOD — avoid oversized mid/far blades that stretch under wind.
+    const per = Math.max(3, Math.round(L * [13, 4.8, 1.5][lod]));
+    const W = widthK * [1.35, 2.6, 4.2][lod] * (dead ? 0.55 : 1);
+    const lift = dead ? -0.15 : 0.28 - age * 0.45;
+    const hang = dead ? 1.8 : Math.min(1.55, 0.3 + age * 1.25 + hang0);
     const young = sat(1 - age / 0.3), old = sat((age - 0.72) / 0.28);
     const green = dead ? [0.28, 0.2, 0.1] : [
       0.07 + young * 0.07 + old * 0.1, 0.15 + young * 0.07 + old * 0.025, 0.04 + young * 0.012 + old * 0.012];
     for (let side = -1; side <= 1; side += 2) {
       for (let i = 0; i < per; i++) {
-        // Skip leaflets so the silhouette has sky gaps, not a solid fan.
-        if (!dead && fr() < crownGap * (0.45 + age * 0.9)) continue;
-        // Paired leaflets with irregular spacing and slight stagger along the rachis.
-        const u = (i + 0.35 + (fr() - 0.5) * 0.85 + (side < 0 ? 0.08 : 0)) / per, t = 0.12 + u * 0.88;
+        if (!dead && fr() < crownGap * (0.4 + age * 0.85)) continue;
+        // Stable spacing along rachis — less random stagger = fewer intersecting blades.
+        const u = (i + 0.4 + (fr() - 0.5) * 0.35 + (side < 0 ? 0.06 : 0)) / per, t = 0.12 + u * 0.88;
         const f = Math.min(nseg - 1e-4, t * nseg), k0 = f | 0, A = pts[k0];
         const T = A.T;
-        // Longest near 1/3 along; tip leaflets taper and leave sky gaps in the silhouette.
-        const len = (dead ? 0.48 : lenK) * Math.pow(Math.sin(Math.PI * (0.06 + 0.92 * Math.pow(u, 0.55))), 0.72) * (1 - 0.32 * u) * (0.75 + fr() * 0.45);
-        const phi = 1.05 - u * 0.55 + (fr() - 0.5) * 0.55 + side * 0.1;
-        const lu = lift + (fr() - 0.5) * 0.55 + (side < 0 ? -0.05 : 0.05);
+        const len = (dead ? 0.45 : lenK) * Math.pow(Math.sin(Math.PI * (0.06 + 0.92 * Math.pow(u, 0.55))), 0.72)
+          * (1 - 0.3 * u) * (0.82 + fr() * 0.28);
+        if (len < 0.08) continue;
+        const phi = 1.0 - u * 0.5 + (fr() - 0.5) * 0.28 + side * 0.08;
+        const lu = lift + (fr() - 0.5) * 0.28 + (side < 0 ? -0.04 : 0.04);
         const cp = Math.cos(phi), sp = Math.sin(phi) * side;
         const d = unit([T[0] * cp + A.S[0] * sp + A.U[0] * lu, T[1] * cp + A.S[1] * sp + A.U[1] * lu, T[2] * cp + A.S[2] * sp + A.U[2] * lu]);
-        const hg = hang * (0.75 + fr() * 0.5);
-        const tone = (0.75 + fr() * 0.45) * (0.45 + 0.55 * smooth01(0.15, 2.2, t * L)) * (1 - 0.25 * Math.min(1, age));
-        // Frond-local wind phase so leaflets do not sway as one rigid fan.
-        const sw0 = topSway + tipSway * t * t * (0.85 + 0.3 * Math.sin(j * 2.1 + i * 0.7));
+        const hg = hang * (0.8 + fr() * 0.35);
+        const tone = (0.8 + fr() * 0.35) * (0.5 + 0.5 * smooth01(0.15, 2.2, t * L)) * (1 - 0.22 * Math.min(1, age));
+        // Shared sway weight along this leaflet (shader phases by uv, not by random per vert).
+        const sw0 = topSway + tipSwayAmt * t * t;
         const B = pts[k0 + 1].p, fk = f - k0;
         let q = [A.p[0] + (B[0] - A.p[0]) * fk, A.p[1] + (B[1] - A.p[1]) * fk, A.p[2] + (B[2] - A.p[2]) * fk];
         let pl = -1, pr = -1;
+        // Mild fold shared for the whole leaflet — avoids left/right normal spikes.
+        const fold0 = 0.28 + fr() * 0.12;
+        const twistN = (fr() - 0.5) * 0.1;
         for (let k = 0; k <= lseg; k++) {
           const s = k / lseg;
-          const dir = unit([d[0], d[1] - hg * Math.pow(s, 1.3), d[2]]);
+          const dir = unit([d[0], d[1] - hg * Math.pow(s, 1.25), d[2]]);
           let n = cross(T, dir);
-          n = Math.hypot(n[0], n[1], n[2]) < 0.05 ? A.U : unit([n[0] * side, n[1] * side, n[2] * side]);
+          n = Math.hypot(n[0], n[1], n[2]) < 0.05 ? unit(A.U) : unit([n[0] * side, n[1] * side, n[2] * side]);
           const a = unit(cross(n, dir));
-          const w = W * Math.min(1, 0.4 + s * 4) * Math.pow(1 - Math.pow(s, 2.2), 0.8);
+          const w = W * Math.min(1, 0.45 + s * 3.2) * Math.pow(1 - Math.pow(s, 2.1), 0.85);
           const brown = old * s * s * 0.7;
           const cr = (green[0] * (1 - brown) + 0.3 * brown) * tone, cg = (green[1] * (1 - brown) + 0.2 * brown) * tone, cb = (green[2] * (1 - brown) + 0.07 * brown) * tone;
-          const sw = sw0 + 0.07 * s;
+          const sw = sw0 + 0.04 * s;
           if (k === lseg) {
+            if (pl < 0 || pr < 0) break;
             const tip = m.v(q[0], q[1], q[2], n[0], n[1], n[2], cr, cg, cb, sw, LEAF, 0, 1);
             m.tri(pl, tip, pr);
           } else {
-            // Folded leaflet: stronger midrib V toward the tip, slight twist per blade.
-            const fold = 0.85 + 0.35 * s + (fr() - 0.5) * 0.2;
-            const twistN = (fr() - 0.5) * 0.22;
+            const fold = fold0 + 0.18 * s;
             const ax = a[0] + n[0] * twistN, ay = a[1] + n[1] * twistN, az = a[2] + n[2] * twistN;
-            const l = m.v(q[0] + ax * w, q[1] + ay * w, q[2] + az * w, n[0] + ax * fold, n[1] + ay * fold, n[2] + az * fold, cr, cg, cb, sw, LEAF, 1, s);
-            const r = m.v(q[0] - ax * w, q[1] - ay * w, q[2] - az * w, n[0] - ax * fold, n[1] - ay * fold, n[2] - az * fold, cr * 0.92, cg * 0.95, cb, sw, LEAF, -1, s);
+            const al = Math.hypot(ax, ay, az) || 1;
+            const bx = ax / al, by = ay / al, bz = az / al;
+            const nl = unit([n[0] + bx * fold, n[1] + by * fold, n[2] + bz * fold]);
+            const nr = unit([n[0] - bx * fold, n[1] - by * fold, n[2] - bz * fold]);
+            const l = m.v(q[0] + bx * w, q[1] + by * w, q[2] + bz * w, nl[0], nl[1], nl[2], cr, cg, cb, sw, LEAF, 1, s);
+            const r = m.v(q[0] - bx * w, q[1] - by * w, q[2] - bz * w, nr[0], nr[1], nr[2], cr * 0.92, cg * 0.95, cb, sw, LEAF, -1, s);
             if (pl >= 0) { m.tri(pl, l, pr); m.tri(pr, l, r); }
             pl = l; pr = r;
           }
@@ -2169,7 +2173,8 @@ async function main() {
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
     const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [40]));
     // Close palms keep every leaflet; coarser crowns carry the silhouette far past the beach.
-    const palmIds = [3, 8, 21, 34, 47, 55].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 10, [40, 160]));
+    // Softer LOD handoffs — abrupt mid/far crown swaps read as tree-top flicker.
+    const palmIds = [3, 8, 21, 34, 47, 55].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 10.5, [55, 185]));
     // A palm leans the way the ground falls, toward the open light over the water.
     const leanYaw = (x, z) => {
       const gx = fieldSample(world, x + 3, z) - fieldSample(world, x - 3, z), gz = fieldSample(world, x, z + 3) - fieldSample(world, x, z - 3);
@@ -2980,8 +2985,8 @@ async function main() {
         reflDraws = scatter.collect(instArr, instEnd, RVP, camX, -camY, camZ, Math.min(380, plantReach * 0.75), 1);
         instEnd = reflDraws.end;
       }
-      // Leaflet-scale near shadows only around the eye; coarser LOD past the first cut.
-      nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.45, 0);
+      // Near shadows: lean-only mesh shader + modest reach (main view still uses full plantReach).
+      nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.2, 1);
       instEnd = nearDraws.end;
       if (instEnd) device.queue.writeBuffer(instB, 0, instArr.subarray(0, Math.min(instEnd, instCap) * ISTRIDE));
       // The same frame data with the near matrix in the shadow slot, for the near shadow pass.
