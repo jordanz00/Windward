@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
-const parts = ['gpu.js', 'island.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'env.js', 'insects.js', 'bench.js', 'app.js'];
+const parts = ['gpu.js', 'island.js', 'sky.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'env.js', 'insects.js', 'bench.js', 'app.js'];
 // Source stays readable. The shipped page is compacted: comments and spare whitespace
 // are removed, but names and template-literal structure stay intact so errors still
 // map to written code. --dev keeps the source whole.

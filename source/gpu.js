@@ -3,22 +3,25 @@
 
 // What a binding is, by one letter: u uniform, r storage read, w storage written,
 // t texture read texel by texel, f filtered texture, d depth texture, s sampler,
-// c comparison sampler, o texture written by a compute pass.
+// c comparison sampler, o texture written by a compute pass, a filtered stack of textures,
+// v filtered volume. A dash leaves that binding's number unused.
 const BINDING = {
   u: { buffer: { type: 'uniform' } }, r: { buffer: { type: 'read-only-storage' } }, w: { buffer: { type: 'storage' } },
   t: { texture: { sampleType: 'unfilterable-float' } }, f: { texture: { sampleType: 'float' } }, d: { texture: { sampleType: 'depth' } },
   s: { sampler: { type: 'filtering' } }, c: { sampler: { type: 'comparison' } },
-  o: { storageTexture: { access: 'write-only', format: 'rgba16float' } }
+  o: { storageTexture: { access: 'write-only', format: 'rgba16float' } },
+  a: { texture: { sampleType: 'float', viewDimension: '2d-array' } }, v: { texture: { sampleType: 'float', viewDimension: '3d' } }
 };
 // A bind group layout from a word, one letter a binding, numbered from `first`.
 function layoutOf(device, stages, word, first) {
-  return device.createBindGroupLayout({ entries: [...word].map((k, i) => ({ binding: (first || 0) + i, visibility: stages, ...BINDING[k] })) });
+  return device.createBindGroupLayout({ entries: [...word].map((k, i) => BINDING[k] && { binding: (first || 0) + i, visibility: stages, ...BINDING[k] }).filter(Boolean) });
 }
-// A bind group from its resources in binding order. A buffer is wrapped on the way.
+// A bind group from its resources in binding order. A buffer is wrapped on the way, and a
+// null stands where the layout has a dash.
 function groupOf(device, layout, list, first) {
   return device.createBindGroup({
     layout: layout,
-    entries: list.map((r, i) => ({ binding: (first || 0) + i, resource: r instanceof GPUBuffer ? { buffer: r } : r }))
+    entries: list.map((r, i) => r && { binding: (first || 0) + i, resource: r instanceof GPUBuffer ? { buffer: r } : r }).filter(Boolean)
   });
 }
 // A texture to draw into. It can be read afterwards unless `usage` says otherwise.

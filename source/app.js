@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 3, drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 3, drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 4, drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -2108,13 +2108,17 @@ async function main() {
     const VS = GPUShaderStage.VERTEX, FS = GPUShaderStage.FRAGMENT;
     // One letter a binding; the letters are listed in gpu.js.
     const ubLayout = layoutOf(device, VS | FS, 'u');
-    const geoLayout = layoutOf(device, VS | FS, 'uttdcuttfsd');
+    const geoLayout = layoutOf(device, VS | FS, 'uttdcuttasdf');
     const simLayout = layoutOf(device, FS, 'tu');
     const waterLayout = layoutOf(device, VS | FS, 'tdfstttf');
     // The air pass reads the scene's depth and nothing else from the second group.
     const airLayout = layoutOf(device, FS, 'd', 1);
     const geoPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout] });
     const skyPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout] });
+    // The sky's passes each read what the one before made: noise, then weather, then cloud
+    // shadow, then the panorama, then the panorama gathered small.
+    const skyLayouts = ['vs', 'vsf', 'vsff', '-s--a'].map((w) => layoutOf(device, FS, w, 8));
+    const skyPLs = skyLayouts.map((l) => device.createPipelineLayout({ bindGroupLayouts: [ubLayout, l] }));
     const waterPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, waterLayout] });
 
     // A vertex buffer layout from [location, byte offset, float count] triples.
@@ -2164,7 +2168,10 @@ async function main() {
     // The sea first: its shader is the longest to compile, so it is given the longest start.
     pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, depth: overZ });
     pipe('sky', geoPL, 'vsSky', 'fsSky', { depth: depthOn('depth32float', true, 'always') });
-    pipe('skyBake', skyPL, 'vsSky', 'fsSkyBake', { blend: { color: lerp, alpha: lerp } });
+    pipe('weather', skyPLs[0], 'vsSky', 'fsWeather', {});
+    pipe('cloudShadow', skyPLs[1], 'vsSky', 'fsCloudShadow', {});
+    pipe('skyBake', skyPLs[2], 'vsSky', 'fsSkyBake', {});
+    pipe('skyDim', skyPLs[3], 'vsSky', 'fsSkyDim', { blend: { color: lerp, alpha: lerp } });
     pipe('terrain', geoPL, 'vsTerrain', 'fsTerrain', { buffers: posBuf, cull: 'back', depth: sceneZ });
     pipe('mesh', geoPL, 'vsMesh', 'fsMesh', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowTerrain', skyPL, 'vsShadowTerrain', null, { buffers: posBuf, cull: 'back', depth: shadowZ });
@@ -2195,7 +2202,7 @@ async function main() {
     pipe('drops', airPL, 'vsDrops', 'fsDrops', { format: format, blend: over, depth: overZ });
     pipe('sim', simPL, 'vs', 'fs', { module: simMod });
     // A capture waits for everything, so it is always the whole picture.
-    const READ = qstr.has('read');
+    const READ = qstr.has('read'), READ_AT = parseInt(qstr.get('rf'), 10) || 16;
     const pipesReady = Promise.all(READ ? jobs.concat(lateJobs) : jobs);
     pipesReady.catch(() => {});
     Promise.all(lateJobs).catch((err) => console.error(err));
@@ -2523,9 +2530,9 @@ async function main() {
       return;
     }
     mark('wgsl');
-    const uf = new Float32Array(224);
-    const ur = new Float32Array(224);
-    const un = new Float32Array(224);
+    const uf = new Float32Array(244);
+    const ur = new Float32Array(244);
+    const un = new Float32Array(244);
     for (let i = 0; i < 8; i++) {
       const w = WAVES[i];
       const L = Math.hypot(w[0], w[1]) || 1;
@@ -2534,9 +2541,9 @@ async function main() {
     }
     ur.set(uf);
 
-    const ubuf = device.createBuffer({ size: 896, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const rbuf = device.createBuffer({ size: 896, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const nbuf = device.createBuffer({ size: 896, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const ubuf = device.createBuffer({ size: 976, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 976, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const nbuf = device.createBuffer({ size: 976, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const htex = device.createTexture({
       size: [q.hres, q.hres],
@@ -2614,6 +2621,7 @@ async function main() {
       beginComputePass(desc) { return encRaw.beginComputePass(desc); },
       copyTextureToBuffer(a, b, c) { return encRaw.copyTextureToBuffer(a, b, c); },
       copyBufferToBuffer(a, b, c, d, e) { return encRaw.copyBufferToBuffer(a, b, c, d, e); },
+      copyTextureToTexture(a, b, c) { return encRaw.copyTextureToTexture(a, b, c); },
       resolveQuerySet(a, b, c, d, e) { return encRaw.resolveQuerySet(a, b, c, d, e); },
       finish() { return encRaw.finish(); }
     };
@@ -2660,12 +2668,9 @@ async function main() {
     const NEARVP = new Float32Array(16);
     const bgUBN = groupOf(device, ubLayout, [nbuf]);
     const nearRows = [0, 0];
-    // The sky panorama. Sizes match SKYW and SKYH in the shader.
-    const SKYW = 1536, SKYH = 384, SKY_STRIPS = 16;
-    const skyView = targetOf(device, SKYW, SKYH, sceneFmt).createView();
+    const sky = createSky(device, { dim: q.sky, format: sceneFmt, layouts: skyLayouts });
     const skySamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
-    const skyPass = passOf(skyView);
-    let skyStrip = 0, skyFor = null, skyFresh = 0, skySettle = 0;
+    let skyFor = null, skyPace = 1;
     const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 56], 0.3, 0, 11);
     const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
     const oceanU = new Float32Array(4);
@@ -2763,7 +2768,7 @@ async function main() {
       swapDepthView = swapDepth.createView();
       bgAir = groupOf(device, airLayout, [sd], 1);
       const geoGroup = (buf, rip) => groupOf(device, geoLayout,
-        [buf, hview, rip, shadowView, shadowSamp, shoreSim.ubuf, shoreSim.stateView, shoreSim.wetView, skyView, skySamp, nearView]);
+        [buf, hview, rip, shadowView, shadowSamp, shoreSim.ubuf, shoreSim.stateView, shoreSim.wetView, sky.view, skySamp, nearView, sky.shade]);
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
       bgGeoR = geoGroup(rbuf, ripViews[0]);
       bgUB = groupOf(device, ubLayout, [ubuf]);
@@ -2800,7 +2805,8 @@ async function main() {
     const near = 0.08, far = 36000;
     let time = parseFloat(qstr.get('t') || '2.5') || 0;
     envLight(0);
-    env.cloud = [Math.cos(0.36) * 0.00855 * time, Math.sin(0.36) * 0.00855 * time];
+    env.wx0 = Math.cos(env.ang); env.wz0 = Math.sin(env.ang);
+    envSky(time, 0);
     // Captures hold the hour and the weather still unless asked to let them run.
     if (qstr.has('shot') || qstr.has('studio')) { env.run = env.auto = qstr.has('flow'); }
     if (qstr.has('tod')) env.hour = parseFloat(qstr.get('tod')) || ENV_H0;
@@ -2973,6 +2979,13 @@ async function main() {
         }
       }
 
+      {
+        // How squarely the camera faces the sun, for the exposure meter.
+        const s = env.sun || [0, 1, 0], ca = Math.cos(wp.sunAng), sa = Math.sin(wp.sunAng), cp = Math.cos(pitch);
+        env.face = Math.sin(yaw) * cp * (s[0] * ca - s[2] * sa) + Math.sin(pitch) * s[1] - Math.cos(yaw) * cp * (s[0] * sa + s[2] * ca);
+        // A capture has no time for the eye to adapt.
+        if (READ && frames < 14) env.expoSmooth = null;
+      }
       envStep(dt, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
 
       if (mode === 0 && !qstr.has('shot')) {
@@ -3150,6 +3163,16 @@ async function main() {
       // Above-water reflection quality/settings are unchanged — not a fidelity cut.
       if (under) uf[86] = 0;
 
+      {
+        // The sky is rebaked a strip a frame, which follows the clock and the drift of the
+        // clouds. When the light or the weather is moving faster than that, or the camera is
+        // climbing, more strips a frame, eased up and down so the blend never jumps.
+        const key = wp.sunAng * 7 + env.hour * 2 + env.cover * 3 + env.haze + camY * 0.004;
+        const want = skyFor === null ? 1 : 1 + Math.abs(key - skyFor) * 900;
+        skyFor = key;
+        skyPace = Math.max(1, Math.min(skyPace + 1, Math.max(want, skyPace - 0.25)));
+        sky.plan(uf, skyPace);
+      }
       // Reflected camera, for the water mirror — skipped entirely when reflections are off.
       if (uf[86] > 0.5) {
         cameraVectors(yaw, -pitch, rfwd, rright, rup);
@@ -3301,33 +3324,7 @@ async function main() {
         ripIndex = 1 - ripIndex;
       }
       const geoNow = bgGeoSet[ripIndex];
-      {
-        // The whole sky at once the first time. After the sun or the weather moves it is
-        // replaced a quarter at a time, then each bake is blended into the last so the
-        // march's sampling noise averages away. After that, one strip a frame.
-        // A slow change, the clock or a cloud bank building, is followed a strip at a time.
-        const key = wp.sunAng * 7 + env.hour * 2 + env.cover * 3 + env.haze;
-        let strips = 8;
-        if (skyFor === null) strips = SKY_STRIPS;
-        if (skyFor === null || Math.abs(key - skyFor) > 0.03) { skyFresh = SKY_STRIPS; skySettle = 24; }
-        skyFor = key;
-        const fresh = skyFresh > 0;
-        if (fresh) skyFresh -= strips;
-        else if (skySettle > 0) skySettle--;
-        else strips = 1;
-        const bp = enc.beginRenderPass(skyPass);
-        bp.setPipeline(pipes.skyBake); bp.setBindGroup(0, bgUB);
-        // Once settled, each bake counts for less, so the sub-texel jitter averages over more of them.
-        const mixK = fresh ? 1 : skySettle > 0 ? 0.3 : 0.12;
-        bp.setBlendConstant([mixK, mixK, mixK, mixK]);
-        const sw = SKYW / SKY_STRIPS;
-        for (let k = 0; k < strips; k++) {
-          bp.setScissorRect(skyStrip * sw, 0, sw, SKYH);
-          bp.draw(3);
-          skyStrip = (skyStrip + 1) % SKY_STRIPS;
-        }
-        bp.end();
-      }
+      sky.encode(enc, pipes, bgUB);
       // Island shadow: redraw when the light has moved about half a degree; lock VP to that bake.
       if (!shadowFor || uf[52] * shadowFor[0] + uf[53] * shadowFor[1] + uf[54] * shadowFor[2] < 0.99996) {
         if (!shadowFor) shadowFor = shadowSun;
@@ -3425,11 +3422,11 @@ async function main() {
         }
         pass.end();
       };
-      const toScreen = !(READ && frames === 16);
+      const toScreen = !(READ && frames === READ_AT);
       if (READ && readTex) drawSwap(readViews[0], readViews[1], !toScreen);
       if (toScreen) drawSwap(context.getCurrentTexture().createView(), swapDepthView, true);
       let doRead = false;
-      if (READ && readTex && frames === 16) {
+      if (READ && readTex && frames === READ_AT) {
         enc.copyTextureToBuffer(
           { texture: readTex },
           { buffer: readBuf, bytesPerRow: readBpr, rowsPerImage: viewH },
