@@ -2133,7 +2133,8 @@ async function main() {
     const sceneZ = depthOn('depth32float', true, 'less');
     // Sixteen bits is under a centimetre of the island map's 614 m of depth, and half the memory.
     const shadowFmt = 'depth16unorm';
-    const shadowZ = { ...sceneZ, format: shadowFmt, depthBias: 2, depthBiasSlopeScale: 2, depthBiasClamp: 0 };
+    // Mild slope-scaled bias; receivers add a small constant in-shader (large bias detaches shadows).
+    const shadowZ = { ...sceneZ, format: shadowFmt, depthBias: 1, depthBiasSlopeScale: 1.35, depthBiasClamp: 0.002 };
     const overZ = depthOn('depth24plus', false, 'less');
     const over = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
     const lerp = { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' };
@@ -2592,6 +2593,11 @@ async function main() {
     let nearShadowKey = null;
     let nearShadowUnder = null;
     const shadowSun = [0, 0, 0];
+    // Lock light matrices to the last shadow bake — drifting VP against frozen depth causes crawl.
+    const lockedSHVP = new Float32Array(16);
+    const lockedNEARVP = new Float32Array(16);
+    const lockedNearC = [0, 0, 0];
+    let haveLockedSH = false, haveLockedNear = false;
     const nearShadowScratch = [0, 0, 0, 0, 0, 0];
     // Waterline latch: hysteresis on local wave height so under/above does not flicker.
     let underLatch = false;
@@ -2807,6 +2813,7 @@ async function main() {
     let fishCam = null, birdNear = 0;
 
     const nearC = [0, 0, 0];
+    const nearCand = [0, 0, 0];
     function fillCam(arr, eyeX, eyeY, eyeZ, cyaw, cpitch, clipBelow, underFlag) {
       cameraVectors(cyaw, cpitch, fwd, right, up);
       const eye = [eyeX, eyeY, eyeZ];
@@ -2842,10 +2849,22 @@ async function main() {
       const sux = sry * sfz - srz * sfy;
       const suy = srz * sfx - srx * sfz;
       const suz = srx * sfy - sry * sfx;
-      viewFrom([lx * 280, ly * 280, lz * 280], [srx, sry, srz], [sux, suy, suz], [sfx, sfy, sfz], V);
-      ortho(P, -340, 340, -260, 300, 6, 620);
+      // Island cascade: texel-snap the light origin so the map does not crawl as the sun drifts.
+      const farHalf = 340, farTex = farHalf * 2 / 2048;
+      let eyeLx = lx * 280, eyeLy = ly * 280, eyeLz = lz * 280;
+      const fpa = eyeLx * srx + eyeLy * sry + eyeLz * srz;
+      const fpb = eyeLx * sux + eyeLy * suy + eyeLz * suz;
+      const fda = Math.round(fpa / farTex) * farTex - fpa;
+      const fdb = Math.round(fpb / farTex) * farTex - fpb;
+      eyeLx += srx * fda + sux * fdb;
+      eyeLy += sry * fda + suy * fdb;
+      eyeLz += srz * fda + suz * fdb;
+      viewFrom([eyeLx, eyeLy, eyeLz], [srx, sry, srz], [sux, suy, suz], [sfx, sfy, sfz], V);
+      ortho(P, -farHalf, farHalf, -260, 300, 6, 620);
       matmul(P, V, SHVP);
-      arr.set(SHVP, 156);
+      // Sample with the locked bake VP (updated only when the island map is redrawn).
+      if (haveLockedSH) arr.set(lockedSHVP, 156);
+      else { lockedSHVP.set(SHVP); haveLockedSH = true; arr.set(lockedSHVP, 156); }
       // The near box sits ahead of the eye and moves in whole texels, so its edges do not crawl.
       const hx = fwd[0], hz = fwd[2], hl = Math.hypot(hx, hz) || 1;
       let ncx = eyeX + hx / hl * NEAR_R * 0.55, ncy = Math.max(eyeY - 1.5, 0), ncz = eyeZ + hz / hl * NEAR_R * 0.55;
@@ -2853,7 +2872,7 @@ async function main() {
       const pa = ncx * srx + ncy * sry + ncz * srz, pb = ncx * sux + ncy * suy + ncz * suz;
       const da = Math.round(pa / tex) * tex - pa, db = Math.round(pb / tex) * tex - pb;
       ncx += srx * da + sux * db; ncy += sry * da + suy * db; ncz += srz * da + suz * db;
-      nearC[0] = ncx; nearC[1] = ncy; nearC[2] = ncz;
+      nearCand[0] = ncx; nearCand[1] = ncy; nearCand[2] = ncz;
       // Only the rows of the land that can stand in the box are drawn into it: its footprint,
       // carried along the light from the deepest sea floor to the highest ground.
       const ly1 = Math.max(ly, 0.05), lift = NEAR_R * Math.abs(suy), wide = NEAR_R * (Math.abs(srz) + Math.abs(suz));
@@ -2864,7 +2883,14 @@ async function main() {
       viewFrom([ncx + lx * 120, ncy + ly * 120, ncz + lz * 120], [srx, sry, srz], [sux, suy, suz], [sfx, sfy, sfz], V);
       ortho(P, -NEAR_R, NEAR_R, -NEAR_R, NEAR_R, 1, 240);
       matmul(P, V, NEARVP);
-      arr.set(NEARVP, 172);
+      // Sampling/cull use the locked bake; candidates are adopted only when the near map redraws.
+      if (!haveLockedNear) {
+        lockedNEARVP.set(NEARVP);
+        lockedNearC[0] = ncx; lockedNearC[1] = ncy; lockedNearC[2] = ncz;
+        haveLockedNear = true;
+      }
+      arr.set(lockedNEARVP, 172);
+      nearC[0] = lockedNearC[0]; nearC[1] = lockedNearC[1]; nearC[2] = lockedNearC[2];
       const over = wp.mood[1];
       arr[60] = 0.73 * (1 - over * 0.4) + over * 0.52;
       arr[61] = 0.79 * (1 - over * 0.35) + over * 0.54;
@@ -3155,7 +3181,7 @@ async function main() {
       while (dyaw < -Math.PI) dyaw += Math.PI * 2;
       const angMove = Math.abs(dyaw) + Math.abs(pitch - cullKey[4]);
       const needCull = !cullReady || eyeMove > 0.45 || angMove > 0.012 || Math.abs(plantReach - cullKey[5]) > 0.5
-        || reflOn !== cullKey[6] || Math.hypot(nearC[0] - cullKey[7], nearC[2] - cullKey[8]) > 0.8;
+        || reflOn !== cullKey[6] || Math.hypot(nearCand[0] - cullKey[7], nearCand[2] - cullKey[8]) > 0.55;
       let instEnd = lastInstEnd;
       const tCull0 = performance.now();
       if (needCull) {
@@ -3168,13 +3194,13 @@ async function main() {
         } else {
           reflDraws = bugDrawsEmpty;
         }
-        // Near shadows: lean-only mesh shader + modest reach (main view still uses full plantReach).
-        nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.2, 1);
+        // Near shadows: collect at the candidate bake center so casters match the next lock.
+        nearDraws = scatter.collect(instArr, instEnd, null, nearCand[0], nearCand[1], nearCand[2], NEAR_R * 1.2, 1);
         instEnd = nearDraws.end;
         if (instEnd) device.queue.writeBuffer(instB, 0, instArr.subarray(0, Math.min(instEnd, instCap) * ISTRIDE));
         cullKey[0] = camX; cullKey[1] = camY; cullKey[2] = camZ;
         cullKey[3] = yaw; cullKey[4] = pitch; cullKey[5] = plantReach;
-        cullKey[6] = reflOn; cullKey[7] = nearC[0]; cullKey[8] = nearC[2];
+        cullKey[6] = reflOn; cullKey[7] = nearCand[0]; cullKey[8] = nearCand[2];
         lastInstEnd = instEnd;
         cullReady = true;
       }
@@ -3302,10 +3328,14 @@ async function main() {
         }
         bp.end();
       }
-      // Island shadow: redraw when the light has moved about half a degree.
+      // Island shadow: redraw when the light has moved about half a degree; lock VP to that bake.
       if (!shadowFor || uf[52] * shadowFor[0] + uf[53] * shadowFor[1] + uf[54] * shadowFor[2] < 0.99996) {
         if (!shadowFor) shadowFor = shadowSun;
         shadowFor[0] = uf[52]; shadowFor[1] = uf[53]; shadowFor[2] = uf[54];
+        lockedSHVP.set(SHVP);
+        haveLockedSH = true;
+        uf.set(lockedSHVP, 156);
+        device.queue.writeBuffer(ubuf, 0, uf);
         const spass = enc.beginRenderPass(shadowPass);
         spass.setPipeline(pipes.shadowTerrain); spass.setBindGroup(0, bgUB);
         spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
@@ -3313,20 +3343,26 @@ async function main() {
         drawMeshes(spass, pipes.shadowMesh, bgUB, meshVB, meshIB, instFarB, farDraws);
         spass.end();
       }
-      // Near cascade: redraw when the eye or sun moved enough to matter.
+      // Near cascade: redraw when the eye or sun moved enough; adopt candidate VP then bake.
       {
         const nsk = nearShadowKey || (nearShadowKey = [0, 0, 0, 0, 0, 0]);
         const eyeMove = Math.hypot(camX - nsk[0], camY - nsk[1], camZ - nsk[2]);
         const sunDot = uf[52] * nsk[3] + uf[53] * nsk[4] + uf[54] * nsk[5];
         const underFlip = nearShadowUnder !== under;
         // Soft PCF hides sub-metre shifts; keep cadence tight enough that frond shadows do not stick.
-        if (eyeMove > 0.5 || sunDot < 0.9999 || underFlip) {
+        if (eyeMove > 0.35 || sunDot < 0.99992 || underFlip || !haveLockedNear) {
           nsk[0] = camX; nsk[1] = camY; nsk[2] = camZ;
           nsk[3] = uf[52]; nsk[4] = uf[53]; nsk[5] = uf[54];
           nearShadowUnder = under;
-          // Uniforms only needed when this pass actually runs.
-          un.set(uf); un.set(NEARVP, 156);
+          lockedNEARVP.set(NEARVP);
+          lockedNearC[0] = nearCand[0]; lockedNearC[1] = nearCand[1]; lockedNearC[2] = nearCand[2];
+          haveLockedNear = true;
+          nearC[0] = lockedNearC[0]; nearC[1] = lockedNearC[1]; nearC[2] = lockedNearC[2];
+          uf.set(lockedNEARVP, 172);
+          // Uniforms only needed when this pass actually runs — near pipe reads shadowVP slot as its light VP.
+          un.set(uf); un.set(lockedNEARVP, 156);
           device.queue.writeBuffer(nbuf, 0, un);
+          device.queue.writeBuffer(ubuf, 0, uf);
           const np = enc.beginRenderPass(nearPass);
           np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
           np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');

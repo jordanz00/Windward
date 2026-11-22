@@ -485,10 +485,12 @@ struct SkyBake { @location(0) c: vec4<f32> }
       let hK = sat((p.y - CLOUD_BASE) / 1.85);
       let sunT = exp(-ls * 16.0);
       let powder = 1.0 - exp(-d * 4.8);
-      let silver = silverMu * sunT * powder * (0.65 + 1.2 * gold);
-      let baseAO = mix(0.22, 1.0, sat(hK * 1.1 + sunT * 0.4));
-      let L = sunL * (sunT * (0.42 + 0.55 * powder) * phaseMu + silver * 1.45) * baseAO
-        + skyL * (0.1 + 0.4 * hK + 0.3 * (1.0 - hK) * (0.45 + 0.55 * sunT))
+      let silver = silverMu * sunT * powder * (0.7 + 1.35 * gold);
+      // Soft internal shadow: thicker toward the underside of the cloud mass.
+      let selfSh = mix(0.55, 1.0, sunT) * mix(0.7, 1.05, hK);
+      let baseAO = mix(0.2, 1.0, sat(hK * 1.15 + sunT * 0.42)) * selfSh;
+      let L = sunL * (sunT * (0.4 + 0.58 * powder) * phaseMu + silver * 1.55) * baseAO
+        + skyL * (0.12 + 0.42 * hK + 0.28 * (1.0 - hK) * (0.45 + 0.55 * sunT))
         + moonL * (0.3 + 0.55 * hK);
       let al = 1.0 - exp(-d * ds * 38.0);
       C += T * al * L;
@@ -644,17 +646,21 @@ fn airMix(col: vec3<f32>, dir: vec3<f32>, dist: f32) -> vec3<f32> {
   haze = mix(haze, haze * vec3<f32>(1.14, 0.96, 0.82) + vec3<f32>(0.03, 0.012, 0.0), gold * sat(1.0 - dir.y * 2.5) * 0.5);
   // Abyssal-style sun phase: in-scatter brightens toward the sun.
   let mu = max(dot(dir, F.sunDir), 0.0);
-  haze *= 0.78 + 0.38 * mu * mu + 0.2 * pow(mu, 6.0) * (1.0 - gold * 0.3);
+  haze *= 0.76 + 0.4 * mu * mu + 0.28 * pow(mu, 5.5) * (1.0 - gold * 0.25);
+  // Warm humid tropical fill near the horizon — luminous, not milky.
+  let humid = sat(F.wx.w);
+  haze = mix(haze, haze * vec3<f32>(1.06, 1.02, 0.96) + F.sunCol * vec3<f32>(0.04, 0.035, 0.02) * mu,
+    humid * sat(1.0 - dir.y * 2.2) * 0.35);
   // Env density along the first 150 m (same budget idea as Abyssal fog sampling).
   if (dist > 22.0) {
     let mid = F.camPos + dir * min(dist, 150.0) * 0.55;
     let ev = envVol(mid);
-    haze = mix(haze, haze * vec3<f32>(0.88, 1.02, 0.95) + F.amb.rgb * 0.08, ev.g * 0.45);
-    keep *= mix(1.0, 0.8, ev.g * sat((dist - 22.0) / 70.0));
+    haze = mix(haze, haze * vec3<f32>(0.86, 1.04, 0.94) + F.amb.rgb * 0.1 + F.sunCol * 0.04 * ev.b, ev.g * 0.48);
+    keep *= mix(1.0, 0.78, ev.g * sat((dist - 22.0) / 70.0));
   }
   // Distance contrast fade — keep detail in mid-ground; don't crush near shade.
-  keep *= mix(1.0, 0.9, smoothstep(70.0, 240.0, dist));
-  let desat = smoothstep(55.0, 200.0, dist) * 0.22;
+  keep *= mix(1.0, 0.88, smoothstep(70.0, 240.0, dist));
+  let desat = smoothstep(55.0, 200.0, dist) * 0.2;
   let c2 = mix(col, vec3<f32>(dot(col, vec3<f32>(0.3, 0.55, 0.15))), desat);
   return c2 * keep + haze * (1.0 - keep);
 }
@@ -717,10 +723,15 @@ fn shadowAt(p: vec3<f32>) -> f32 {
 // The ray march only sees the ground. This map is the trees, rocks and hills
 // rendered from the sun, so a trunk can actually fall across the sand.
 fn sunShadow(p: vec3<f32>) -> f32 {
-  let c = F.shadowVP * vec4<f32>(p + F.sunDir * 0.45, 1.0);
+  // Small receiver offset — large sunDir lifts detached shadows from trunks and fronds.
+  let sy = max(F.sunDir.y, 0.08);
+  let recvFar = F.sunDir * (0.035 / sy);
+  let c = F.shadowVP * vec4<f32>(p + recvFar, 1.0);
   let w = max(c.w, 1e-4);
-  let uv = clamp(vec2<f32>(c.x / w * 0.5 + 0.5, 0.5 - c.y / w * 0.5), vec2<f32>(0.001), vec2<f32>(0.999));
-  let z = clamp(c.z / w, 0.0, 1.0);
+  let raw = vec2<f32>(c.x / w * 0.5 + 0.5, 0.5 - c.y / w * 0.5);
+  let uv = clamp(raw, vec2<f32>(0.001), vec2<f32>(0.999));
+  // Depth bias in light space (~1–2 texels) instead of a metre-scale world offset.
+  let z = clamp(c.z / w - 0.0012, 0.0, 1.0);
   let t = 1.0 / 2048.0;
   var s = 0.0;
   s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(-t, -t), z);
@@ -728,24 +739,23 @@ fn sunShadow(p: vec3<f32>) -> f32 {
   s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(-t, t), z);
   s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(t, t), z);
   s += textureSampleCompare(shadowMap, shadowSamp, uv, z);
-  let raw = vec2<f32>(c.x / w * 0.5 + 0.5, 0.5 - c.y / w * 0.5);
-  let inside = smoothstep(0.0, 0.03, raw.x) * smoothstep(1.0, 0.97, raw.x)
-             * smoothstep(0.0, 0.03, raw.y) * smoothstep(1.0, 0.97, raw.y);
+  let inside = smoothstep(0.0, 0.04, raw.x) * smoothstep(1.0, 0.96, raw.x)
+             * smoothstep(0.0, 0.04, raw.y) * smoothstep(1.0, 0.96, raw.y);
   let far = mix(shadowAt(p), s * 0.2, inside);
-  // Close to the eye, the tight map. Nine taps over about ten centimetres, which is
-  // roughly how soft the sun leaves the edge of a frond's shadow.
-  let cn = F.nearVP * vec4<f32>(p + F.sunDir * 0.06, 1.0);
+  // Close to the eye, the tight map. Soft penumbra matches sunlight past a frond.
+  let recvNear = F.sunDir * (0.012 / sy);
+  let cn = F.nearVP * vec4<f32>(p + recvNear, 1.0);
   let un = vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5);
-  let zn = clamp(cn.z, 0.0, 1.0);
-  // Softer penumbra — hard frond cutouts read as game shadows.
-  let tn = 4.2 / 2048.0;
+  let zn = clamp(cn.z - 0.0008, 0.0, 1.0);
+  let tn = 3.6 / 2048.0;
   var sn = 0.0;
   for (var y = -1; y <= 1; y++) {
     for (var x = -1; x <= 1; x++) {
       sn += textureSampleCompare(shadowNear, shadowSamp, un + vec2<f32>(f32(x), f32(y)) * tn, zn);
     }
   }
-  let wn = 1.0 - smoothstep(0.75, 0.96, max(abs(cn.x), abs(cn.y)));
+  // Wider soft handoff so cascade edges do not jump when the eye moves.
+  let wn = 1.0 - smoothstep(0.62, 0.94, max(abs(cn.x), abs(cn.y)));
   return mix(far, sn / 9.0, wn);
 }
 
@@ -800,27 +810,30 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let wet = F.wx.y * step(0.05, world.y) * (1.0 - F.under);
   let rough = clamp(mix(0.72, 0.38, sat(gloss)) * mix(1.0, 0.82, leaf) * mix(1.0, 0.55, wet), 0.08, 0.95);
   let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.06, 0.08, 0.04), leaf);
-  let wrap = mix(0.0, 0.55, sat(leaf));
+  let wrap = mix(0.0, 0.58, sat(leaf));
   let sunDiff = sat((nl + wrap) / (1.0 + wrap));
   let keyTint = mix(vec3<f32>(1.0), vec3<f32>(1.14, 0.94, 0.74), gold * sunDiff);
   let sky = skyIrradiance(n) * mix(mix(0.38, 0.9, hemi), 0.85, leaf) * open;
   let ground = mix(vec3<f32>(0.4, 0.34, 0.24), vec3<f32>(0.22, 0.26, 0.14), roof) * F.amb.w * (1.0 - hemi) * open;
+  // Forest bounce: sunlit canopy bleeds warm green into the understorey (not flat ambient).
+  let canopyBleed = F.sunCol * keyTint * sh * forest * (0.08 + 0.14 * hemi)
+    * vec3<f32>(0.55, 0.72, 0.32) * ev.b * (0.45 + 0.55 * open);
   let bounce = mix(vec3<f32>(0.14, 0.18, 0.1), vec3<f32>(0.24, 0.2, 0.14), gold)
-    * F.amb.w * ev.b * (0.28 + 0.35 * (1.0 - hemi));
+    * F.amb.w * ev.b * (0.32 + 0.4 * (1.0 - hemi)) + canopyBleed;
   // Ambient independent of sun shadow — contrast from key only.
-  let amb = sky * mix(0.7, 0.88, gold) + ground * 0.42 + bounce;
-  var light = F.sunCol * keyTint * sunDiff * sh * 0.95 + amb;
+  let amb = sky * mix(0.72, 0.9, gold) + ground * 0.45 + bounce;
+  var light = F.sunCol * keyTint * sunDiff * sh * 0.98 + amb;
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
     let absorb = exp(W_KD * (-depth) / max(F.sunDir.y, 0.12));
     light *= absorb * (0.55 + 0.45 * sat(depth / 8.0 + 0.2));
     if (world.y < -0.04) {
       let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
-      light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.4 - 0.1 * k) * absorb;
+      light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.6 - 0.1 * k) * absorb;
     }
   }
   if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * hemi); }
-  let albShade = mix(albedo, vec3<f32>(dot(albedo, vec3<f32>(0.3, 0.55, 0.15))), 0.1 + (1.0 - sunDiff * sh) * 0.2);
+  let albShade = mix(albedo, vec3<f32>(dot(albedo, vec3<f32>(0.3, 0.55, 0.15))), 0.1 + (1.0 - sunDiff * sh) * 0.18);
   let albWet = albShade * mix(1.0, mix(0.58, 0.84, leaf), wet);
   let ndv = max(dot(n, V), 0.0);
   let Fs = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
@@ -828,9 +841,12 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let specAmt = mix(0.45, 0.18, leaf) * mix(1.0, 1.25, wet);
   col += F.sunCol * keyTint * microSpec(n, V, L, rough, F0) * sh * specAmt;
   col += skyLook(reflect(-V, n), 0.0) * Fs * mix(0.06, 0.16, gloss) * sat(n.y * 1.4 + 0.15) * open * 0.45;
+  // Backlit leaflet transmission — warm chloroplast tint, not neon chartreuse.
   let trans = max(-nl, 0.0) * leaf;
-  col += albWet * vec3<f32>(1.22, 1.42, 0.26) * F.sunCol * trans * sh * (0.5 + 0.28 * leaf);
-  col += albWet * F.sunCol * pow(sat(1.0 - abs(dot(n, V))), 3.4) * trans * sh * 0.1;
+  let leafTint = mix(vec3<f32>(0.72, 0.95, 0.42), vec3<f32>(0.95, 0.78, 0.35), gold * 0.45);
+  col += albWet * leafTint * F.sunCol * keyTint * trans * (0.55 + 0.35 * sh) * (0.55 + 0.3 * leaf);
+  // Rim when the sun sits behind the blade.
+  col += albWet * F.sunCol * keyTint * pow(sat(1.0 - abs(dot(n, V))), 3.2) * trans * 0.12;
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let shoreWet = 1.0 - sat(world.y / 0.7);
     col += F.sunCol * microSpec(n, V, L, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.28;
@@ -1128,7 +1144,8 @@ fn tipSway(at: vec2<f32>, h: f32) -> vec2<f32> {
     + a1 * vec2<f32>(sin(t * 0.55 + ph + hh * 0.09), cos(t * 0.42 + ph * 1.3 + hh * 0.07))
     + a2 * vec2<f32>(sin(t * 1.35 + ph * 2.8 + hh * 0.28), cos(t * 1.1 + ph * 2.0 + hh * 0.22));
 }
-// Shared plant lean only — used by shadow passes (cheaper, no tip flicker in maps).
+// Shared plant lean + low-frequency tip sway for shadow casters.
+// Matches the lit crown phase without leaflet flutter (that would flicker the maps).
 fn meshPlaceLean(in: MeshIn) -> vec3<f32> {
   var w = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
   if (in.c.w <= 0.0) { return w; }
@@ -1147,9 +1164,17 @@ fn meshPlaceLean(in: MeshIn) -> vec3<f32> {
   var along = L.x;
   var across = L.y;
   if (k == 1) { along *= 0.32; across *= 0.32; }
-  // Leaves take lean sway only — no per-vertex flutter in shadow maps.
   let sw = in.c.w * select(0.55, 1.0, k == 2 || k == 3);
-  return w + plantShift(vec2<f32>(along, across), sw);
+  var out = w + plantShift(vec2<f32>(along, across), sw);
+  // Same tipSway as the lit pass (damped) — keeps frond shadows attached while crowns move.
+  if (k == 2 || k == 3 || (k == 0 && in.c.w > 0.05)) {
+    let tipK = select(sat(in.uv.y) * sat(in.uv.y), 0.65, k != 2);
+    let h = min(max(out.y - in.i0.y, 0.0), 4.5) * (0.35 + 0.65 * sat(in.c.w * 6.0));
+    let tw = tipSway(in.i0.xz + vec2<f32>(L.w * 3.1, L.w * 1.7), h) * 0.72 * tipK;
+    out.x += tw.x; out.z += tw.y;
+    out.y -= (abs(tw.x) + abs(tw.y)) * 0.1;
+  }
+  return out;
 }
 // How one vertex of a plant gives to the wind. Leaflet verts of one blade must share phase.
 fn meshPlace(in: MeshIn) -> vec3<f32> {
@@ -2096,14 +2121,22 @@ const DROP_SPRAY: u32 = 60000u;
 // from distant cloud. Every step asks the shadow maps whether the sun reaches it, so light
 // comes through gaps in the fronds as shafts and stops where a trunk or a hill is in the way.
 fn sunVis(p: vec3<f32>) -> f32 {
-  let cn = F.nearVP * vec4<f32>(p, 1.0);
-  if (max(abs(cn.x), abs(cn.y)) < 0.97) {
-    return textureSampleCompareLevel(shadowNear, shadowSamp, vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5), clamp(cn.z, 0.0, 1.0));
+  // Tiny offset toward the sun so volumetric samples sit just above caster surfaces.
+  let q = p + F.sunDir * 0.04;
+  let cn = F.nearVP * vec4<f32>(q, 1.0);
+  let nearIn = max(abs(cn.x), abs(cn.y));
+  var nearLit = 1.0;
+  if (nearIn < 0.98) {
+    nearLit = textureSampleCompareLevel(shadowNear, shadowSamp, vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5), clamp(cn.z - 0.0006, 0.0, 1.0));
   }
-  let c = F.shadowVP * vec4<f32>(p, 1.0);
+  let c = F.shadowVP * vec4<f32>(q, 1.0);
   let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
-  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { return 1.0; }
-  return textureSampleCompareLevel(shadowMap, shadowSamp, uv, clamp(c.z, 0.0, 1.0));
+  var farLit = 1.0;
+  if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
+    farLit = textureSampleCompareLevel(shadowMap, shadowSamp, uv, clamp(c.z - 0.001, 0.0, 1.0));
+  }
+  let wn = 1.0 - smoothstep(0.7, 0.96, nearIn);
+  return mix(farLit, nearLit, wn);
 }
 // Metres of a path that count, through a layer thinning upward as exp(-h/H), for a piece of
 // the path seg long that runs between heights ya and yb above the ground. Worked out rather
@@ -2169,43 +2202,57 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
     return vec4<f32>(L, 1.0);
   }
   if (rd.y < -1e-4) { far = min(far, F.camPos.y / -rd.y); }
-  // God rays from cloud-shadow boundaries — not uniform radial streaks.
+  // Depth-aware crepuscular rays: sunVis through foliage + cloud shade, not painted streaks.
   let dayK = smoothstep(0.0, 0.1, F.sunTrue.y);
   let gold = sat(F.day.w);
-  let ph = 0.2 + 1.35 * pow(0.5 + 0.5 * mu, 5.0) + 8.0 * pow(0.5 + 0.5 * mu, 48.0);
-  let amb = F.amb.rgb * mix(0.85, 0.7, gold);
+  let ph = 0.18 + 1.2 * pow(0.5 + 0.5 * mu, 4.5) + 10.0 * pow(0.5 + 0.5 * mu, 56.0);
+  let amb = F.amb.rgb * mix(0.88, 0.72, gold);
   let cloud0 = cloudShade(F.camPos.xz, F.camPos.y);
-  let nearSun = pow(sat(mu * 0.5 + 0.5), 10.0);
-  let samples = select(8, 12, F.cloudOct >= 3.5);
-  let nearEnd = min(far, 48.0);
+  let nearSun = pow(sat(mu * 0.5 + 0.5), 8.0);
+  let towardSun = pow(sat(mu), 3.2);
+  let humid = sat(F.wx.w);
+  let samples = select(10, 14, F.cloudOct >= 3.5);
+  let nearEnd = min(far, 56.0);
   let dn = nearEnd / f32(samples);
-  for (var i = 0; i < 12; i++) {
+  var prevLit = sunVis(F.camPos + rd * (dn * 0.15));
+  for (var i = 0; i < 14; i++) {
     if (i >= samples) { break; }
-    let p = F.camPos + rd * (dn * (f32(i) + jit));
-    let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * dn * f32(i), F.camPos.y + rd.y * dn * f32(i + 1), dn));
-    let lit = (sunVis(p - rd * (dn * 0.333)) + sunVis(p) + sunVis(p + rd * (dn * 0.333))) / 3.0;
+    let t = dn * (f32(i) + jit);
+    let p = F.camPos + rd * t;
+    let fld = sampleField(p.xz);
+    let a = 1.0 - exp(-airTau(p, fld, F.camPos.y + rd.y * dn * f32(i), F.camPos.y + rd.y * dn * f32(i + 1), dn));
+    let litA = sunVis(p - rd * (dn * 0.28));
+    let litB = sunVis(p);
+    let litC = sunVis(p + rd * (dn * 0.28));
+    let lit = (litA + litB + litC) * 0.333;
+    // Shafts where sunlight reappears after occlusion — gaps in palm crowns and ridges.
+    let edge = sat(lit - prevLit) * 1.8 + sat(lit * lit - 0.12) * 0.55;
+    prevLit = lit;
     let cP = cloudShade(p.xz, p.y);
-    // Beams where the ray crosses a lit/shadow boundary in the cloud field.
-    let gap = sat((cP - cloud0) * 4.8) + sat((cloud0 - cP) * 2.8) * 0.45;
-    let humid = sat(F.wx.w);
-    let shaft = lit * (cP * 0.35 + gap * 2.35) * (0.3 + 1.7 * nearSun) * (0.55 + 0.9 * humid);
-    let sunShaft = F.sunCol * mix(vec3<f32>(1.0), vec3<f32>(1.28, 0.92, 0.62), gold) * shaft * ph * dayK;
+    let gap = sat((cP - cloud0) * 4.2) + sat((cloud0 - cP) * 2.4) * 0.4;
+    let wood = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(p.xz));
+    // Dense under canopy: stronger beams when looking toward the sun through foliage.
+    let canopy = wood * (0.55 + 1.45 * towardSun) * (0.35 + 0.65 * nearSun);
+    let shaft = lit * (0.22 + edge * 1.55 + gap * 1.1 + cP * 0.2 + canopy * edge)
+      * (0.4 + 1.35 * nearSun) * (0.5 + 0.85 * humid + 0.35 * wood);
+    let sunShaft = F.sunCol * mix(vec3<f32>(1.0), vec3<f32>(1.32, 0.92, 0.58), gold) * shaft * ph * dayK;
     L += T * a * (sunShaft + amb);
     T *= 1.0 - a;
   }
-  if (far > 48.0) {
-    let span = min(far, 1500.0) - 48.0;
-    let farN = select(5, 8, F.cloudOct >= 3.5);
-    for (var i = 0; i < 8; i++) {
+  if (far > 56.0) {
+    let span = min(far, 1500.0) - 56.0;
+    let farN = select(6, 9, F.cloudOct >= 3.5);
+    for (var i = 0; i < 9; i++) {
       if (i >= farN) { break; }
-      let t0 = 48.0 + span * f32(i * i) / 64.0;
-      let t1 = 48.0 + span * f32((i + 1) * (i + 1)) / 64.0;
+      let t0 = 56.0 + span * f32(i * i) / 81.0;
+      let t1 = 56.0 + span * f32((i + 1) * (i + 1)) / 81.0;
       let p = F.camPos + rd * mix(t0, t1, jit);
       let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * t0, F.camPos.y + rd.y * t1, t1 - t0));
+      let lit = sunVis(p);
       let cP = cloudShade(p.xz, p.y);
-      let gap = sat(abs(cP - cloud0) * 3.2);
-      let shaft = (cP * 0.35 + gap * 1.6) * (0.4 + 1.2 * nearSun);
-      L += T * a * (F.sunCol * shaft * ph * dayK + amb);
+      let gap = sat(abs(cP - cloud0) * 3.0);
+      let shaft = lit * (cP * 0.3 + gap * 1.35 + lit * 0.25) * (0.35 + 1.15 * nearSun);
+      L += T * a * (F.sunCol * mix(vec3<f32>(1.0), vec3<f32>(1.28, 0.92, 0.62), gold) * shaft * ph * dayK + amb);
       T *= 1.0 - a;
     }
   }
