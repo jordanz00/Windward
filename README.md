@@ -141,6 +141,14 @@ Measured on a software rasterizer (lavapipe, four cores, no GPU) at High detail,
 
 Memory is the sum of what the page asks the GPU for, not what a driver uses. Time on the GPU per frame, and frame rate, cannot be measured without a GPU and have not been.
 
+## Performance engineering
+
+Optimizations target wasted work only. Native resolution, internal scale, plant density, plant reach, cloud march quality, shadow map size, reflections, and water detail stay at the chosen preset. The HUD (`H`) and `B` benchmark report CPU ms, GPU ms (timestamp queries when available), and whether the frame looks CPU- or GPU-bound — they never lower quality to chase FPS.
+
+Abyssal Garden–inspired pieces in use: cell-sorted plant cull, camera-gated instance rebuilds (wind stays on the GPU), async GPU timestamps, and a repeatable Catmull-Rom fly path (`B` / `G`). Soft cloud occlusion on land/air uses the same coverage thresholds as the sky bake, without re-evaluating fine billow noise that the soft shade factor cannot show. Far plant vertices use mean wind instead of gust noise. Capillary / chop / FD water normals run only where their weights are visible.
+
+Run `B` on a real GPU before and after changes and compare **GPU milliseconds**, not FPS estimates alone. This environment’s software rasterizer cannot produce honest GPU timings.
+
 ## License
 
 [MIT](LICENSE). The idea of a single-file procedural WebGPU world, and the shape of the controls, comes from Abyssal Garden by Maksymilian Dendura, which is also MIT. The coast, the shaders, and the page are written for this project.

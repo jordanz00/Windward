@@ -74,7 +74,8 @@ const WW_BENCH = (() => {
       `cull    ${r.cullMs ? fmt(r.cullMs) : 'n/a'}`,
       `GPU     ${r.gpuMs ? fmt(r.gpuMs) : 'timestamp-query unavailable'}`,
       `bound   ${r.bottleneck}`,
-      `draws   ${r.draws}  inst ${r.instances}  passes ${r.passes}`
+      `draws   ${r.draws}  inst ${r.instances}  passes ${r.passes}`,
+      `note    quality locked — no resolution/density cuts; compare GPU ms not FPS alone`
     ];
     const text = lines.join('\n');
     console.log('BENCH ' + JSON.stringify(r));

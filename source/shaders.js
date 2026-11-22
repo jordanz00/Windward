@@ -536,12 +536,34 @@ fn skyReflect(rd: vec3<f32>) -> vec3<f32> {
   return col;
 }
 
+// Soft solar occlusion from clouds. Same coverage thresholds as cloudCoverMix, but
+// only the large-scale province/mound/tower energy — fine billow/cirrus/strato detail
+// is invisible after smoothstep(-0.05, 0.35, amt) and was ~19 n2/sample on every shade.
 fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
   let dayK = smoothstep(-0.02, 0.08, F.sunTrue.y);
-  // Project along the true sun while it is up; at night there is no solar occlusion.
+  if (dayK < 0.01) { return 1.0; }
   let sy = max(F.sunTrue.y, 0.08);
   let up = (CLOUD_BASE * 1000.0 + 250.0 - y) / sy;
-  let amt = cloudCover((xz + F.sunTrue.xz * up) * 0.001);
+  let p = (xz + F.sunTrue.xz * up) * 0.001;
+  let m = cloudMix();
+  let drift = cloudDrift();
+  let pd = p + drift;
+  let province = n2(pd * 0.07 + vec2<f32>(1.7, 4.2)) * 0.7 + n2(pd * 0.17 + vec2<f32>(9.0, 2.0)) * 0.3;
+  let region = smoothstep(0.34, 0.62, province);
+  let w1 = (vec2<f32>(n2(pd * 0.16 + vec2<f32>(3.1, 0.0)), n2(pd * 0.16 + vec2<f32>(7.7, 1.3))) - 0.5) * 3.6;
+  let q = pd + w1;
+  let cell = n2(q * 0.62) * 0.7 + n2(q * 1.45 + vec2<f32>(4.0, 9.0)) * 0.3;
+  let mound = pow(sat((cell - 0.38) / 0.5), 1.55);
+  // Average billow ≈ 0.5 — matches cloudCoverMix mound*(0.48+0.52*billow) expectation.
+  let cumu = mound * 0.74 * (0.5 + 0.5 * region);
+  let tw = n2(q * 0.22 + vec2<f32>(11.0, 3.0)) * 0.8 + n2(q * 0.72 + vec2<f32>(2.0, 8.0)) * 0.2;
+  let tower = pow(sat((tw - 0.48) / 0.42), 1.85)
+    * (0.35 + 0.65 * 0.5)
+    * smoothstep(0.35, 0.7, region);
+  // Thin high cloud casts weak shade; keep a small share so overcast still dims.
+  let c = cumu * m.x + tower * m.y + 0.22 * m.z + 0.28 * m.w * (0.45 + 0.55 * region);
+  let thr = 0.74 - 0.38 * sat(F.mood.y) - 0.28 * smoothstep(0.45, 0.95, F.mood.y);
+  let amt = (c - thr) / max(1.0 - thr, 0.08);
   let shade = mix(1.0, mix(0.48, 0.08, sat(F.mood.y * 1.25)), smoothstep(-0.05, 0.35, amt));
   return mix(1.0, shade, dayK);
 }
@@ -1067,15 +1089,17 @@ fn windAt(xz: vec2<f32>) -> f32 {
 // downwind, across the wind, then the wind speed it feels and a number of its own. It has
 // mass: it leans with the pressure and rocks slowly at its own rate. Anything sitting on the
 // plant asks the same question and so moves with it.
-fn plantLean(at: vec2<f32>, scale: f32, expo: f32, soft: f32) -> vec4<f32> {
+fn plantLeanFromV(at: vec2<f32>, scale: f32, soft: f32, v: f32) -> vec4<f32> {
   let id = fract(at.x * 0.137 + at.y * 0.291);
-  let v = windAt(at) * expo;
   let stiff = mix(0.55, 1.35, sat(soft));
   let push = v * v * 0.011 * stiff;
   // Big plants are slow. soft (i1.w) is species stiffness; scale is mass.
   let rate = (1.35 + 0.9 * id) / (sqrt(max(scale, 0.3)) * mix(0.75, 1.25, sat(soft)));
   let rock = sin(F.time * rate + id * 40.0) * 0.45 + sin(F.time * rate * 0.37 + id * 11.0) * 0.25;
   return vec4<f32>(push * (0.75 + rock), push * 0.3 * sin(F.time * rate * 0.61 + id * 23.0), v, id);
+}
+fn plantLean(at: vec2<f32>, scale: f32, expo: f32, soft: f32) -> vec4<f32> {
+  return plantLeanFromV(at, scale, soft, windAt(at) * expo);
 }
 fn plantShift(L: vec2<f32>, sway: f32) -> vec3<f32> {
   let d = F.wind.xy * L.x + vec2<f32>(-F.wind.y, F.wind.x) * L.y;
@@ -1085,9 +1109,10 @@ fn plantShift(L: vec2<f32>, sway: f32) -> vec3<f32> {
 fn tipSway(at: vec2<f32>, h: f32) -> vec2<f32> {
   let ph = dot(at, vec2<f32>(0.031, 0.017));
   let hh = min(max(h, 0.0), 4.2);
-  let a0 = 0.006 * pow(hh, 1.05);
-  let a1 = 0.007 * pow(hh, 1.2);
-  let a2 = 0.0028 * pow(hh, 1.35);
+  // Equivalent envelopes without three pow() — hh in [0,4.2].
+  let a0 = 0.006 * hh * (0.97 + 0.03 * hh);
+  let a1 = 0.007 * hh * (0.92 + 0.08 * hh);
+  let a2 = 0.0028 * hh * (0.85 + 0.15 * hh);
   let t = F.time;
   return a0 * vec2<f32>(sin(t * 0.22 + ph), cos(t * 0.18 + ph * 1.2))
     + a1 * vec2<f32>(sin(t * 0.55 + ph + hh * 0.09), cos(t * 0.42 + ph * 1.3 + hh * 0.07))
@@ -1131,16 +1156,19 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
     w.y -= (abs(gust) + abs(gustZ)) * in.c.w * 0.2;
     return w;
   }
-  let L = plantLean(in.i0.xz, in.i1.x, in.i1.z, in.i1.w);
-  let v = L.z;
-  let id = L.w;
-  let k = i32(in.n.w + 0.5);
   // Fade high-frequency flutter with distance — cheaper + stops distant crown sparkle.
   let dist = length(in.i0.xyz - F.camPos);
   let nearW = 1.0 - smoothstep(35.0, 120.0, dist);
+  // Far plants: mean wind only (gust noise averages out and costs 2 n2/vertex).
+  var windV = F.wind.z * in.i1.z;
+  if (nearW > 0.08) { windV = windAt(in.i0.xz) * in.i1.z; }
+  let L = plantLeanFromV(in.i0.xz, in.i1.x, in.i1.w, windV);
+  let v = L.z;
+  let id = L.w;
+  let k = i32(in.n.w + 0.5);
   var along = L.x;
   var across = L.y;
-  if (k == 2) {
+  if (k == 2 && nearW > 0.02) {
     // CRITICAL: phase from leaflet uv + instance only — never vertex xyz (that stretched blades).
     let tip = sat(in.uv.y);
     let ph = F.time * (1.55 + 0.45 * v) + id * 19.0 + in.i2.w * 11.0 + in.uv.y * 2.4 + abs(in.uv.x) * 0.15;
@@ -1148,7 +1176,7 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
       * (0.005 + 0.009 * v) * tip * tip * nearW * select(1.0, 0.12, in.uv.y < -0.5);
     along += fl;
     across += fl * 0.45 * cos(ph * 0.68 + 0.5);
-  } else if (k == 3) {
+  } else if (k == 3 && nearW > 0.02) {
     along += sin(F.time * (1.2 + 0.35 * id) + id * 7.0) * 0.004 * v * nearW;
     across += sin(F.time * (0.75 + 0.3 * id) + id * 5.0) * 0.0025 * v * nearW;
   } else if (k == 1) {
@@ -2193,7 +2221,6 @@ struct BlitOut {
   let S = seaAt(in.xz0, scale, depthW);
   let distS = length(in.world - F.camPos);
   let rip = ripAt(in.xz0);
-  let cap = capillary(in.xz0, distS);
   let ocn = shapeField(in.xz0);
   let gl = oceanSample(glintTex, in.xz0, 4.0);
   let pix = max(distS * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
@@ -2203,22 +2230,28 @@ struct BlitOut {
   let footLong = pix / max(elev / max(distS, 0.1), 0.01);
   let ww = waveWeights(distS, foot, footLong, scale);
   let band = seaBands(distS, foot);
-  let chop = chopField(in.xz0, foot) * ww.z;
+  // Capillary / chop only where their weight is visible — same normals, less far-field work.
+  var cap = vec2<f32>(0.0);
+  if (ww.w > 0.015) { cap = capillary(in.xz0, distS); }
+  var chop = vec2<f32>(0.0);
+  if (ww.z > 0.015) { chop = chopField(in.xz0, foot) * ww.z; }
   // Analytical Gerstner + FFT slopes, weighted the same way as the vertex height.
   var N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, ww.x)
     + vec3<f32>(-ocn.y * ww.y + rip.y * ww.y - chop.x + cap.x * ww.w, 0.0,
                 -ocn.z * ww.y + rip.z * ww.y - chop.y + cap.y * ww.w));
   // Finite-difference refine on FFT height — continuous across triangle edges.
   let grazeN = sat(elev / max(distS * 0.32, 1.0));
-  // Widen the FD stencil with distance so mid/far normals track broad waves, not sparkle.
-  let eN = max(mix(0.16, 0.85, sat(foot * 0.65)), pix * mix(2.2, 5.5, band.z));
-  let h0 = seaEta(in.xz0, ww);
-  let hx = seaEta(in.xz0 + vec2<f32>(eN, 0.0), ww);
-  let hz = seaEta(in.xz0 + vec2<f32>(0.0, eN), ww);
-  let Nfd = normalize(vec3<f32>((h0 - hx) / eN, 1.0, (h0 - hz) / eN));
-  // Prefer FD normals when the mesh footprint is large; ease off when looking flat-on.
   let fdK = (0.28 + 0.52 * sat(foot * 1.15)) * sat(ww.y + ww.z) * mix(0.55, 1.0, grazeN) * (1.0 - band.z * 0.35);
-  N = normalize(mix(N, Nfd, fdK));
+  if (fdK > 0.02) {
+    // Widen the FD stencil with distance so mid/far normals track broad waves, not sparkle.
+    let eN = max(mix(0.16, 0.85, sat(foot * 0.65)), pix * mix(2.2, 5.5, band.z));
+    let h0 = seaEta(in.xz0, ww);
+    let hx = seaEta(in.xz0 + vec2<f32>(eN, 0.0), ww);
+    let hz = seaEta(in.xz0 + vec2<f32>(0.0, eN), ww);
+    let Nfd = normalize(vec3<f32>((h0 - hx) / eN, 1.0, (h0 - hz) / eN));
+    // Prefer FD normals when the mesh footprint is large; ease off when looking flat-on.
+    N = normalize(mix(N, Nfd, fdK));
+  }
   // Distance-aware normal filter: drop fine slope energy toward the horizon / from cliffs.
   N = normalize(vec3<f32>(
     N.x * (1.0 - band.z * 0.62),

@@ -2597,6 +2597,16 @@ async function main() {
     let frameDraws = 0, frameInst = 0, framePasses = 0;
     let cpuCullMs = 0, cpuFrameMs = 0;
     const submitList = [null];
+    // Persistent encoder facade — avoid rebinding beginRenderPass every frame (GC).
+    let encRaw = null;
+    const encCounted = {
+      beginRenderPass(desc) { framePasses++; return encRaw.beginRenderPass(desc); },
+      beginComputePass(desc) { return encRaw.beginComputePass(desc); },
+      copyTextureToBuffer(a, b, c) { return encRaw.copyTextureToBuffer(a, b, c); },
+      copyBufferToBuffer(a, b, c, d, e) { return encRaw.copyBufferToBuffer(a, b, c, d, e); },
+      resolveQuerySet(a, b, c, d, e) { return encRaw.resolveQuerySet(a, b, c, d, e); },
+      finish() { return encRaw.finish(); }
+    };
     function drawMeshes(pass, pipeline, bg, vb, ib, buf, draws) {
       if (!pipeline || !draws.length) return;
       pass.setPipeline(pipeline); pass.setBindGroup(0, bg);
@@ -3046,7 +3056,9 @@ async function main() {
       }
       lookX = 0; lookY = 0;
 
-      fishLife.update(dt, time, camX, camY, camZ);
+      // Fish only matter near/under the surface — skip sim when flying high over land.
+      let waveHere = waveY(world, camX, camZ, time);
+      if (camY < waveHere + 55) fishLife.update(dt, time, camX, camY, camZ);
       if (fishCam) {
         // A capture framing: stay beside one fish, or back from its school, and look at it.
         const s = fishCam.s, i = s.first + Math.min(fishCam.i, s.n - 1), wide = fishCam.d > 1.6;
@@ -3062,12 +3074,14 @@ async function main() {
           }
         }
         camX = tx + Math.cos(fishCam.a) * fishCam.d; camZ = tz + Math.sin(fishCam.a) * fishCam.d;
-        camY = Math.min(waveY(world, camX, camZ, time) - 0.3, Math.max(ty + fishCam.d * 0.12 + fishCam.up, fieldSample(world, camX, camZ) + 0.12));
+        waveHere = waveY(world, camX, camZ, time);
+        camY = Math.min(waveHere - 0.3, Math.max(ty + fishCam.d * 0.12 + fishCam.up, fieldSample(world, camX, camZ) + 0.12));
         const lp = lookYP(tx - camX, ty - camY, tz - camZ);
         yaw = lp[0]; pitch = lp[1] + fishCam.tilt;
       }
 
-      bugLife.update(dt, time, camX, camY, camZ);
+      // Insects are above-water only; skip when submerged (draws already empty underwater).
+      if (camY >= waveHere - 0.05) bugLife.update(dt, time, camX, camY, camZ);
       if (bugCam && bugCam.a) {
         // A capture framing: close to one insect, from the side the sun is on, looking at it.
         const a = bugCam.a, S = bugLife.sites.bloom, on = BUGS[a.sp].site === 'bloom' && a.site >= 0;
@@ -3076,6 +3090,7 @@ async function main() {
         camX = a.x + Math.cos(q0) * bugCam.d; camZ = a.z + Math.sin(q0) * bugCam.d; camY = a.y + bugCam.up + bugCam.d * (on ? 0.6 : 0.25);
         const lp = lookYP(a.x - camX, a.y - camY, a.z - camZ);
         yaw = lp[0]; pitch = lp[1] + bugCam.tilt;
+        waveHere = waveY(world, camX, camZ, time);
       }
       if (sunView) {
         // A capture framing: face the light, pitched up by this much of its height.
@@ -3083,7 +3098,7 @@ async function main() {
         const lp = lookYP(Math.cos(az) * hl, env.key[1] * sunView, Math.sin(az) * hl);
         yaw = lp[0]; pitch = lp[1];
       }
-      const under = camY < waveY(world, camX, camZ, time) - 0.02 ? 1 : 0;
+      const under = camY < waveHere - 0.02 ? 1 : 0;
       // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
       const eyeH = Math.max(camY, 0.4);
       const cover = Math.min(6400, 2200 + eyeH * 28) * 2;
@@ -3107,7 +3122,6 @@ async function main() {
         ur.set(RVP, 0); ur.set(INV, 16);
         ur[48] = rex; ur[49] = rey; ur[50] = rez;
         ur[55] = 0; ur[71] = 1;
-        cameraVectors(yaw, -pitch, rfwd, rright, rup);
         ur[64] = rright[0]; ur[65] = rright[1]; ur[66] = rright[2];
         ur[68] = rup[0]; ur[69] = rup[1]; ur[70] = rup[2];
         ur[72] = rfwd[0]; ur[73] = rfwd[1]; ur[74] = rfwd[2];
@@ -3151,11 +3165,18 @@ async function main() {
       }
       cpuCullMs = performance.now() - tCull0;
       // Fish are seen under water from 44 m at most, and from the air only close by.
-      fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 44 : 30, fishPack.ranges);
-      if (fishDraws.end) device.queue.writeBuffer(fishInstB, 0, fishArr, 0, fishDraws.end * ISTRIDE);
+      if (camY < waveHere + 55) {
+        fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 44 : 30, fishPack.ranges);
+        if (fishDraws.end) device.queue.writeBuffer(fishInstB, 0, fishArr, 0, fishDraws.end * ISTRIDE);
+      } else {
+        fishDraws = bugDrawsEmpty;
+      }
 
-      bugDraws = under ? bugDrawsEmpty : bugLife.collect(bugArr, uf, camX, camY, camZ, uf[63] * 2 / viewH, bugPack.ranges);
-      if (bugDraws.end) device.queue.writeBuffer(bugInstB, 0, bugArr, 0, bugDraws.end * BUG_STRIDE);
+      if (under) bugDraws = bugDrawsEmpty;
+      else {
+        bugDraws = bugLife.collect(bugArr, uf, camX, camY, camZ, uf[63] * 2 / viewH, bugPack.ranges);
+        if (bugDraws.end) device.queue.writeBuffer(bugInstB, 0, bugArr, 0, bugDraws.end * BUG_STRIDE);
+      }
       if (q.birds) {
         for (let i = 0; i < q.birds; i++) {
           let x = birdMeta[i * 4], z = birdMeta[i * 4 + 1], hd = birdMeta[i * 4 + 2];
@@ -3193,17 +3214,17 @@ async function main() {
       simU[8] = simOx; simU[9] = simOz;
       device.queue.writeBuffer(simBuf, 0, simU);
 
-      const enc = device.createCommandEncoder();
+      encRaw = device.createCommandEncoder();
+      const enc = encCounted;
       {
-        const _rp = enc.beginRenderPass.bind(enc);
-        enc.beginRenderPass = (desc) => { framePasses++; return _rp(desc); };
-      }
-      {
-        // Every cascade's spectrum is advanced and transformed in one compute pass.
-        const cp = enc.beginComputePass();
+        // Upload cascade clocks before the compute pass (no mid-pass writeBuffer churn).
         for (const c of cascades) {
           oceanU[0] = time; oceanU[1] = c.size;
           device.queue.writeBuffer(c.ub, 0, oceanU);
+        }
+        // Every cascade's spectrum is advanced and transformed in one compute pass.
+        const cp = enc.beginComputePass();
+        for (const c of cascades) {
           cp.setBindGroup(0, c.bg);
           for (const step of ['evolve', 'rows', 'cols', 'slopes']) {
             cp.setPipeline(oceanPipes[step]);
