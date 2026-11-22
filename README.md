@@ -149,6 +149,14 @@ Abyssal Garden–inspired pieces in use: cell-sorted plant cull, camera-gated in
 
 Run `B` on a real GPU before and after changes and compare **GPU milliseconds**, not FPS estimates alone. This environment’s software rasterizer cannot produce honest GPU timings.
 
+## Graphics stability
+
+Rendering correctness is locked against three known failure modes:
+
+1. **Aerial crowns** — leaf-mass cutouts use rest-pose sampling, top-down softer thresholds, screen dither, and far-gap darkening instead of discard; leaflets get sub-pixel depth separation; altitude delays LOD coarsening.
+2. **Altitude-stable ocean** — distance/footprint filtering kills aliasing without flattening swell from cliffs or overhead; vertex near-plane push stops waterline mesh holes.
+3. **Waterline crossing** — hysteresis on local `waveY` (enter ~10 cm below, leave ~8 cm above), soft immersion for shaders, reflections disabled while submerged, tighter refraction sample rules near the eye.
+
 ## License
 
 [MIT](LICENSE). The idea of a single-file procedural WebGPU world, and the shape of the controls, comes from Abyssal Garden by Maksymilian Dendura, which is also MIT. The coast, the shaders, and the page are written for this project.

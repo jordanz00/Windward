@@ -1086,7 +1086,9 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
             if (ok) {
               let lod = coarser;
               const bias = Math.min(28, r * 1.8);
-              while (lod < p.cuts.length && dist > p.cuts[lod] + bias) lod++;
+              // From altitude, keep finer crowns a little longer — LOD pops read as broken tops.
+              const airBias = ey > 35 ? Math.min(55, (ey - 35) * 0.45) : 0;
+              while (lod < p.cuts.length && dist > p.cuts[lod] + bias + airBias) lod++;
               slot = this.slot0[this.kind[i]] + Math.min(lod, p.lods.length - 1);
               counts[slot]++;
             }
@@ -2591,6 +2593,8 @@ async function main() {
     let nearShadowUnder = null;
     const shadowSun = [0, 0, 0];
     const nearShadowScratch = [0, 0, 0, 0, 0, 0];
+    // Waterline latch: hysteresis on local wave height so under/above does not flicker.
+    let underLatch = false;
     // AG idea: vegetation wind is GPU-side — only rebuild instance lists when the view cull changes.
     const cullKey = [1e9, 1e9, 1e9, 0, 0, 0, -1, -1, 0];
     let lastInstEnd = 0, cullReady = false;
@@ -3098,7 +3102,15 @@ async function main() {
         const lp = lookYP(Math.cos(az) * hl, env.key[1] * sunView, Math.sin(az) * hl);
         yaw = lp[0]; pitch = lp[1];
       }
-      const under = camY < waveHere - 0.02 ? 1 : 0;
+      // Enter under ~10 cm below the local surface; leave ~8 cm above — kills waterline flicker.
+      const waterGap = waveHere - camY;
+      if (!underLatch && waterGap > 0.1) underLatch = true;
+      else if (underLatch && waterGap < -0.08) underLatch = false;
+      const under = underLatch ? 1 : 0;
+      // Soft immersion for shaders, but keep each latch side clear of the 0.5 branch edge.
+      let immersion = Math.min(1, Math.max(0, (waterGap + 0.14) / 0.5));
+      if (under) immersion = Math.max(0.58, immersion);
+      else immersion = Math.min(0.42, immersion);
       // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
       const eyeH = Math.max(camY, 0.4);
       const cover = Math.min(6400, 2200 + eyeH * 28) * 2;
@@ -3106,8 +3118,10 @@ async function main() {
       const ox = Math.floor(camX / snap) * snap - cover * 0.5;
       const oz = Math.floor(camZ / snap) * snap - cover * 0.5;
 
-      fillCam(uf, camX, camY, camZ, yaw, pitch, 0, under);
+      fillCam(uf, camX, camY, camZ, yaw, pitch, 0, immersion);
       uf[80] = ox; uf[81] = oz; uf[82] = cover; uf[83] = fieldDamp(world, camX, camZ);
+      // Mirror pass only when above water — under uses Snell/window path, not planar reflections.
+      if (under) uf[86] = 0;
 
       // Reflected camera, for the water mirror — skipped entirely when reflections are off.
       if (uf[86] > 0.5) {

@@ -1199,6 +1199,11 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   o.rest = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
   o.world = meshPlace(in);
   o.nrm = spinY(normalize(in.n.xyz / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
+  // Sub-pixel depth separation for overlapping leaflets/crowns — kills aerial z-fight sparkle.
+  if (in.n.w > 1.5 && in.n.w < 3.5) {
+    let id = fract(in.i0.x * 0.137 + in.i0.z * 0.291 + in.i2.w * 3.1 + in.uv.x * 0.07);
+    o.world += o.nrm * (id * 0.014 + 0.002);
+  }
   // A tree's own tint is in its leaves. Its bark stays close to bark.
   // i2.w biases leaf age: young yellow-green ↔ mature deep green ↔ older brown edge.
   var tint = in.i2.rgb;
@@ -1267,6 +1272,8 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     var pq = in.rest.xz;
     if (an.x > an.y && an.x > an.z) { pq = in.rest.zy; } else if (an.z > an.y) { pq = in.rest.xy; }
     let near = 1.0 - smoothstep(30.0, 85.0, dist);
+    // Looking down onto a crown: hard alpha-discard sparkles from overlapping leaf cells.
+    let topDown = sat(-Vv.y * 0.9 + 0.05) * sat(n.y * 0.5 + 0.5);
     // Clumps a metre across at any distance; single leaves once they are big enough to see.
     let B = leafCells(pq * 0.85 + 17.0);
     let mB = smoothstep(0.56, 0.38, B.x);
@@ -1276,7 +1283,7 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     if (near > 0.01) {
       let A = leafCells(pq * 3.3);
       let mA = smoothstep(0.64, 0.5, A.x);
-      cover = mix(cover, max(mA, mB * 0.35), near);
+      cover = mix(cover, max(mA, mB * 0.35), near * (1.0 - topDown * 0.55));
       tone = mix(tone, mix(0.3, 0.72 + 0.55 * A.w, mA) * (0.72 + 0.5 * B.w), near);
       tilt = mix(tilt, (vec3<f32>(A.z, A.y + 0.5, A.w) - 0.5) * 1.5, near * mA);
       // A leaf is paler along its midrib, and each is its own green, some toward yellow.
@@ -1285,10 +1292,25 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
       // Only a leaf turned up to the sky shines with it; from underneath a crown is matt.
       gloss = 0.14 * near * mA * sat(n.y * 2.0);
     }
-    if (cover < rim * rim * 1.25 - 0.12 + 0.35 * smoothstep(0.6, 0.85, n2(pq * 0.37 + 5.0))) { discard; }
+    // Stable coverage test: lower hole rate overhead; screen dither instead of hard edge sparkle.
+    let holeN = n2(pq * 0.37 + 5.0);
+    let thresh = rim * rim * mix(1.25, 0.52, topDown) - mix(0.12, 0.42, topDown)
+      + 0.35 * (1.0 - topDown * 0.85) * smoothstep(0.6, 0.85, holeN);
+    let farSoft = smoothstep(70.0, 160.0, dist);
+    let ign = fract(52.9829189 * fract(dot(in.clip.xy, vec2<f32>(0.06711056, 0.00583715))));
+    let edge = thresh + (ign - 0.5) * mix(0.1, 0.02, farSoft);
+    if (cover < edge) {
+      // Far crowns: darken gaps instead of discard — stops aerial depth flicker.
+      if (farSoft > 0.45) {
+        alb *= mix(1.0, 0.22, sat((edge - cover) * 5.0));
+        tone *= mix(1.0, 0.55, sat((edge - cover) * 3.0));
+      } else {
+        discard;
+      }
+    }
     alb *= tone;
     if (back) { n = -n; alb *= 0.4; gloss = 0.0; }
-    n = normalize(n + tilt);
+    n = normalize(n + tilt * (1.0 - topDown * 0.5));
   } else if (kind == 2) {
     // Leaflet: dull upper wax, pale underside, thin-film transmission — not green plastic.
     let upper = dot(n, Vv) > 0.0;
@@ -1528,14 +1550,15 @@ fn seaFade(dist: f32) -> f32 {
 }
 
 // Near / mid / far ocean bands. x=fine keep, y=mid keep, z=far flatten, w=roughness lift.
+// Altitude only kills high-frequency aliasing — broad swell/mid structure stay readable overhead.
 fn seaBands(dist: f32, foot: f32) -> vec4<f32> {
-  let elev = max(F.camPos.y, 0.5);
-  let alt = sat((elev - 10.0) / 130.0);
-  let fine = smoothstep(100.0, 20.0, dist) * (1.0 - smoothstep(0.25, 1.4, foot));
-  // Far band starts earlier so distant water softens into atmosphere instead of staying game-sharp.
-  let farK = smoothstep(42.0, 320.0, dist) * mix(0.55, 1.0, alt);
-  let midK = sat(1.0 - fine - farK * 0.55);
-  let roughLift = sat(farK * 0.85 + smoothstep(0.1, 1.35, foot) * 0.55 + alt * farK * 0.4);
+  let elev = max(abs(F.camPos.y), 0.5);
+  let alt = sat((elev - 12.0) / 200.0);
+  let fine = smoothstep(110.0, 22.0, dist) * (1.0 - smoothstep(0.28, 1.55, foot));
+  // Far flatten keyed mainly by distance/footprint, not altitude alone (avoids flat blue from cliffs).
+  let farK = smoothstep(90.0, 560.0, dist) * mix(0.42, 0.82, alt) * (0.55 + 0.45 * smoothstep(0.15, 1.2, foot));
+  let midK = sat(1.0 - fine - farK * 0.5);
+  let roughLift = sat(farK * 0.75 + smoothstep(0.12, 1.4, foot) * 0.55 + alt * farK * 0.25);
   return vec4<f32>(fine, midK, farK, roughLift);
 }
 
@@ -1812,10 +1835,13 @@ fn waveWeights(dist: f32, foot: f32, footLong: f32, scale: f32) -> vec4<f32> {
   let open = mix(0.45, 1.0, scale);
   let band = seaBands(dist, foot);
   let swell = seaFade(dist);
+  let elev = max(abs(F.camPos.y), 0.5);
   // Soft cascade handoff: fine FFT/chop leave first; swell carries the mid/far silhouette.
-  let shape = smoothstep(620.0, 55.0, dist) * (1.0 - smoothstep(4.0, 42.0, footLong))
-    * open * mix(1.0, 0.35, band.z);
-  let chopCut = mix(2.0, 0.75, sat(F.camPos.y / 100.0));
+  // Keep more shape energy at altitude so overhead views still show wave structure.
+  let shape = smoothstep(mix(620.0, 1400.0, sat(elev / 180.0)), 55.0, dist)
+    * (1.0 - smoothstep(4.0, 48.0, footLong))
+    * open * mix(1.0, 0.55, band.z);
+  let chopCut = mix(2.0, 0.85, sat(elev / 120.0));
   let chop = (1.0 - smoothstep(0.16, chopCut, foot)) * smoothstep(480.0, 40.0, dist)
     * open * band.x;
   let cap = mix(0.02, 0.26, band.x) * (1.0 - smoothstep(0.08, 0.9, foot)) * open;
@@ -1847,7 +1873,8 @@ fn warp(t: f32) -> f32 {
   let ww = waveWeights(dist, foot, footLong, field.y);
   // Large-scale geometry only. Fine FFT detail stays in fragment normals so grazing
   // views do not reveal triangle facets from high-frequency vertex displacement.
-  let geom = smoothstep(1100.0, 140.0, dist);
+  // Preserve swell silhouette farther when the eye is high (same ocean, not a flat plate).
+  let geom = smoothstep(mix(1100.0, 2600.0, sat(elev / 200.0)), 140.0, dist);
   let graze = sat(elev / max(dist * 0.35, 1.0));
   let hfGeom = ww.y * smoothstep(0.04, 0.18, graze);
   var w = vec3<f32>(xz.x + s.disp.x * geom * ww.x, s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x), xz.y + s.disp.z * geom * ww.x);
@@ -1855,6 +1882,13 @@ fn warp(t: f32) -> f32 {
   w.y += shapeField(xz).x * hfGeom;
   let bedW = sampleField(w.xz).x;
   if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05 + dist * 0.008, 0.0)); }
+  // Near-plane safety: when the eye sits in the waterline band, keep surface verts
+  // beyond the near clip so the mesh does not vanish into giant clipped holes.
+  let along = dot(w - F.camPos, F.fwd);
+  if (along < 0.14) {
+    let lateral = w - F.camPos - F.fwd * along;
+    w = F.camPos + F.fwd * 0.14 + lateral;
+  }
   var o: WaterV;
   o.world = w;
   o.xz0 = xz;
@@ -2354,10 +2388,10 @@ struct BlitOut {
     let reachB = deep / max(-down.y, 0.05);
     let sandC = vec3<f32>(0.40, 0.58, 0.52) * F.day.rgb * mix(0.5, 1.0, lit0) * exp(W_KD * (-deep));
     let refl = waterFogIn(in.world, down, min(reachB, 60.0)) * 1.05;
-    var col = mix(mix(refl, sandC, exp(-reachB * 0.09) * 0.65), sky, win);
-    col = applyFog(col, in.world);
-    col = mix(col, vec3<f32>(0.75, 0.78, 0.76) * F.day.rgb, foam * 0.28);
-    return vec4<f32>(tonemap(airOver(col, in.clip.xy) * 1.25), 1.0);
+    var colU = mix(mix(refl, sandC, exp(-reachB * 0.09) * 0.65), sky, win);
+    colU = applyFog(colU, in.world);
+    colU = mix(colU, vec3<f32>(0.75, 0.78, 0.76) * F.day.rgb, foam * 0.28);
+    return vec4<f32>(tonemap(airOver(colU, in.clip.xy) * 1.25), 1.0);
   }
 
   let frag = in.clip;
@@ -2366,7 +2400,9 @@ struct BlitOut {
   // Land, trees and boats in front of this fragment stay as the blit left them.
   // The sheet is allowed to draw over the sand it is running across.
   let swash = sh.inside > 0.5 && sh.bed > -0.12 && (sh.h > 0.018 || sh.foam > 0.2);
-  if (!swash && dep < 0.999 && dep < frag.z - 0.00015) { discard; }
+  // Slightly wider depth epsilon near the eye — waterline intersection wobble.
+  let zEps = mix(0.00015, 0.00055, sat(1.0 - length(in.world - F.camPos) / 8.0));
+  if (!swash && dep < 0.999 && dep < frag.z - zEps) { discard; }
 
   // Reflection uses a filtered macro normal — glint capillaries stay in the specular lobe only.
   let lost = sat(smoothstep(0.22, 1.6, foot) * mix(0.45, 1.0, scale) + band.z * 0.55);
@@ -2421,12 +2457,16 @@ struct BlitOut {
       let scatter = mix(F.shalC.rgb, F.deepC.rgb, sat(sh.h / 0.45));
       base = sceneCol * trans + scatter * (1.0 - trans);
     } else if (d > -0.05) {
-      let bend = N.xz * clamp(d, 0.0, 3.0) * 7.0 * F.mat.z;
+      // Clamp refraction warp near the eye / grazing — stops waterline streaks from wrong-side samples.
+      let bendScale = 7.0 * F.mat.z * (1.0 - sat(1.0 - length(in.world - F.camPos) / 6.0) * 0.65)
+        * mix(1.0, 0.35, sat(1.0 - abs(V.y)));
+      let bend = N.xz * clamp(d, 0.0, 3.0) * bendScale;
       let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
       let rd = textureLoad(sceneDepth, vec2<i32>(shifted), 0);
       if (rd < 0.999) {
         let rw = worldAt(shifted, rd);
-        if (rw.y < in.world.y - 0.03) { look = shifted; sp = rw; d = in.world.y - rw.y; }
+        // Only accept refracted samples that stay below the water surface.
+        if (rw.y < in.world.y - 0.03 && rw.y < F.camPos.y + 2.0) { look = shifted; sp = rw; d = in.world.y - rw.y; }
       }
       let depth = max(d, 0.02);
       let sigma = (W_KD * 8.2 + vec3<f32>(0.1, 0.018, 0.01)) * max(F.deepC.w, 0.08);
