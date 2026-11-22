@@ -3120,7 +3120,8 @@ async function main() {
 
       fillCam(uf, camX, camY, camZ, yaw, pitch, 0, immersion);
       uf[80] = ox; uf[81] = oz; uf[82] = cover; uf[83] = fieldDamp(world, camX, camZ);
-      // Mirror pass only when above water — under uses Snell/window path, not planar reflections.
+      // Skip unused planar-reflection *pass* while submerged (Snell path does not sample it).
+      // Above-water reflection quality/settings are unchanged — not a fidelity cut.
       if (under) uf[86] = 0;
 
       // Reflected camera, for the water mirror — skipped entirely when reflections are off.

@@ -151,11 +151,15 @@ Run `B` on a real GPU before and after changes and compare **GPU milliseconds**,
 
 ## Graphics stability
 
-Rendering correctness is locked against three known failure modes:
+**Release requirement:** zero artifact regressions, preserved visual fidelity, measurable performance improvement where achievable. Fix the renderer — never the graphical quality.
 
-1. **Aerial crowns** — leaf-mass cutouts use rest-pose sampling, top-down softer thresholds, screen dither, and far-gap darkening instead of discard; leaflets get sub-pixel depth separation; altitude delays LOD coarsening.
-2. **Altitude-stable ocean** — distance/footprint filtering kills aliasing without flattening swell from cliffs or overhead; vertex near-plane push stops waterline mesh holes.
-3. **Waterline crossing** — hysteresis on local `waveY` (enter ~10 cm below, leave ~8 cm above), soft immersion for shaders, reflections disabled while submerged, tighter refraction sample rules near the eye.
+Prohibited as “fixes”: lowering density, draw distance, native resolution, reflections, refraction, shadows, water/cloud detail, or material complexity; flattening lighting; or fogging over defects.
+
+Rendering correctness is locked against three known failure modes without densifying or stripping detail:
+
+1. **Aerial crowns** — rest-pose cutout sampling; same hole-rate thresholds with screen dither for stable alpha depth; sub-pixel leaflet depth separation; altitude keeps finer LODs longer (more detail, not less).
+2. **Altitude-stable ocean** — footprint/distance filtering kills aliasing while keeping swell readable from cliffs and overhead; near-plane surface push stops waterline mesh holes.
+3. **Waterline crossing** — hysteresis on local `waveY`; soft immersion for shaders; planar-reflection *pass* skipped only while submerged (unused by the Snell path — above-water reflections unchanged); safer refraction sampling near the eye.
 
 ## License
 

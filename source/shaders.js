@@ -1272,8 +1272,6 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     var pq = in.rest.xz;
     if (an.x > an.y && an.x > an.z) { pq = in.rest.zy; } else if (an.z > an.y) { pq = in.rest.xy; }
     let near = 1.0 - smoothstep(30.0, 85.0, dist);
-    // Looking down onto a crown: hard alpha-discard sparkles from overlapping leaf cells.
-    let topDown = sat(-Vv.y * 0.9 + 0.05) * sat(n.y * 0.5 + 0.5);
     // Clumps a metre across at any distance; single leaves once they are big enough to see.
     let B = leafCells(pq * 0.85 + 17.0);
     let mB = smoothstep(0.56, 0.38, B.x);
@@ -1283,7 +1281,7 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     if (near > 0.01) {
       let A = leafCells(pq * 3.3);
       let mA = smoothstep(0.64, 0.5, A.x);
-      cover = mix(cover, max(mA, mB * 0.35), near * (1.0 - topDown * 0.55));
+      cover = mix(cover, max(mA, mB * 0.35), near);
       tone = mix(tone, mix(0.3, 0.72 + 0.55 * A.w, mA) * (0.72 + 0.5 * B.w), near);
       tilt = mix(tilt, (vec3<f32>(A.z, A.y + 0.5, A.w) - 0.5) * 1.5, near * mA);
       // A leaf is paler along its midrib, and each is its own green, some toward yellow.
@@ -1292,25 +1290,14 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
       // Only a leaf turned up to the sky shines with it; from underneath a crown is matt.
       gloss = 0.14 * near * mA * sat(n.y * 2.0);
     }
-    // Stable coverage test: lower hole rate overhead; screen dither instead of hard edge sparkle.
-    let holeN = n2(pq * 0.37 + 5.0);
-    let thresh = rim * rim * mix(1.25, 0.52, topDown) - mix(0.12, 0.42, topDown)
-      + 0.35 * (1.0 - topDown * 0.85) * smoothstep(0.6, 0.85, holeN);
-    let farSoft = smoothstep(70.0, 160.0, dist);
+    // Same coverage thresholds as before (hole rate / silhouette unchanged). Screen-space
+    // dither stabilizes overlapping alpha-tested depth without filling gaps or densifying crowns.
+    let thresh = rim * rim * 1.25 - 0.12 + 0.35 * smoothstep(0.6, 0.85, n2(pq * 0.37 + 5.0));
     let ign = fract(52.9829189 * fract(dot(in.clip.xy, vec2<f32>(0.06711056, 0.00583715))));
-    let edge = thresh + (ign - 0.5) * mix(0.1, 0.02, farSoft);
-    if (cover < edge) {
-      // Far crowns: darken gaps instead of discard — stops aerial depth flicker.
-      if (farSoft > 0.45) {
-        alb *= mix(1.0, 0.22, sat((edge - cover) * 5.0));
-        tone *= mix(1.0, 0.55, sat((edge - cover) * 3.0));
-      } else {
-        discard;
-      }
-    }
+    if (cover < thresh + (ign - 0.5) * 0.06) { discard; }
     alb *= tone;
     if (back) { n = -n; alb *= 0.4; gloss = 0.0; }
-    n = normalize(n + tilt * (1.0 - topDown * 0.5));
+    n = normalize(n + tilt);
   } else if (kind == 2) {
     // Leaflet: dull upper wax, pale underside, thin-film transmission — not green plastic.
     let upper = dot(n, Vv) > 0.0;
