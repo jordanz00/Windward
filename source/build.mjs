@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
-const parts = ['gpu.js', 'island.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'env.js', 'insects.js', 'app.js'];
+const parts = ['gpu.js', 'island.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'env.js', 'insects.js', 'bench.js', 'app.js'];
 // Source stays readable. The shipped page is compacted: comments and spare whitespace
 // are removed, but names and template-literal structure stay intact so errors still
 // map to written code. --dev keeps the source whole.
@@ -176,6 +176,7 @@ const html = `<!DOCTYPE html>
 <b>Watch</b><span>Hide the interface. C does the same.</span>
 <b>Day</b><span>T next hour, R weather. N music.</span>
 <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
+<b>B / G</b><span>Timed bench path / scenic fly of the same route. Quality preset stays fixed</span>
 <b>Esc</b><span>Release look, then open this card</span>
 </div>
 <p class="fine">Best in Chrome. On a phone, drag to look while walking; tap the water. One HTML file, MIT licensed.</p>

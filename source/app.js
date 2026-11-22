@@ -983,6 +983,9 @@ function packMeshes(list) {
 // Plants and rocks are a few prototype meshes drawn many times. An instance is
 // 12 floats: position and yaw, scale and vertical stretch, tint.
 const ISTRIDE = 12;
+// Spatial cells for plant culling (Abyssal Garden cell-sort idea): skip whole regions
+// outside reach instead of testing every instance every frame. Visibility leash unchanged.
+const SC_OX = -560, SC_OZ = -560, SC_CW = 35, SC_N = 32, SC_CELLS = SC_N * SC_N;
 function Scatter() { this.protos = []; this.data = []; this.kind = []; }
 // lods: meshes from finest to coarsest. cuts: the distance where each one hands over.
 Scatter.prototype.proto = function (lods, radius, cuts) {
@@ -1010,45 +1013,84 @@ Scatter.prototype.finish = function () {
   // must pass their own array via `into` — never alias the pool.
   this.drawPool = [[], [], [], []];
   this.drawPoolI = 0;
+  // Prefix-sum cell index: plant indices sorted by XZ cell (AG world packing).
+  const hist = new Int32Array(SC_CELLS + 1);
+  const d = this.data;
+  for (let i = 0; i < this.n; i++) {
+    const o = i * ISTRIDE;
+    const cx = Math.min(SC_N - 1, Math.max(0, (d[o] - SC_OX) / SC_CW | 0));
+    const cz = Math.min(SC_N - 1, Math.max(0, (d[o + 2] - SC_OZ) / SC_CW | 0));
+    hist[cx + cz * SC_N + 1]++;
+  }
+  for (let c = 1; c <= SC_CELLS; c++) hist[c] += hist[c - 1];
+  const order = new Int32Array(this.n);
+  const put = hist.slice();
+  for (let i = 0; i < this.n; i++) {
+    const o = i * ISTRIDE;
+    const cx = Math.min(SC_N - 1, Math.max(0, (d[o] - SC_OX) / SC_CW | 0));
+    const cz = Math.min(SC_N - 1, Math.max(0, (d[o + 2] - SC_OZ) / SC_CW | 0));
+    order[put[cx + cz * SC_N]++] = i;
+  }
+  this.cellStart = hist;
+  this.cellOrder = order;
 };
 // Cull, pick a level of detail, and group by mesh. Writes instances into out at
 // offset at (in instances) and returns the draws. vp null means no frustum test.
 // into: optional persistent draw list (required for lists kept across frames).
 Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, into) {
   const d = this.data, counts = this.counts, starts = this.starts, slotOf = this.slotOf;
+  const order = this.cellOrder, cellStart = this.cellStart;
   const cap = (out.length / ISTRIDE) | 0;
   counts.fill(0);
-  for (let i = 0; i < this.n; i++) {
-    const o = i * ISTRIDE, p = this.protos[this.kind[i]];
-    const x = d[o], y = d[o + 1], z = d[o + 2], sc = d[o + 4], r = p.r * sc;
-    // Cheap XZ reject before full 3D distance (same reach test, fewer hypot when far).
-    const dx = x - ex, dz = z - ez;
-    const reachI = reach + Math.min(220, r * 12);
-    const distXZ = Math.hypot(dx, dz);
-    let slot = -1;
-    if (distXZ - r < reachI) {
-      const dy = y - ey;
-      const dist = Math.hypot(distXZ, dy);
-      if (dist - r < reachI) {
-        let ok = true;
-        if (vp) {
-          const hr = Math.max(r, sc * 0.55);
-          const cy = y + hr * 0.55;
-          const cw = vp[3] * x + vp[7] * cy + vp[11] * z + vp[15];
-          const cx = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
-          const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
-          ok = cw > -hr && Math.abs(cx) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * 0.0016;
+  // Only walk cells that can intersect the reach sphere (same leash as before).
+  const pad = reach + 240;
+  const x0 = Math.min(SC_N - 1, Math.max(0, ((ex - pad) - SC_OX) / SC_CW | 0));
+  const x1 = Math.min(SC_N - 1, Math.max(0, ((ex + pad) - SC_OX) / SC_CW | 0));
+  const z0 = Math.min(SC_N - 1, Math.max(0, ((ez - pad) - SC_OZ) / SC_CW | 0));
+  const z1 = Math.min(SC_N - 1, Math.max(0, ((ez + pad) - SC_OZ) / SC_CW | 0));
+  const seen = slotOf; // reuse: -1 = not visited this collect
+  seen.fill(-1);
+  for (let cz = z0; cz <= z1; cz++) {
+    for (let cx = x0; cx <= x1; cx++) {
+      const cell = cx + cz * SC_N;
+      // Reject cells whose centre is well outside reach (still include large-plant leash margin).
+      const mx = SC_OX + (cx + 0.5) * SC_CW - ex;
+      const mz = SC_OZ + (cz + 0.5) * SC_CW - ez;
+      if (mx * mx + mz * mz > (pad + SC_CW) * (pad + SC_CW)) continue;
+      const a0 = cellStart[cell], a1 = cellStart[cell + 1];
+      for (let k = a0; k < a1; k++) {
+        const i = order[k];
+        const o = i * ISTRIDE, p = this.protos[this.kind[i]];
+        const x = d[o], y = d[o + 1], z = d[o + 2], sc = d[o + 4], r = p.r * sc;
+        const dx = x - ex, dz = z - ez;
+        const reachI = reach + Math.min(220, r * 12);
+        const distXZ = Math.hypot(dx, dz);
+        let slot = -1;
+        if (distXZ - r < reachI) {
+          const dy = y - ey;
+          const dist = Math.hypot(distXZ, dy);
+          if (dist - r < reachI) {
+            let ok = true;
+            if (vp) {
+              const hr = Math.max(r, sc * 0.55);
+              const cy = y + hr * 0.55;
+              const cw = vp[3] * x + vp[7] * cy + vp[11] * z + vp[15];
+              const cxi = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
+              const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
+              ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * 0.0016;
+            }
+            if (ok) {
+              let lod = coarser;
+              const bias = Math.min(28, r * 1.8);
+              while (lod < p.cuts.length && dist > p.cuts[lod] + bias) lod++;
+              slot = this.slot0[this.kind[i]] + Math.min(lod, p.lods.length - 1);
+              counts[slot]++;
+            }
+          }
         }
-        if (ok) {
-          let lod = coarser;
-          const bias = Math.min(28, r * 1.8);
-          while (lod < p.cuts.length && dist > p.cuts[lod] + bias) lod++;
-          slot = this.slot0[this.kind[i]] + Math.min(lod, p.lods.length - 1);
-          counts[slot]++;
-        }
+        seen[i] = slot;
       }
     }
-    slotOf[i] = slot;
   }
   let run = at;
   const draws = into || this.drawPool[this.drawPoolI++ & 3];
@@ -1062,13 +1104,20 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
   }
   const cursor = this.cursor;
   cursor.set(starts);
-  for (let i = 0; i < this.n; i++) {
-    const s = slotOf[i];
-    if (s < 0) continue;
-    const dst = cursor[s];
-    if (dst >= starts[s] + counts[s]) continue;
-    cursor[s] = dst + 1;
-    out.set(d.subarray(i * ISTRIDE, i * ISTRIDE + ISTRIDE), dst * ISTRIDE);
+  for (let cz = z0; cz <= z1; cz++) {
+    for (let cx = x0; cx <= x1; cx++) {
+      const cell = cx + cz * SC_N;
+      const a0 = cellStart[cell], a1 = cellStart[cell + 1];
+      for (let k = a0; k < a1; k++) {
+        const i = order[k];
+        const s = seen[i];
+        if (s < 0) continue;
+        const dst = cursor[s];
+        if (dst >= starts[s] + counts[s]) continue;
+        cursor[s] = dst + 1;
+        out.set(d.subarray(i * ISTRIDE, i * ISTRIDE + ISTRIDE), dst * ISTRIDE);
+      }
+    }
   }
   draws.end = run;
   return draws;
@@ -2006,13 +2055,36 @@ async function main() {
     setStatus('Asking the graphics driver', 0.06);
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) { fail('WebGPU is switched off in this browser. In Chrome, it is on by default.'); return; }
-    const device = await adapter.requestDevice();
+    // Timestamp queries when the adapter offers them (Abyssal Garden GPU timing path).
+    const hasTS = adapter.features.has('timestamp-query');
+    const device = await adapter.requestDevice(hasTS ? { requiredFeatures: ['timestamp-query'] } : undefined);
     device.addEventListener('uncapturederror', (ev) => {
       const msg = (ev.error && (ev.error.message || ev.error)) || 'gpu error';
       console.error('GPU ' + msg);
       window.__gpuerr = String(msg);
     });
     mark('device');
+    // GPU frame timing ring (Abyssal Garden pattern): async MAP_READ of timestamp deltas.
+    let gpuMs = 0;
+    const tsSlots = [];
+    let tsBegin, tsEnd, tsResolve;
+    if (hasTS) {
+      const qs = device.createQuerySet({ type: 'timestamp', count: 2 });
+      tsResolve = device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+      for (let i = 0; i < 6; i++) {
+        const b = device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        const slot = { b, busy: false };
+        slot.done = () => {
+          const a = new BigInt64Array(b.getMappedRange());
+          const ms = Number(a[1] - a[0]) / 1e6;
+          gpuMs = ms; b.unmap(); slot.busy = false;
+          if (typeof WW_BENCH !== 'undefined' && WW_BENCH.isBench && WW_BENCH.isBench()) WW_BENCH.recordGpu(ms);
+        };
+        tsSlots.push(slot);
+      }
+      tsBegin = { querySet: qs, beginningOfPassWriteIndex: 0 };
+      tsEnd = { querySet: qs, endOfPassWriteIndex: 1 };
+    }
     const canvas = $('c');
     const context = canvas.getContext('webgpu');
     const format = navigator.gpu.getPreferredCanvasFormat();
@@ -2511,11 +2583,16 @@ async function main() {
     const nearShadowScratch = [0, 0, 0, 0, 0, 0];
     // Plants, fish and insects are all drawn the same way: one buffer of prototypes, one of
     // instances, and a list of runs. A pipeline that is still being built draws nothing yet.
+    let frameDraws = 0, frameInst = 0;
     function drawMeshes(pass, pipeline, bg, vb, ib, buf, draws) {
       if (!pipeline || !draws.length) return;
       pass.setPipeline(pipeline); pass.setBindGroup(0, bg);
       pass.setVertexBuffer(0, vb); pass.setVertexBuffer(1, buf); pass.setIndexBuffer(ib, 'uint16');
-      for (let i = 0; i < draws.length; i += 5) pass.drawIndexed(draws[i + 1], draws[i + 4], draws[i], draws[i + 2], draws[i + 3]);
+      for (let i = 0; i < draws.length; i += 5) {
+        pass.drawIndexed(draws[i + 1], draws[i + 4], draws[i], draws[i + 2], draws[i + 3]);
+        frameDraws++;
+        frameInst += draws[i + 4];
+      }
     }
     const grassVB = upload(grassVert, GPUBufferUsage.VERTEX);
     const grassIB = upload(g.idx, GPUBufferUsage.INDEX);
@@ -2772,6 +2849,44 @@ async function main() {
     function frame(now) {
       try { frameBody(now); } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
     }
+    // Bench path: forest → palms → coast → beach/ocean → aerial → clouds → underwater (AG fly idea).
+    if (typeof WW_BENCH !== 'undefined') {
+      const keys = [];
+      const pushKey = (s) => keys.push([s.x, s.y, s.z, s.yaw, s.pitch]);
+      // Dense canopy inland of the beach.
+      keys.push([standX + Math.cos(byaw) * 55, Math.max(fieldSample(world, standX + Math.cos(byaw) * 55, standZ + Math.sin(byaw) * 55), 0) + 2.2, standZ + Math.sin(byaw) * 55, byaw + Math.PI, -0.12]);
+      pushKey(spots[0]);
+      pushKey(spots[1]);
+      pushKey(spots[4]);
+      pushKey(spots[2]);
+      pushKey(spots[3]);
+      pushKey(spots[5]);
+      WW_BENCH.setPath(keys, 55);
+      WW_BENCH.install({
+        show: (t) => { statsEl.hidden = false; statsEl.textContent = t; },
+        resolution: () => ({ w: viewW, h: viewH, name: q.name }),
+        draws: () => frameDraws,
+        instances: () => frameInst,
+        lockQuality: () => {},
+        keys: (fn) => {
+          addEventListener('keydown', (e) => {
+            if (e.repeat || mode !== 2) return;
+            if (fn(e.code)) e.preventDefault();
+          });
+        }
+      });
+      window.__bench = WW_BENCH;
+      if (qstr.has('bench')) {
+        goEl.addEventListener('click', () => {
+          setTimeout(() => {
+            if (!WW_BENCH.active()) WW_BENCH.onKey ? WW_BENCH.onKey('KeyB') : null;
+            // Trigger via the installed key path.
+            dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyB' }));
+          }, 500);
+        }, { once: true });
+      }
+    }
+
     function frameBody(now) {
       // A capture steps the clock by a fixed amount, so two captures of one build are the same picture.
       const dt = READ ? 1 / 30 : Math.min(0.05, (now - last) / 1000);
@@ -2791,7 +2906,19 @@ async function main() {
         barEl.parentElement.hidden = true;
       }
       ft[ftI] = dt; ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
-      // Performance comes from engineering, not runtime quality cuts (resolution/clouds/shadows/refl).
+      frameDraws = 0; frameInst = 0;
+      // Scripted fly / benchmark overrides the free camera (quality stays at the chosen preset).
+      if (typeof WW_BENCH !== 'undefined' && WW_BENCH.active()) {
+        const pose = WW_BENCH.tick(now);
+        if (pose) {
+          orbit = false; trip = null;
+          camX = pose[0]; camY = pose[1]; camZ = pose[2];
+          yaw = pose[3]; pitch = pose[4];
+          mode = 2;
+          setFlyMode(camY > fieldSample(world, camX, camZ) + 4);
+          dive = camY < 0 ? 1.2 : 0;
+        }
+      }
 
       envStep(dt, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
 
@@ -3141,6 +3268,12 @@ async function main() {
         drawWorld(rp, bgUBR, bgGeoR, false, reflDraws);
         rp.end();
       }
+      // GPU timestamps span scene → final swap (AG: first pass begin, last pass end).
+      let tsSlot = null;
+      if (hasTS) {
+        for (let i = 0; i < tsSlots.length; i++) if (!tsSlots[i].busy) { tsSlot = tsSlots[i]; break; }
+      }
+      scenePass.timestampWrites = tsSlot ? tsBegin : undefined;
       const sp = enc.beginRenderPass(scenePass);
       drawWorld(sp, bgUB, geoNow, true, mainDraws);
       sp.end();
@@ -3154,9 +3287,10 @@ async function main() {
         ap.end();
       }
 
-      const drawSwap = (colorView, depthView) => {
+      const drawSwap = (colorView, depthView, stampEnd) => {
         swapPass.colorAttachments[0].view = colorView;
         swapPass.depthStencilAttachment.view = depthView;
+        swapPass.timestampWrites = stampEnd && tsSlot ? tsEnd : undefined;
         const pass = enc.beginRenderPass(swapPass);
         pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgWater);
         pass.setPipeline(pipes.blit); pass.draw(3);
@@ -3181,8 +3315,9 @@ async function main() {
         }
         pass.end();
       };
-      if (READ && readTex) drawSwap(readViews[0], readViews[1]);
-      if (!(READ && frames === 16)) drawSwap(context.getCurrentTexture().createView(), swapDepthView);
+      const toScreen = !(READ && frames === 16);
+      if (READ && readTex) drawSwap(readViews[0], readViews[1], !toScreen);
+      if (toScreen) drawSwap(context.getCurrentTexture().createView(), swapDepthView, true);
       let doRead = false;
       if (READ && readTex && frames === 16) {
         enc.copyTextureToBuffer(
@@ -3193,7 +3328,16 @@ async function main() {
         doRead = true;
         window.__stage = 'copy';
       }
+      if (tsSlot) {
+        enc.resolveQuerySet(tsBegin.querySet, 0, 2, tsResolve, 0);
+        enc.copyBufferToBuffer(tsResolve, 0, tsSlot.b, 0, 16);
+        tsSlot.busy = true;
+      }
       device.queue.submit([enc.finish()]);
+      if (tsSlot) {
+        const slot = tsSlot;
+        slot.b.mapAsync(GPUMapMode.READ).then(slot.done).catch(() => { slot.busy = false; });
+      }
       if (doRead) {
         const wCap = viewW, hCap = viewH, bprCap = readBpr, fmtCap = format, buf = readBuf;
         const readWatch = setTimeout(() => {
@@ -3227,10 +3371,11 @@ async function main() {
         return;
       }
 
-      if (!statsEl.hidden && ftN) {
+      if (!statsEl.hidden && ftN && !(typeof WW_BENCH !== 'undefined' && WW_BENCH.active())) {
         let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
         const fps = (ftN / sum).toFixed(0);
-        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH;
+        const gpu = gpuMs > 0 ? '  ·  GPU ' + gpuMs.toFixed(1) + ' ms' : '';
+        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH + gpu;
       }
       if (score) score.setAudible(mode > 0 && musicOn && !muted, musicVol);
       if (audio && mode > 0) {

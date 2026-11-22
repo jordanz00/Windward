@@ -29,7 +29,8 @@ Wait for the coast to finish generating, then press **Enter**. You arrive over t
 | Time of day | Hour, or `T` (Shift goes back) |
 | Weather | Weather, or `R` (Shift goes back) |
 | Mute | `M` |
-| Frame time | `H` |
+| Frame time | `H` (shows GPU ms when the adapter supports timestamp queries) |
+| Benchmark | `B` — timed fly-through; `G` flies the same path without logging. `?bench=1` starts it after Enter |
 | Menu | `Esc` |
 
 On a phone, drag to look while walking and tap the water. A second finger is Shift. **Menu** brings the card back.
@@ -53,6 +54,7 @@ You stay on the sand. Step into the water and you swim; hold `Q` to go under and
 | `source/env.js` | The one state everything reads: the hour, the sun and moon, the weather, the wind |
 | `source/insects.js` | Ten kinds of insect, the flowering shrubs they visit, and how they behave |
 | `source/app.js` | WebGPU, the camera, the boats and trees, the sound |
+| `source/bench.js` | Repeatable fly-through benchmark (frame + GPU times), after Abyssal Garden’s `dev.js` |
 | `source/ui.css` | The card on top of the picture |
 | `source/build.mjs` | Joins the files above into `index.html` and reports the sizes |
 
