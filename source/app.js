@@ -1005,6 +1005,10 @@ Scatter.prototype.finish = function () {
   this.slotOf = new Int16Array(this.n);
   this.counts = new Int32Array(meshes.length);
   this.starts = new Int32Array(meshes.length);
+  this.cursor = new Int32Array(meshes.length);
+  // Rotating draw lists — independent refs per pass, no per-frame array alloc.
+  this.drawPool = [[], [], [], []];
+  this.drawPoolI = 0;
 };
 // Cull, pick a level of detail, and group by mesh. Writes instances into out at
 // offset at (in instances) and returns the draws. vp null means no frustum test.
@@ -1015,53 +1019,54 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser) {
   for (let i = 0; i < this.n; i++) {
     const o = i * ISTRIDE, p = this.protos[this.kind[i]];
     const x = d[o], y = d[o + 1], z = d[o + 2], sc = d[o + 4], r = p.r * sc;
-    const dist = Math.hypot(x - ex, y - ey, z - ez);
-    let slot = -1;
-    // Large silhouettes (palms, forest trees) keep a longer leash so the skyline never pops.
+    // Cheap XZ reject before full 3D distance (same reach test, fewer hypot when far).
+    const dx = x - ex, dz = z - ez;
     const reachI = reach + Math.min(220, r * 12);
-    if (dist - r < reachI) {
-      let ok = true;
-      if (vp) {
-        // Cull against a taller bound — crowns sit well above the plant origin.
-        const hr = Math.max(r, sc * 0.55);
-        const cy = y + hr * 0.55;
-        const cw = vp[3] * x + vp[7] * cy + vp[11] * z + vp[15];
-        const cx = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
-        const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
-        // Keep anything that still covers ~1 px; hard 0.004 culls made distant trees vanish.
-        ok = cw > -hr && Math.abs(cx) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * 0.0016;
-      }
-      if (ok) {
-        let lod = coarser;
-        // Soft LOD bias: delay the cut a little for larger plants so handoffs are less sudden.
-        const bias = Math.min(28, r * 1.8);
-        while (lod < p.cuts.length && dist > p.cuts[lod] + bias) lod++;
-        slot = this.slot0[this.kind[i]] + Math.min(lod, p.lods.length - 1);
-        counts[slot]++;
+    const distXZ = Math.hypot(dx, dz);
+    let slot = -1;
+    if (distXZ - r < reachI) {
+      const dy = y - ey;
+      const dist = Math.hypot(distXZ, dy);
+      if (dist - r < reachI) {
+        let ok = true;
+        if (vp) {
+          const hr = Math.max(r, sc * 0.55);
+          const cy = y + hr * 0.55;
+          const cw = vp[3] * x + vp[7] * cy + vp[11] * z + vp[15];
+          const cx = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
+          const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
+          ok = cw > -hr && Math.abs(cx) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * 0.0016;
+        }
+        if (ok) {
+          let lod = coarser;
+          const bias = Math.min(28, r * 1.8);
+          while (lod < p.cuts.length && dist > p.cuts[lod] + bias) lod++;
+          slot = this.slot0[this.kind[i]] + Math.min(lod, p.lods.length - 1);
+          counts[slot]++;
+        }
       }
     }
     slotOf[i] = slot;
   }
   let run = at;
-  // Fresh array each call — callers keep the reference across later collects (far/main/refl/near).
-  const draws = [];
+  const draws = this.drawPool[this.drawPoolI++ & 3];
+  draws.length = 0;
   for (let s = 0; s < counts.length; s++) {
     starts[s] = run;
-    // Never schedule instances past the shared GPU buffer.
     const take = Math.min(counts[s], Math.max(0, cap - run));
     if (take) { const g = this.packed.ranges[s]; draws.push(g.first, g.count, g.base, run, take); }
     counts[s] = take;
     run += take;
   }
-  const cursor = starts.slice();
+  const cursor = this.cursor;
+  cursor.set(starts);
   for (let i = 0; i < this.n; i++) {
     const s = slotOf[i];
     if (s < 0) continue;
     const dst = cursor[s];
     if (dst >= starts[s] + counts[s]) continue;
     cursor[s] = dst + 1;
-    const o = i * ISTRIDE, t = dst * ISTRIDE;
-    for (let k = 0; k < ISTRIDE; k++) out[t + k] = d[o + k];
+    out.set(d.subarray(i * ISTRIDE, i * ISTRIDE + ISTRIDE), dst * ISTRIDE);
   }
   draws.end = run;
   return draws;
@@ -2521,6 +2526,7 @@ async function main() {
     const bugArr = new Float32Array(bugLife.agents.length * BUG_STRIDE);
     const bugInstB = device.createBuffer({ size: bugArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     let bugDraws = [], bugCam = null, sunView = 0, sunTurn = 0;
+    const bugDrawsEmpty = [];
     const fishArr = new Float32Array(Math.max(1, fishLife.n) * ISTRIDE);
     const fishInstB = device.createBuffer({ size: fishArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     let fishDraws = [];
@@ -2687,7 +2693,7 @@ async function main() {
     if (qstr.has('wx')) { envSet(qstr.get('wx'), true); env.auto = false; }
     let last = performance.now();
     const ft = new Float32Array(40);
-    let ftI = 0, ftN = 0, frames = 0, adaptLeft = 6, ready = false;
+    let ftI = 0, ftN = 0, frames = 0, ready = false;
     let showHint = 0;
     let shoreWarm = 110;
     let fishCam = null, birdNear = 0;
@@ -2780,18 +2786,7 @@ async function main() {
         barEl.parentElement.hidden = true;
       }
       ft[ftI] = dt; ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
-      // Progressive quality when frame time exceeds ~22 ms: scale → clouds → shadows → reflections.
-      // Never shrink large-plant reach (that reintroduces tree pop-in).
-      if (adaptLeft > 0 && !qstr.has('shot') && (frames === 40 || (frames > 40 && frames % 60 === 0))) {
-        let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
-        const avg = sum / Math.max(ftN, 1);
-        if (avg > 0.022) {
-          if (q.scale > 0.48) { q.scale = Math.max(0.48, q.scale * 0.8); adaptLeft--; resize(); }
-          else if (q.clouds > 1) { q.clouds--; adaptLeft--; }
-          else if (q.shadow > 3) { q.shadow = Math.max(3, q.shadow - 2); adaptLeft--; }
-          else if (q.refl) { q.refl = 0; adaptLeft--; }
-        }
-      }
+      // Performance comes from engineering, not runtime quality cuts (resolution/clouds/shadows/refl).
 
       envStep(dt, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
 
@@ -2989,14 +2984,11 @@ async function main() {
       nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.2, 1);
       instEnd = nearDraws.end;
       if (instEnd) device.queue.writeBuffer(instB, 0, instArr.subarray(0, Math.min(instEnd, instCap) * ISTRIDE));
-      // The same frame data with the near matrix in the shadow slot, for the near shadow pass.
-      un.set(uf); un.set(NEARVP, 156);
-      device.queue.writeBuffer(nbuf, 0, un);
       // Fish are seen under water from 44 m at most, and from the air only close by.
       fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 44 : 30, fishPack.ranges);
       if (fishDraws.end) device.queue.writeBuffer(fishInstB, 0, fishArr, 0, fishDraws.end * ISTRIDE);
 
-      bugDraws = under ? [] : bugLife.collect(bugArr, uf, camX, camY, camZ, uf[63] * 2 / viewH, bugPack.ranges);
+      bugDraws = under ? bugDrawsEmpty : bugLife.collect(bugArr, uf, camX, camY, camZ, uf[63] * 2 / viewH, bugPack.ranges);
       if (bugDraws.end) device.queue.writeBuffer(bugInstB, 0, bugArr, 0, bugDraws.end * BUG_STRIDE);
       if (q.birds) {
         for (let i = 0; i < q.birds; i++) {
@@ -3121,10 +3113,14 @@ async function main() {
         const eyeMove = Math.hypot(camX - nsk[0], camY - nsk[1], camZ - nsk[2]);
         const sunDot = uf[52] * nsk[3] + uf[53] * nsk[4] + uf[54] * nsk[5];
         const underFlip = nearShadowUnder !== under;
-        if (eyeMove > 0.45 || sunDot < 0.9999 || underFlip) {
+        // Soft PCF hides sub-metre shifts; avoid rebuilding the map every tiny step.
+        if (eyeMove > 0.7 || sunDot < 0.99985 || underFlip) {
           nsk[0] = camX; nsk[1] = camY; nsk[2] = camZ;
           nsk[3] = uf[52]; nsk[4] = uf[53]; nsk[5] = uf[54];
           nearShadowUnder = under;
+          // Uniforms only needed when this pass actually runs.
+          un.set(uf); un.set(NEARVP, 156);
+          device.queue.writeBuffer(nbuf, 0, un);
           const np = enc.beginRenderPass(nearPass);
           np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
           np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');

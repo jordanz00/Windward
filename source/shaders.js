@@ -322,9 +322,9 @@ fn cloudMix() -> vec4<f32> {
   let s = max(cumu + tower + cirrus + strato, 1e-3);
   return vec4<f32>(cumu, tower, cirrus, strato) / s;
 }
-fn cloudCover(p: vec2<f32>) -> f32 {
-  let m = cloudMix();
-  let pd = p + cloudDrift();
+// Horizontal cloud amount with caller-supplied weather mix (avoids recomputing cloudMix).
+fn cloudCoverMix(p: vec2<f32>, m: vec4<f32>, drift: vec2<f32>) -> f32 {
+  let pd = p + drift;
   // Macro clearings — large blue gaps between cloud provinces (not a noise carpet).
   let province = n2(pd * 0.07 + vec2<f32>(1.7, 4.2)) * 0.7 + n2(pd * 0.17 + vec2<f32>(9.0, 2.0)) * 0.3;
   let region = smoothstep(0.34, 0.62, province);
@@ -332,38 +332,35 @@ fn cloudCover(p: vec2<f32>) -> f32 {
   let w1 = (vec2<f32>(n2(pd * 0.16 + vec2<f32>(3.1, 0.0)), n2(pd * 0.16 + vec2<f32>(7.7, 1.3))) - 0.5) * 3.6;
   let w2 = (vec2<f32>(n2((pd + w1) * 0.48 + vec2<f32>(2.0, 8.0)), n2((pd + w1) * 0.48 + vec2<f32>(5.0, 1.0))) - 0.5) * 1.15;
   let q = pd + w1 + w2;
-  // Cumulus: sparse cellular mounds with soft billow fill and clear blue between.
   let cell = n2(q * 0.62) * 0.7 + n2(q * 1.45 + vec2<f32>(4.0, 9.0)) * 0.3;
   let billow = n2(q * 2.9 + vec2<f32>(1.2, 5.5)) * 0.55 + n2(q * 5.4 + vec2<f32>(8.0, 2.0)) * 0.45;
   let mound = pow(sat((cell - 0.38) / 0.5), 1.55);
   let frag = pow(sat((n2(q * 2.2 + vec2<f32>(12.0, 3.0)) - 0.52) / 0.42), 1.9) * 0.5;
   let cumu = max(mound * (0.48 + 0.52 * billow), frag) * (0.5 + 0.5 * region);
-  // Towering tropical cumulus: rarer, larger footprints that punch upward.
   let tw = n2(q * 0.22 + vec2<f32>(11.0, 3.0)) * 0.8 + n2(q * 0.72 + vec2<f32>(2.0, 8.0)) * 0.2;
   let tower = pow(sat((tw - 0.48) / 0.42), 1.85)
     * (0.35 + 0.65 * n2(q * 2.0 + vec2<f32>(6.0, 1.0)))
     * smoothstep(0.35, 0.7, region);
-  // Cirrus: thin elongated streaks on a faster upper-level drift.
-  let pdC = p + cloudDriftH(1.2);
+  let wind = normalize(F.wind.xy + vec2<f32>(1e-5, 0.0));
+  let pdC = p + drift + wind * (0.15 + 1.2 * 0.55);
   let r = vec2<f32>(pdC.x * 0.38 + pdC.y * 0.1, -pdC.x * 0.07 + pdC.y * 0.92);
   let cirrus = n2(r * 1.7) * 0.5 + n2(r * 4.2 + vec2<f32>(3.0, 7.0)) * 0.32 + n2(r * 9.5) * 0.18;
-  // Stratocumulus: soft layered field with broken openings, slower low drift.
-  let pdS = p + cloudDriftH(0.15);
+  let pdS = p + drift + wind * (0.15 + 0.15 * 0.55);
   let qs = pdS + w1 * 0.55;
   let strato = n2(qs * 0.55) * 0.48 + n2(qs * 1.35 + vec2<f32>(4.0, 2.0)) * 0.34 + n2(qs * 3.2) * 0.18;
   let c = cumu * m.x + tower * m.y + cirrus * m.z + strato * m.w;
-  // Sharper threshold keeps wide blue gaps; cover only fills them when weather asks.
   let thr = 0.74 - 0.38 * sat(F.mood.y) - 0.28 * smoothstep(0.45, 0.95, F.mood.y);
   return (c - thr) / max(1.0 - thr, 0.08);
 }
-fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
-  let amt = cloudCover(p.xz);
+fn cloudCover(p: vec2<f32>) -> f32 {
+  return cloudCoverMix(p, cloudMix(), cloudDrift());
+}
+// Density with caller-supplied weather (hoist mix/drift across many samples in one ray).
+fn cloudAtMix(p: vec3<f32>, fine: f32, m: vec4<f32>, drift: vec2<f32>) -> f32 {
+  let amt = cloudCoverMix(p.xz, m, drift);
   if (amt <= 0.0) { return 0.0; }
-  let m = cloudMix();
   let grow = sat(amt);
-  // Per-column peak height so some masses are flat and some tower into cauliflower.
-  let peak = 0.7 + 0.85 * n2(p.xz * 0.9 + cloudDrift() * 0.4);
-  // Towers climb higher; strato stays shallow — real tropical depth variation.
+  let peak = 0.7 + 0.85 * n2(p.xz * 0.9 + drift * 0.4);
   let thick = (0.12 + (0.52 * m.x + 2.05 * m.y + 0.16 * m.z + 0.38 * m.w) * pow(grow, 0.4))
     * mix(0.72, peak, sat(m.x + m.y));
   let baseY = CLOUD_BASE + 0.58 * m.z - 0.05 * m.w + 0.07 * n2(p.xz * 0.35 + vec2<f32>(2.0, 6.0));
@@ -371,30 +368,31 @@ fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
   if (h < -0.06 || h > 1.25) { return 0.0; }
   let hh = clamp(h, 0.0, 1.0);
   let base = smoothstep(0.0, mix(0.04, 0.12, m.w), hh);
-  // Stacked soft lobes — cauliflower towers, not a single dome.
-  let lobePh = hh * mix(5.8, 8.2, m.y) + n2(p.xz * 2.0 + cloudDrift() * 0.2) * 3.5;
+  let lobePh = hh * mix(5.8, 8.2, m.y) + n2(p.xz * 2.0 + drift * 0.2) * 3.5;
   let lobe = 0.5 + 0.5 * sin(lobePh);
   let dome = (1.0 - pow(hh, mix(1.15, 2.55, m.y))) * mix(1.0, lobe, 0.62 * sat(m.x + m.y));
   let flat = 1.0 - abs(hh - 0.3) * 1.6;
   let profile = mix(mix(dome, flat, m.w), exp(-pow((hh - 0.52) * 3.0, 2.0)), m.z);
   var d = base * profile * sat(amt * mix(3.8, 5.8, m.y));
-  // Dense cores, soft edges — volume, not cutout sprites.
   let core = sat(amt * 1.9);
   d *= 0.28 + 0.72 * smoothstep(0.0, 0.5, core) * (1.0 - 0.42 * hh * hh * (1.0 - m.z));
   if (fine > 0.5) {
-    let drift = cloudDriftH(hh);
-    let w = p + vec3<f32>(drift.x, hh * 0.08, drift.y);
+    let wind = normalize(F.wind.xy + vec2<f32>(1e-5, 0.0));
+    let layer = drift + wind * (0.15 + hh * 0.55);
+    let w = p + vec3<f32>(layer.x, hh * 0.08, layer.y);
     let large = n3(w * 1.55);
     let mid = n3(w * 4.2 + vec3<f32>(4.0, 1.0, 7.0));
     let fineN = n3(w * 8.8 + vec3<f32>(2.0, 9.0, 5.0));
     let b = large * 0.5 + mid * 0.38 + fineN * 0.12;
-    // Tops erode into irregular rims; bases stay denser and darker.
     let erode = sat(0.45 + (b - 0.5) * 3.6) * (0.08 + 1.15 * hh * hh * (0.5 + 1.0 * m.y));
     d -= erode * (1.0 - 0.35 * m.z);
   } else {
     d -= 0.14 + 0.34 * hh;
   }
   return sat(d * 2.15);
+}
+fn cloudAt(p: vec3<f32>, fine: f32) -> f32 {
+  return cloudAtMix(p, fine, cloudMix(), cloudDrift());
 }
 struct SkyBake { @location(0) c: vec4<f32> }
 @fragment fn fsSkyBake(in: SkyV) -> SkyBake {
@@ -418,16 +416,20 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let t0 = CLOUD_BASE / sinE;
   // Slightly taller slab so tropical towers have room without adding march steps.
   let big = min(2.25 / sinE, 15.5) / 20.0;
-  // Quality from adaptive cloudOct: fewer steps / light taps when GPU is struggling.
+  // Cloud march quality from the chosen preset (q.clouds → F.cloudOct) — never lowered at runtime.
   let cq = clamp(F.cloudOct, 1.0, 5.0);
   let stepDiv = mix(5.0, 7.0, sat((cq - 1.0) / 3.0));
   let ds = big / stepDiv;
   let maxIt = i32(mix(55.0, 110.0, sat((cq - 1.0) / 3.0)));
   let fineQ = select(0.0, 1.0, cq >= 3.0);
   let bisectN = select(2, 4, cq >= 3.5);
+  // Weather mix/drift are constant for the whole ray — hoist out of every sample.
+  let wxMix = cloudMix();
+  let wxDrift = cloudDrift();
   // Direct sunlight fades out below the horizon; night clouds keep shape via amb/moon only.
   let dayK = smoothstep(-0.04, 0.1, F.sunTrue.y);
   let sunAim = mix(F.moon.xyz, F.sunTrue.xyz, dayK);
+  let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.04, 0.0));
   let mu = dot(rd, normalize(sunAim + vec3<f32>(1e-5, 1e-5, 0.0)));
   let gold = sat(F.day.w);
   // Warm sun-facing cloud light; cooler ambient for undersides — not a global orange filter.
@@ -435,6 +437,8 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let sunL = F.sunCol * sunWarm * 1.65 * dayK * (1.0 + 2.4 * pow(sat(mu), 5.0) + 1.2 * gold);
   let moonL = F.amb.rgb * vec3<f32>(0.55, 0.62, 0.78) * (1.0 - dayK) * (0.35 + 0.65 * F.moon.w);
   let skyL = F.amb.rgb * mix(vec3<f32>(0.82, 0.86, 0.95), vec3<f32>(0.5, 0.58, 0.92), gold * 0.5);
+  let phaseMu = 0.55 + 0.85 * pow(sat(mu), 2.8);
+  let silverMu = pow(sat(mu), 5.5);
   var C = vec3<f32>(0.0);
   var tm = 0.0;
   var wsum = 0.0;
@@ -452,33 +456,31 @@ struct SkyBake { @location(0) c: vec4<f32> }
       if (i >= maxIt || t > t0 + big * 20.0 || T < 0.02) { break; }
       let p = org + dir * t;
       if (!inside) {
-        if (cloudCover(p.xz) < -0.12) { tp = t; t += ds * 3.0; continue; }
-        if (cloudAt(p, fineQ) <= 0.004) { tp = t; t += ds; continue; }
+        if (cloudCoverMix(p.xz, wxMix, wxDrift) < -0.12) { tp = t; t += ds * 3.0; continue; }
+        if (cloudAtMix(p, fineQ, wxMix, wxDrift) <= 0.004) { tp = t; t += ds; continue; }
         var a = tp;
         var b = t;
         for (var k = 0; k < 5; k++) {
           if (k >= bisectN) { break; }
-          let m = (a + b) * 0.5;
-          if (cloudAt(org + dir * m, 0.0) > 0.004) { b = m; } else { a = m; }
+          let midT = (a + b) * 0.5;
+          if (cloudAtMix(org + dir * midT, 0.0, wxMix, wxDrift) > 0.004) { b = midT; } else { a = midT; }
         }
         t = b + ds * 0.3;
         inside = true;
         continue;
       }
-      let d = cloudAt(p, fineQ);
+      let d = cloudAtMix(p, fineQ, wxMix, wxDrift);
       if (d <= 0.004) { inside = false; tp = t; t += ds; continue; }
-      let lightDir = normalize(sunAim + vec3<f32>(0.0, 0.04, 0.0));
       // Three coarse light taps — enough for volume depth without 5× fine cloudAt cost.
-      var ls = cloudAt(p + lightDir * 0.08, 0.0) * 0.2;
-      ls += cloudAt(p + lightDir * 0.35, 0.0) * 0.4;
-      ls += cloudAt(p + lightDir * 0.95, 0.0) * 0.65;
+      var ls = cloudAtMix(p + lightDir * 0.08, 0.0, wxMix, wxDrift) * 0.2;
+      ls += cloudAtMix(p + lightDir * 0.35, 0.0, wxMix, wxDrift) * 0.4;
+      ls += cloudAtMix(p + lightDir * 0.95, 0.0, wxMix, wxDrift) * 0.65;
       let hK = sat((p.y - CLOUD_BASE) / 1.85);
       let sunT = exp(-ls * 16.0);
       let powder = 1.0 - exp(-d * 4.8);
-      let phase = 0.55 + 0.85 * pow(sat(mu), 2.8);
-      let silver = pow(sat(mu), 5.5) * sunT * powder * (0.65 + 1.2 * gold);
+      let silver = silverMu * sunT * powder * (0.65 + 1.2 * gold);
       let baseAO = mix(0.22, 1.0, sat(hK * 1.1 + sunT * 0.4));
-      let L = sunL * (sunT * (0.42 + 0.55 * powder) * phase + silver * 1.45) * baseAO
+      let L = sunL * (sunT * (0.42 + 0.55 * powder) * phaseMu + silver * 1.45) * baseAO
         + skyL * (0.1 + 0.4 * hK + 0.3 * (1.0 - hK) * (0.45 + 0.55 * sunT))
         + moonL * (0.3 + 0.55 * hK);
       let al = 1.0 - exp(-d * ds * 38.0);
@@ -568,19 +570,19 @@ fn waterFill(depth: f32) -> vec3<f32> {
   return W_COL * 0.55 * F.under * sat(depth * 3.0) * sunDeep * max(F.lit.y, 0.0) * F.day.rgb
     * mix(0.55, 1.0, cloudShade(F.camPos.xz, 0.0));
 }
-// Lightweight environmental lighting field — Abyssal vol() idea without a 3D texture.
-// Cheap: one height sample + one forest noise. No cloudCover / cliff FD per fragment.
-// r = skylight openness, g = in-scatter density, b = warm canopy/ground bounce.
-fn envVol(p: vec3<f32>) -> vec3<f32> {
-  let h = sampleField(p.xz).x;
-  let above = p.y - h;
-  let forest = smoothstep(1.8, 4.6, h) * smoothstep(-0.65, -0.1, forestNoise(p.xz));
+// Env lighting from height + forest factor (caller supplies samples to avoid duplicates).
+fn envVolHF(h: f32, above: f32, forest: f32) -> vec3<f32> {
   let canopy = forest * smoothstep(14.0, 1.5, above) * smoothstep(-0.4, 2.8, above);
   let contact = sat(1.0 - above / 2.8) * canopy * 0.55;
   let open = sat(1.0 - 0.52 * canopy - 0.12 * contact);
   let dens = 0.3 + 0.45 * canopy + 0.18 * sat(F.wx.w) + 0.12 * sat(F.mood.y);
   let bounce = sat(canopy * 0.55 + contact * 0.15);
   return vec3<f32>(open, dens, bounce);
+}
+fn envVol(p: vec3<f32>) -> vec3<f32> {
+  let h = sampleField(p.xz).x;
+  let forest = smoothstep(1.8, 4.6, h) * smoothstep(-0.65, -0.1, forestNoise(p.xz));
+  return envVolHF(h, p.y - h, forest);
 }
 
 // Aerial perspective. Air scatters blue out of the line of sight first, and the damp air
@@ -756,10 +758,13 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // Direct occlusion only. Multiplying ambient by this crushed forests to black.
   let sh = sunShadow(world) * cloudShade(world.xz, world.y);
   let hemi = n.y * 0.5 + 0.5;
+  // One height + one forest sample shared by roof occlusion and envVol.
   let fld = sampleField(world.xz);
-  let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(world.xz))
+  let fNoise = forestNoise(world.xz);
+  let roof = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, fNoise)
     * (1.0 - smoothstep(3.5, 9.0, world.y - fld.x));
-  let ev = envVol(world);
+  let forest = smoothstep(1.8, 4.6, fld.x) * smoothstep(-0.65, -0.1, fNoise);
+  let ev = envVolHF(fld.x, world.y - fld.x, forest);
   // Soft canopy occlusion — retain visible detail in shade.
   let open = sat((1.0 - mix(0.48, 0.22, sat(leaf)) * roof) * mix(0.72, 1.0, ev.r) + 0.06);
   let gold = sat(F.day.w);
@@ -2220,7 +2225,8 @@ struct BlitOut {
     let rr = rainRings(in.xz0) * (1.0 - smoothstep(0.02, 0.05, pix));
     N = normalize(N + vec3<f32>(rr.x, 0.0, rr.y) * ww.w);
   }
-  let sh = shoreFetch(in.xz0);
+  // Reuse the shore sample from the sheet test (identical xz0).
+  let sh = sh0;
   var bore = 0.0;
   if (sh.inside > 0.5 && sh.bed > -1.5 && (in.sheet > 0.5 || sh.bed < 0.05)) {
     let e = 0.48;
