@@ -29,8 +29,8 @@ Wait for the coast to finish generating, then press **Enter**. You arrive over t
 | Time of day | Hour, or `T` (Shift goes back) |
 | Weather | Weather, or `R` (Shift goes back) |
 | Mute | `M` |
-| Frame time | `H` (shows GPU ms when the adapter supports timestamp queries) |
-| Benchmark | `B` — timed fly-through; `G` flies the same path without logging. `?bench=1` starts it after Enter |
+| Frame time | `H` — FPS, CPU ms, GPU ms (when supported), and whether the frame looks CPU- or GPU-bound. Never silently lowers quality |
+| Benchmark | `B` — timed fly-through with FPS / 1% low / CPU / cull / GPU / draws / passes; `G` flies the same path. `?bench=1` starts it after Enter |
 | Menu | `Esc` |
 
 On a phone, drag to look while walking and tap the water. A second finger is Shift. **Menu** brings the card back.

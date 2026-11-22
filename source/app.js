@@ -1033,23 +1033,27 @@ Scatter.prototype.finish = function () {
   }
   this.cellStart = hist;
   this.cellOrder = order;
+  this.seenGen = new Int32Array(this.n);
+  this.epoch = 1;
 };
 // Cull, pick a level of detail, and group by mesh. Writes instances into out at
 // offset at (in instances) and returns the draws. vp null means no frustum test.
 // into: optional persistent draw list (required for lists kept across frames).
 Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, into) {
   const d = this.data, counts = this.counts, starts = this.starts, slotOf = this.slotOf;
-  const order = this.cellOrder, cellStart = this.cellStart;
+  const order = this.cellOrder, cellStart = this.cellStart, seenGen = this.seenGen;
   const cap = (out.length / ISTRIDE) | 0;
   counts.fill(0);
+  // Generation stamp avoids clearing the whole slot array each collect (AG-style).
+  let epoch = this.epoch + 1;
+  if (epoch > 0x7ffffffe) { seenGen.fill(0); epoch = 1; }
+  this.epoch = epoch;
   // Only walk cells that can intersect the reach sphere (same leash as before).
   const pad = reach + 240;
   const x0 = Math.min(SC_N - 1, Math.max(0, ((ex - pad) - SC_OX) / SC_CW | 0));
   const x1 = Math.min(SC_N - 1, Math.max(0, ((ex + pad) - SC_OX) / SC_CW | 0));
   const z0 = Math.min(SC_N - 1, Math.max(0, ((ez - pad) - SC_OZ) / SC_CW | 0));
   const z1 = Math.min(SC_N - 1, Math.max(0, ((ez + pad) - SC_OZ) / SC_CW | 0));
-  const seen = slotOf; // reuse: -1 = not visited this collect
-  seen.fill(-1);
   for (let cz = z0; cz <= z1; cz++) {
     for (let cx = x0; cx <= x1; cx++) {
       const cell = cx + cz * SC_N;
@@ -1088,7 +1092,8 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
             }
           }
         }
-        seen[i] = slot;
+        slotOf[i] = slot;
+        seenGen[i] = epoch;
       }
     }
   }
@@ -1104,18 +1109,23 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
   }
   const cursor = this.cursor;
   cursor.set(starts);
+  // Manual copy — avoids per-instance TypedArray.subarray allocations (GC spikes).
   for (let cz = z0; cz <= z1; cz++) {
     for (let cx = x0; cx <= x1; cx++) {
       const cell = cx + cz * SC_N;
       const a0 = cellStart[cell], a1 = cellStart[cell + 1];
       for (let k = a0; k < a1; k++) {
         const i = order[k];
-        const s = seen[i];
+        if (seenGen[i] !== epoch) continue;
+        const s = slotOf[i];
         if (s < 0) continue;
         const dst = cursor[s];
         if (dst >= starts[s] + counts[s]) continue;
         cursor[s] = dst + 1;
-        out.set(d.subarray(i * ISTRIDE, i * ISTRIDE + ISTRIDE), dst * ISTRIDE);
+        const o = i * ISTRIDE, t = dst * ISTRIDE;
+        out[t] = d[o]; out[t + 1] = d[o + 1]; out[t + 2] = d[o + 2]; out[t + 3] = d[o + 3];
+        out[t + 4] = d[o + 4]; out[t + 5] = d[o + 5]; out[t + 6] = d[o + 6]; out[t + 7] = d[o + 7];
+        out[t + 8] = d[o + 8]; out[t + 9] = d[o + 9]; out[t + 10] = d[o + 10]; out[t + 11] = d[o + 11];
       }
     }
   }
@@ -2576,14 +2586,17 @@ async function main() {
     const farDraws = [];
     scatter.collect(farArr, 0, null, beach.x, 8, beach.z, 560, 9, farDraws);
     const instFarB = upload(farArr, GPUBufferUsage.VERTEX);
-    let mainDraws = [], reflDraws = [], shadowFor = null;
+    let mainDraws = [], reflDraws = [], nearDraws = [], shadowFor = null;
     let nearShadowKey = null;
     let nearShadowUnder = null;
     const shadowSun = [0, 0, 0];
     const nearShadowScratch = [0, 0, 0, 0, 0, 0];
-    // Plants, fish and insects are all drawn the same way: one buffer of prototypes, one of
-    // instances, and a list of runs. A pipeline that is still being built draws nothing yet.
-    let frameDraws = 0, frameInst = 0;
+    // AG idea: vegetation wind is GPU-side — only rebuild instance lists when the view cull changes.
+    const cullKey = [1e9, 1e9, 1e9, 0, 0, 0, -1, -1, 0];
+    let lastInstEnd = 0, cullReady = false;
+    let frameDraws = 0, frameInst = 0, framePasses = 0;
+    let cpuCullMs = 0, cpuFrameMs = 0;
+    const submitList = [null];
     function drawMeshes(pass, pipeline, bg, vb, ib, buf, draws) {
       if (!pipeline || !draws.length) return;
       pass.setPipeline(pipeline); pass.setBindGroup(0, bg);
@@ -2626,7 +2639,6 @@ async function main() {
     const nearPass = passOf(undefined, null, nearView);
     const NEARVP = new Float32Array(16);
     const bgUBN = groupOf(device, ubLayout, [nbuf]);
-    let nearDraws = [];
     const nearRows = [0, 0];
     // The sky panorama. Sizes match SKYW and SKYH in the shader.
     const SKYW = 1536, SKYH = 384, SKY_STRIPS = 16;
@@ -2906,7 +2918,8 @@ async function main() {
         barEl.parentElement.hidden = true;
       }
       ft[ftI] = dt; ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
-      frameDraws = 0; frameInst = 0;
+      frameDraws = 0; frameInst = 0; framePasses = 0;
+      const tFrame0 = performance.now();
       // Scripted fly / benchmark overrides the free camera (quality stays at the chosen preset).
       if (typeof WW_BENCH !== 'undefined' && WW_BENCH.active()) {
         const pose = WW_BENCH.tick(now);
@@ -3081,41 +3094,62 @@ async function main() {
       fillCam(uf, camX, camY, camZ, yaw, pitch, 0, under);
       uf[80] = ox; uf[81] = oz; uf[82] = cover; uf[83] = fieldDamp(world, camX, camZ);
 
-      // Reflected camera, for the water mirror.
-      cameraVectors(yaw, -pitch, rfwd, rright, rup);
-      const rex = camX, rey = -camY, rez = camZ;
-      viewFrom([rex, rey, rez], rright, rup, rfwd, V);
-      perspective(P, fov, viewW / viewH, near, far);
-      matmul(P, V, RVP);
-      uf.set(RVP, 32);
-      // Reflection uniform: same lighting, reflected view in the main slots.
-      ur.set(uf);
-      invert(RVP, INV);
-      ur.set(RVP, 0); ur.set(INV, 16);
-      ur[48] = rex; ur[49] = rey; ur[50] = rez;
-      ur[55] = 0; ur[71] = 1;
-      cameraVectors(yaw, -pitch, rfwd, rright, rup);
-      ur[64] = rright[0]; ur[65] = rright[1]; ur[66] = rright[2];
-      ur[68] = rup[0]; ur[69] = rup[1]; ur[70] = rup[2];
-      ur[72] = rfwd[0]; ur[73] = rfwd[1]; ur[74] = rfwd[2];
-
+      // Reflected camera, for the water mirror — skipped entirely when reflections are off.
+      if (uf[86] > 0.5) {
+        cameraVectors(yaw, -pitch, rfwd, rright, rup);
+        const rex = camX, rey = -camY, rez = camZ;
+        viewFrom([rex, rey, rez], rright, rup, rfwd, V);
+        perspective(P, fov, viewW / viewH, near, far);
+        matmul(P, V, RVP);
+        uf.set(RVP, 32);
+        ur.set(uf);
+        invert(RVP, INV);
+        ur.set(RVP, 0); ur.set(INV, 16);
+        ur[48] = rex; ur[49] = rey; ur[50] = rez;
+        ur[55] = 0; ur[71] = 1;
+        cameraVectors(yaw, -pitch, rfwd, rright, rup);
+        ur[64] = rright[0]; ur[65] = rright[1]; ur[66] = rright[2];
+        ur[68] = rup[0]; ur[69] = rup[1]; ur[70] = rup[2];
+        ur[72] = rfwd[0]; ur[73] = rfwd[1]; ur[74] = rfwd[2];
+        device.queue.writeBuffer(rbuf, 0, ur);
+      }
       device.queue.writeBuffer(ubuf, 0, uf);
-      device.queue.writeBuffer(rbuf, 0, ur);
 
       // Keep the island skyline filled: base reach covers the coast-to-ridge distance on foot.
       // Large plants get an extra leash inside collect() so distant crowns do not pop.
       const plantReach = Math.min(560, 340 + eyeH * 6.5);
-      mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, plantReach, 0);
-      let instEnd = mainDraws.end;
-      if (uf[86] > 0.5) {
-        // Half-res mirror: one LOD coarser; still far enough that reflected trees do not blink.
-        reflDraws = scatter.collect(instArr, instEnd, RVP, camX, -camY, camZ, Math.min(380, plantReach * 0.75), 1);
-        instEnd = reflDraws.end;
+      const reflOn = uf[86] > 0.5 ? 1 : 0;
+      // Rebuild shared main/refl/near instance buffer only when the view moved enough to change cull/LOD.
+      const eyeMove = Math.hypot(camX - cullKey[0], camY - cullKey[1], camZ - cullKey[2]);
+      let dyaw = yaw - cullKey[3];
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      const angMove = Math.abs(dyaw) + Math.abs(pitch - cullKey[4]);
+      const needCull = !cullReady || eyeMove > 0.45 || angMove > 0.012 || Math.abs(plantReach - cullKey[5]) > 0.5
+        || reflOn !== cullKey[6] || Math.hypot(nearC[0] - cullKey[7], nearC[2] - cullKey[8]) > 0.8;
+      let instEnd = lastInstEnd;
+      const tCull0 = performance.now();
+      if (needCull) {
+        mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, plantReach, 0);
+        instEnd = mainDraws.end;
+        if (reflOn) {
+          // Half-res mirror: one LOD coarser; still far enough that reflected trees do not blink.
+          reflDraws = scatter.collect(instArr, instEnd, RVP, camX, -camY, camZ, Math.min(380, plantReach * 0.75), 1);
+          instEnd = reflDraws.end;
+        } else {
+          reflDraws = bugDrawsEmpty;
+        }
+        // Near shadows: lean-only mesh shader + modest reach (main view still uses full plantReach).
+        nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.2, 1);
+        instEnd = nearDraws.end;
+        if (instEnd) device.queue.writeBuffer(instB, 0, instArr.subarray(0, Math.min(instEnd, instCap) * ISTRIDE));
+        cullKey[0] = camX; cullKey[1] = camY; cullKey[2] = camZ;
+        cullKey[3] = yaw; cullKey[4] = pitch; cullKey[5] = plantReach;
+        cullKey[6] = reflOn; cullKey[7] = nearC[0]; cullKey[8] = nearC[2];
+        lastInstEnd = instEnd;
+        cullReady = true;
       }
-      // Near shadows: lean-only mesh shader + modest reach (main view still uses full plantReach).
-      nearDraws = scatter.collect(instArr, instEnd, null, nearC[0], nearC[1], nearC[2], NEAR_R * 1.2, 1);
-      instEnd = nearDraws.end;
-      if (instEnd) device.queue.writeBuffer(instB, 0, instArr.subarray(0, Math.min(instEnd, instCap) * ISTRIDE));
+      cpuCullMs = performance.now() - tCull0;
       // Fish are seen under water from 44 m at most, and from the air only close by.
       fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 44 : 30, fishPack.ranges);
       if (fishDraws.end) device.queue.writeBuffer(fishInstB, 0, fishArr, 0, fishDraws.end * ISTRIDE);
@@ -3160,6 +3194,10 @@ async function main() {
       device.queue.writeBuffer(simBuf, 0, simU);
 
       const enc = device.createCommandEncoder();
+      {
+        const _rp = enc.beginRenderPass.bind(enc);
+        enc.beginRenderPass = (desc) => { framePasses++; return _rp(desc); };
+      }
       {
         // Every cascade's spectrum is advanced and transformed in one compute pass.
         const cp = enc.beginComputePass();
@@ -3333,10 +3371,16 @@ async function main() {
         enc.copyBufferToBuffer(tsResolve, 0, tsSlot.b, 0, 16);
         tsSlot.busy = true;
       }
-      device.queue.submit([enc.finish()]);
+      submitList[0] = enc.finish();
+      device.queue.submit(submitList);
       if (tsSlot) {
         const slot = tsSlot;
         slot.b.mapAsync(GPUMapMode.READ).then(slot.done).catch(() => { slot.busy = false; });
+      }
+      cpuFrameMs = performance.now() - tFrame0;
+      if (typeof WW_BENCH !== 'undefined' && WW_BENCH.isBench && WW_BENCH.isBench()) {
+        WW_BENCH.recordCpu(cpuFrameMs, cpuCullMs);
+        WW_BENCH.recordPass(framePasses, frameDraws, frameInst);
       }
       if (doRead) {
         const wCap = viewW, hCap = viewH, bprCap = readBpr, fmtCap = format, buf = readBuf;
@@ -3375,7 +3419,16 @@ async function main() {
         let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
         const fps = (ftN / sum).toFixed(0);
         const gpu = gpuMs > 0 ? '  ·  GPU ' + gpuMs.toFixed(1) + ' ms' : '';
-        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH + gpu;
+        const cpu = '  ·  CPU ' + cpuFrameMs.toFixed(1) + ' ms';
+        // Report the bound without silently cutting quality (AG quality manager idea, fidelity-first).
+        let bound = '';
+        if (gpuMs > 0) {
+          if (gpuMs > 14 && gpuMs > cpuFrameMs * 1.3) bound = '  ·  GPU-bound';
+          else if (cpuFrameMs > 10 && cpuFrameMs > gpuMs * 1.3) bound = '  ·  CPU-bound';
+        } else if (cpuFrameMs > 12 || sum / ftN > 0.02) {
+          bound = cpuCullMs > 4 ? '  ·  CPU cull heavy' : '  ·  check GPU timing';
+        }
+        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH + gpu + cpu + bound;
       }
       if (score) score.setAudible(mode > 0 && musicOn && !muted, musicVol);
       if (audio && mode > 0) {

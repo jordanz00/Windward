@@ -5,9 +5,12 @@ const WW_BENCH = (() => {
   const LOGN = 1 << 14;
   const logFrame = new Float32Array(LOGN);
   const logGpu = new Float32Array(LOGN);
-  let flying = false, bench = false, nFrame = 0, nGpu = 0, lastT = 0;
+  const logCpu = new Float32Array(LOGN);
+  const logCull = new Float32Array(LOGN);
+  let flying = false, bench = false, nFrame = 0, nGpu = 0, nCpu = 0, lastT = 0;
   let path = null, pathLut = null, pathLen = 0, flyT = 0, flyDur = 55;
   let api = null;
+  let lastDraws = 0, lastInst = 0, lastPasses = 0;
 
   const stop = () => {
     flying = false;
@@ -16,34 +19,46 @@ const WW_BENCH = (() => {
     flyT = 0;
   };
 
-  const summarize = () => {
-    const st = (a, n) => {
-      const s = Array.from(a.subarray(0, n)).sort((x, y) => x - y);
-      let sum = 0;
-      for (let i = 0; i < n; i++) sum += s[i];
-      const p01 = s[Math.min(n - 1, Math.floor(n * 0.01))];
-      return {
-        n,
-        avg: sum / n,
-        p99: s[Math.min(n - 1, Math.floor(n * 0.99))],
-        p01,
-        max: s[n - 1],
-        min: s[0]
-      };
+  const st = (a, n) => {
+    const s = Array.from(a.subarray(0, n)).sort((x, y) => x - y);
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += s[i];
+    return {
+      n,
+      avg: sum / n,
+      p99: s[Math.min(n - 1, Math.floor(n * 0.99))],
+      p01: s[Math.min(n - 1, Math.floor(n * 0.01))],
+      max: s[n - 1],
+      min: s[0]
     };
+  };
+
+  const summarize = () => {
     const f = st(logFrame, nFrame);
     const g = nGpu ? st(logGpu, nGpu) : null;
+    const c = nCpu ? st(logCpu, nCpu) : null;
+    const cull = nCpu ? st(logCull, nCpu) : null;
     const fpsAvg = 1000 / f.avg;
     const fps1 = 1000 / f.p99;
+    let bottleneck = 'unknown';
+    if (g && c) {
+      if (g.avg > 14 && g.avg > c.avg * 1.25) bottleneck = 'GPU';
+      else if (c.avg > 10 && c.avg > g.avg * 1.25) bottleneck = cull && cull.avg > 3 ? 'CPU-cull' : 'CPU';
+      else bottleneck = 'balanced';
+    } else if (c && c.avg > 12) bottleneck = cull && cull.avg > 3 ? 'CPU-cull' : 'CPU';
     return {
       frames: f.n,
       fpsAvg,
       fps1pct: fps1,
       frameMs: f,
       gpuMs: g,
+      cpuMs: c,
+      cullMs: cull,
+      bottleneck,
       res: api && api.resolution ? api.resolution() : null,
-      draws: api && api.draws ? api.draws() : null,
-      instances: api && api.instances ? api.instances() : null,
+      draws: lastDraws,
+      instances: lastInst,
+      passes: lastPasses,
       gpuQuery: !!g
     };
   };
@@ -52,13 +67,15 @@ const WW_BENCH = (() => {
 
   const print = (r) => {
     const lines = [
-      `Windward bench ${r.res ? r.res.w + '×' + r.res.h : '?'}  ${r.frames} frames`,
+      `Windward bench ${r.res ? r.res.w + '×' + r.res.h + ' · ' + (r.res.name || '') : '?'}  ${r.frames} frames`,
       `FPS     avg ${r.fpsAvg.toFixed(1)}  1% low ${r.fps1pct.toFixed(1)}`,
       `frame   ${fmt(r.frameMs)}`,
+      `CPU     ${r.cpuMs ? fmt(r.cpuMs) : 'n/a'}`,
+      `cull    ${r.cullMs ? fmt(r.cullMs) : 'n/a'}`,
       `GPU     ${r.gpuMs ? fmt(r.gpuMs) : 'timestamp-query unavailable'}`,
-      r.draws != null ? `draws   ${r.draws}` : '',
-      r.instances != null ? `inst    ${r.instances}` : ''
-    ].filter(Boolean);
+      `bound   ${r.bottleneck}`,
+      `draws   ${r.draws}  inst ${r.instances}  passes ${r.passes}`
+    ];
     const text = lines.join('\n');
     console.log('BENCH ' + JSON.stringify(r));
     if (api && api.show) api.show(text);
@@ -118,12 +135,13 @@ const WW_BENCH = (() => {
       this.enabled = true;
       if (hooks.keys) {
         hooks.keys((code) => {
+          // B = timed bench, G = scenic glide (F stays Windward fly-mode).
           if (code === 'KeyB' || code === 'KeyG') {
             if (flying) { stop(); return true; }
             if (!path) return false;
             flying = true;
             bench = code === 'KeyB';
-            flyT = 0; lastT = 0; nFrame = nGpu = 0;
+            flyT = 0; lastT = 0; nFrame = nGpu = nCpu = 0;
             if (bench && api.lockQuality) api.lockQuality(true);
             if (api.show) api.show(bench ? 'Benchmark running…' : 'Fly-through…');
             return true;
@@ -136,7 +154,6 @@ const WW_BENCH = (() => {
     setPath(keys, seconds) { buildPath(keys, seconds); },
     active() { return flying; },
     isBench() { return bench; },
-    // Call once per frame before render when flying. Returns pose or null.
     tick(now) {
       if (!flying || !path) return null;
       if (!lastT) lastT = now;
@@ -155,6 +172,18 @@ const WW_BENCH = (() => {
     },
     recordGpu(ms) {
       if (bench && ms > 0 && ms < 1e3 && nGpu < LOGN) logGpu[nGpu++] = ms;
+    },
+    recordCpu(frameMs, cullMs) {
+      if (bench && nCpu < LOGN) {
+        logCpu[nCpu] = frameMs;
+        logCull[nCpu] = cullMs || 0;
+        nCpu++;
+      }
+    },
+    recordPass(passes, draws, inst) {
+      lastPasses = passes | 0;
+      lastDraws = draws | 0;
+      lastInst = inst | 0;
     },
     summarize,
     print
