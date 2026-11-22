@@ -150,7 +150,8 @@ fn laceCell(p: vec2<f32>, t: f32) -> f32 {
     for (var x = -1; x <= 1; x++) {
       let g = vec2<f32>(f32(x), f32(y));
       let h = vec2<f32>(hash21(i + g), hash21(i + g + vec2<f32>(17.3, 5.1)));
-      let o = 0.5 + 0.36 * sin(vec2<f32>(t) + 6.2831853 * h);
+      // Drift that breathes — cells migrate, stretch, and recombine like real foam.
+      let o = 0.5 + 0.42 * sin(vec2<f32>(t * 0.85 + h.y * 1.7, t * 1.15 + h.x * 2.1) + 6.2831853 * h);
       let r = g + o - f;
       let d = dot(r, r);
       if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
@@ -159,26 +160,32 @@ fn laceCell(p: vec2<f32>, t: f32) -> f32 {
   return sqrt(d2) - sqrt(d1);
 }
 fn foamCover(xz: vec2<f32>, dens: f32, foot: f32) -> f32 {
-  if (dens <= 0.012) { return 0.0; }
+  if (dens <= 0.01) { return 0.0; }
   let d = sat(dens);
-  // Advected domain: foam moves with a slow current so patches stretch and tear.
-  let flow = vec2<f32>(n2(xz * 0.08 + vec2<f32>(F.time * 0.02, 1.0)), n2(xz * 0.08 + vec2<f32>(4.0, F.time * 0.015))) - 0.5;
-  let bend = vec2<f32>(n2(xz * 1.3 + flow * 2.0 + vec2<f32>(0.0, F.time * 0.04)), n2(xz * 1.3 + vec2<f32>(9.1, 4.3))) - 0.5;
-  let bend2 = vec2<f32>(n2(xz * 4.4 + vec2<f32>(2.0, 7.0)), n2(xz * 4.4 + vec2<f32>(5.5, 1.5))) - 0.5;
-  let q = xz + flow * 0.55 + bend * 0.9 + bend2 * 0.22;
-  // Large patches, medium filaments, fine holes.
-  let e3 = laceCell(q * 0.85 + vec2<f32>(1.1, 0.4), F.time * 0.22);
-  let e2 = laceCell(q * 1.7 + vec2<f32>(3.7, 1.1), F.time * 0.45);
-  let e1 = laceCell(q * 7.3 + bend * 2.0, F.time * 0.9);
-  let t2 = pow(d, 1.2) * 1.02;
-  let w2 = clamp(foot * 1.7, 0.05, 0.28);
-  let sharp = 1.0 - smoothstep(t2 - w2, t2 + w2, e2 + (e1 - 0.28) * 0.28 + (e3 - 0.2) * 0.18);
-  let ribbon = mix(sharp, sat(pow(d, 1.55) * 1.1), smoothstep(0.25, 0.9, foot * 1.7));
-  let fineW = sat(foot * 7.3 + 0.25);
-  let bubbles = mix(0.78 + 0.22 * smoothstep(0.0, 0.3, e1), 0.92, fineW);
-  // Sparse density stays as isolated fragments, not a continuous band.
-  let frag = smoothstep(0.03, 0.22, d) * (0.55 + 0.45 * smoothstep(0.15, 0.55, e3 + 0.5));
-  return sat(ribbon * bubbles) * frag;
+  // Advected domain: foam rides a slow current and a faster ripple so patches tear organically.
+  let flow = vec2<f32>(n2(xz * 0.07 + vec2<f32>(F.time * 0.028, 1.0)), n2(xz * 0.07 + vec2<f32>(4.0, F.time * 0.019))) - 0.5;
+  let gust = vec2<f32>(n2(xz * 0.22 + F.windOff.xy * 0.4), n2(xz * 0.22 + vec2<f32>(8.0, 3.0))) - 0.5;
+  let bend = vec2<f32>(n2(xz * 1.15 + flow * 2.2 + vec2<f32>(0.0, F.time * 0.05)), n2(xz * 1.15 + vec2<f32>(9.1, 4.3))) - 0.5;
+  let bend2 = vec2<f32>(n2(xz * 3.9 + vec2<f32>(2.0, 7.0) + F.time * 0.03), n2(xz * 3.9 + vec2<f32>(5.5, 1.5))) - 0.5;
+  let q = xz + flow * 0.7 + gust * 0.35 + bend * 1.05 + bend2 * 0.28;
+  // Large lobes, medium filaments, fine bubble lace — three scales that shear apart.
+  let e3 = laceCell(q * 0.72 + vec2<f32>(1.1, 0.4), F.time * 0.18);
+  let e2 = laceCell(q * 1.55 + vec2<f32>(3.7, 1.1), F.time * 0.42);
+  let e1 = laceCell(q * 6.8 + bend * 2.4, F.time * 0.95);
+  let e0 = laceCell(q * 14.0 + gust * 3.0, F.time * 1.55);
+  let t2 = pow(d, 1.15) * 1.08;
+  let w2 = clamp(foot * 1.55, 0.04, 0.26);
+  let field = e2 + (e1 - 0.26) * 0.32 + (e3 - 0.18) * 0.22 + (e0 - 0.3) * 0.12;
+  let sharp = 1.0 - smoothstep(t2 - w2, t2 + w2 * 1.15, field);
+  let ribbon = mix(sharp, sat(pow(d, 1.45) * 1.15), smoothstep(0.22, 0.85, foot * 1.7));
+  let fineW = sat(foot * 7.0 + 0.2);
+  // Bubble brightness varies — fresh foam is brighter; aging lace goes duller.
+  let age = 0.55 + 0.45 * n2(q * 2.4 + vec2<f32>(F.time * 0.11, 6.0));
+  let bubbles = mix(0.72 + 0.28 * smoothstep(0.0, 0.28, e1) * age, 0.94, fineW);
+  // Sparse density stays as isolated tongues and freckles, not a continuous band.
+  let frag = smoothstep(0.02, 0.2, d) * (0.48 + 0.52 * smoothstep(0.1, 0.58, e3 + 0.45));
+  let edgeSoft = 0.82 + 0.18 * smoothstep(0.05, 0.35, e2);
+  return sat(ribbon * bubbles * edgeSoft) * frag;
 }
 
 fn shoreFetch(xz: vec2<f32>) -> ShoreS {
@@ -1021,11 +1028,13 @@ struct GeoV {
   var washFoam = 0.0;
   var washWet = 0.0;
   if (sh.inside > 0.5 && slope < 0.72) {
-    // Wetness is where the sheet has been, not a contour of the coarse mesh.
-    washWet = sh.wet * smoothstep(0.12, 0.0, sh.h);
+    // Wetness is where the sheet has been — ragged, not a contour of the coarse mesh.
+    let wetEdge = n2(in.world.xz * 2.8) * 0.04;
+    washWet = sh.wet * smoothstep(0.14 + wetEdge, 0.0, sh.h);
     let distT = length(in.world - F.camPos);
     let footT = distT * F.tanHalf * 2.0 / max(F.res.y, 1.0) / max(abs(F.camPos.y - in.world.y) / max(distT, 0.1), 0.08);
-    washFoam = foamCover(in.world.xz, sh.foam * smoothstep(0.06, 0.0, sh.h) * 0.8, footT);
+    let leave = sh.foam * smoothstep(0.08, 0.0, sh.h) * (0.55 + 0.45 * n2(in.world.xz * 1.6 + vec2<f32>(F.time * 0.05, 0.0)));
+    washFoam = foamCover(in.world.xz, leave * 0.85, footT);
   }
   // Rain wets the ground everywhere, and it stays dark after the shower until it dries.
   let rainWet = F.wx.y * step(0.0, in.world.y) * (0.75 + 0.25 * n2(in.world.xz * 0.6));
@@ -1043,12 +1052,13 @@ struct GeoV {
   }
   if (washWet > 0.04 || washFoam > 0.02) {
     // Wet sand goes darker and slightly specular; foam is a sparse lace, not a white band.
-    col *= mix(1.0, 0.58, washWet * (1.0 - washFoam * 0.35));
+    col *= mix(1.0, 0.55, washWet * (1.0 - washFoam * 0.4));
     let Vw = normalize(F.camPos - in.world);
-    let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), 24.0) * washWet;
-    col += vec3<f32>(0.18, 0.18, 0.17) * F.sunCol * spec;
-    let sun = 0.62 + 0.5 * max(dot(n, F.sunDir), 0.0);
-    col = mix(col, vec3<f32>(0.82, 0.85, 0.82) * F.day.rgb * sun, washFoam * 0.34);
+    let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), mix(18.0, 36.0, washWet)) * washWet;
+    col += vec3<f32>(0.2, 0.21, 0.2) * F.sunCol * spec * (0.7 + 0.3 * washWet);
+    let sun = 0.58 + 0.55 * max(dot(n, F.sunDir), 0.0);
+    let foamTint = mix(vec3<f32>(0.78, 0.82, 0.8), vec3<f32>(0.9, 0.92, 0.9), washFoam);
+    col = mix(col, foamTint * F.day.rgb * sun, washFoam * 0.42);
   }
   return vec4<f32>(col, 1.0);
 }
@@ -1901,9 +1911,12 @@ fn warp(t: f32) -> f32 {
     // from the water up across the sky. Dry fragments are discarded later.
     // In the water the sheet is the simulated surface. On the sand it sits on the
     // smooth beach, so the small bed ridges do not draw contour lines.
-    // A thin film on the smooth beach. The bay is not this mesh.
-    let hVis = min(sh.h, 0.26);
-    y = field.x + hVis + 0.018;
+    // A thin film on the smooth beach. Slight front lift where foam piles —
+    // organic swash thickness, not a flat plate of water on sand.
+    let hVis = min(sh.h, 0.28);
+    let laceLift = sh.foam * 0.035 * smoothstep(0.02, 0.12, sh.h);
+    let frontLift = length(sh.vel) * 0.008 * smoothstep(0.01, 0.08, sh.h);
+    y = field.x + hVis + 0.016 + laceLift + frontLift;
   }
   var o: WaterV;
   o.world = vec3<f32>(xz.x, y, xz.y);
@@ -2332,28 +2345,43 @@ struct BlitOut {
     * (1.0 - smoothstep(0.35, 1.9, foot) * 0.88) * (1.0 - band.z * 0.55);
   var foam = foamCover(in.xz0, foamDens, foot);
   var onSheet = 0.0;
-  if (sh.inside > 0.5 && sh.foam > 0.02 && shoreOff < 0.78) {
-    // Foam follows the shallow-water velocity: tongues along flow, holes across it.
+  var sheetFilm = 0.0;
+  if (sh.inside > 0.5 && shoreOff < 0.82) {
     let spd = length(sh.vel);
-    let dir = sh.vel / max(spd, 0.15);
-    let alongF = shoreFetch(in.xz0 - dir * (0.55 + 0.35 * sat(spd))).foam;
-    let acrossF = shoreFetch(in.xz0 + vec2<f32>(-dir.y, dir.x) * 0.48).foam;
-    let backF = shoreFetch(in.xz0 + dir * 0.5).foam;
-    let tongue = sat(sh.foam * 1.35 - acrossF * 0.85);
-    let trail = sat(min(sh.foam, alongF * 1.2));
-    // Backwash: retreating flow leaves sparse fragments behind the front.
-    let retreat = sat(-dot(dir, SH.sea)) * sat(backF * 0.9 - sh.foam * 0.35);
-    let grain = n2(in.xz0 * 5.8 + dir * F.time * 0.35 + vec2<f32>(2.0, 0.0));
-    let adv = sat(max(tongue, trail * 0.75) * mix(0.7, 1.0, grain) + retreat * 0.45 * grain);
-    let band = 1.0 - smoothstep(0.5, 0.78, shoreOff);
-    let patches = foamCover(in.xz0 + dir * (F.time * 0.08), adv * 0.78, foot);
-    foam = sat(mix(foam * (1.0 - band * 0.92), patches, band));
-    onSheet = band * patches;
+    let dir = sh.vel / max(spd, 0.12);
+    // Multi-sample the front so tongues fork alongshore instead of one fat ribbon.
+    let alongF = shoreFetch(in.xz0 - dir * (0.45 + 0.4 * sat(spd))).foam;
+    let alongF2 = shoreFetch(in.xz0 - dir * (1.1 + 0.5 * sat(spd))).foam;
+    let acrossF = shoreFetch(in.xz0 + vec2<f32>(-dir.y, dir.x) * 0.42).foam;
+    let acrossF2 = shoreFetch(in.xz0 - vec2<f32>(-dir.y, dir.x) * 0.55).foam;
+    let backF = shoreFetch(in.xz0 + dir * 0.55).foam;
+    let tongue = sat(sh.foam * 1.45 - max(acrossF, acrossF2) * 0.9);
+    let trail = sat(min(sh.foam, max(alongF, alongF2 * 0.85) * 1.25));
+    // Backwash: retreating flow leaves sparse fragments and thin lace behind the front.
+    let retreat = sat(-dot(dir, SH.sea)) * sat(backF * 0.95 - sh.foam * 0.3);
+    let cusp = n2(in.xz0 * 1.7 + dir * F.time * 0.22) * 0.55 + n2(in.xz0 * 4.6 + vec2<f32>(F.time * 0.3, 2.0)) * 0.45;
+    let grain = n2(in.xz0 * 6.2 + dir * F.time * 0.4 + vec2<f32>(2.0, 0.0));
+    let adv = sat(max(tongue, trail * 0.8) * mix(0.62, 1.08, cusp) * mix(0.75, 1.05, grain)
+      + retreat * 0.55 * grain);
+    let band = 1.0 - smoothstep(0.48, 0.82, shoreOff);
+    // Live foam density from the solver, shaped into organic lace — not a painted white strip.
+    let densS = max(adv, sh.foam * (0.55 + 0.45 * cusp)) * band;
+    let patches = foamCover(in.xz0 + dir * (F.time * 0.1), densS * 0.95, foot);
+    let patches2 = foamCover(in.xz0 - dir * 0.35 + vec2<f32>(-dir.y, dir.x) * 0.2, densS * 0.55, foot);
+    let laceS = sat(max(patches, patches2 * 0.7));
+    foam = sat(mix(foam * (1.0 - band * 0.9), laceS, band * smoothstep(0.015, 0.08, densS)));
+    onSheet = band * laceS;
+    // Thin clear film of run-up — wet look without bleaching the sand white.
+    sheetFilm = band * smoothstep(0.004, 0.055, sh.h) * (1.0 - laceS * 0.55)
+      * (0.55 + 0.45 * n2(in.xz0 * 3.1 + vec2<f32>(0.0, F.time * 0.08)));
   }
 
   if (bore > 0.01) {
-    let churn = n2(in.xz0 * 2.3 + sh.vel * F.time * 0.4) * 0.6 + n2(in.xz0 * 7.0 - vec2<f32>(F.time * 0.7, 0.0)) * 0.4;
-    foam = max(foam, sat(bore * (0.55 + 0.9 * churn)));
+    let churn = n2(in.xz0 * 2.1 + sh.vel * F.time * 0.45) * 0.55
+      + n2(in.xz0 * 6.5 - vec2<f32>(F.time * 0.75, 0.0)) * 0.3
+      + n2(in.xz0 * 14.0 + sh.vel.yx * F.time * 0.2) * 0.15;
+    // Breaking face: bright aerated wall, then torn lace — not a solid slab.
+    foam = max(foam, sat(bore * (0.4 + 1.05 * churn)));
   }
   if (in.sheet > 0.5 && sh.bed < -0.02) { discard; }
 
@@ -2430,19 +2458,25 @@ struct BlitOut {
     var look = in.clip.xy;
     var sp = worldAt(look, dep);
     var d = in.world.y - sp.y;
-    let sheet = sh.inside > 0.5 && sh.bed > -0.4 && sh.h < 0.85 && sh.h > 0.006;
+    let sheet = sh.inside > 0.5 && sh.bed > -0.4 && sh.h < 0.85 && sh.h > 0.004;
     if (sheet) {
-      let bend = N.xz * sh.h * 5.0 * F.mat.z;
+      let bend = N.xz * sh.h * 4.2 * F.mat.z;
       let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
-      // The sand is a few centimetres under this pixel. Grazing view does not
-      // turn that into a metre of water, or the sheet goes milky.
-      let depth = max(sh.h, 0.004) / max(ndv, 0.62);
-      // Same optical family as underwater Beer's law (W_KD) — one water system above/below.
-      let sigma = (W_KD * 9.5 + vec3<f32>(0.12, 0.02, 0.01)) * max(F.deepC.w, 0.08);
-      let trans = exp(-depth * sigma);
+      // Thin swash: sand reads through a short optical path — turquoise film, not milky glass.
+      let depth = max(sh.h, 0.003) / max(ndv, 0.55);
+      let sigma = (W_KD * 8.4 + vec3<f32>(0.1, 0.018, 0.012)) * max(F.deepC.w, 0.08);
+      let trans = exp(-depth * sigma * mix(1.35, 0.85, sat(sh.h / 0.2)));
       let sceneCol = textureLoad(sceneTex, vec2<i32>(shifted), 0).rgb;
-      let scatter = mix(F.shalC.rgb, F.deepC.rgb, sat(sh.h / 0.45));
+      // Warm shallow scatter near the lip; cooler as the sheet thickens.
+      let scatter = mix(
+        mix(F.shalC.rgb * 1.15, vec3<f32>(0.12, 0.42, 0.48), 0.35),
+        F.deepC.rgb,
+        sat(sh.h / 0.38)
+      );
       base = sceneCol * trans + scatter * (1.0 - trans);
+      // Leading edge of the wash: a soft bright rim before the foam lace takes over.
+      let lip = smoothstep(0.002, 0.028, sh.h) * (1.0 - smoothstep(0.04, 0.14, sh.h));
+      base = mix(base, base * vec3<f32>(1.08, 1.12, 1.06) + F.shalC.rgb * 0.12, lip * 0.55);
     } else if (d > -0.05) {
       // Clamp refraction warp near the eye / grazing — stops waterline streaks from wrong-side samples.
       let bendScale = 7.0 * F.mat.z * (1.0 - sat(1.0 - length(in.world - F.camPos) / 6.0) * 0.65)
@@ -2473,15 +2507,32 @@ struct BlitOut {
   if (dep < 0.9995 && in.sheet < 0.5) {
     film = smoothstep(0.0, 0.09, in.world.y - worldAt(in.clip.xy, dep).y);
   }
-  let foamCol = mix(vec3<f32>(0.68, 0.74, 0.72), vec3<f32>(0.9, 0.92, 0.9), sat(foam)) * F.day.rgb;
-  base = mix(base, foamCol, foam * mix(0.26, 0.58, onSheet));
+  // Fresh foam is bright and cool; aging lace goes warmer and duller.
+  let foamAge = 0.45 + 0.55 * n2(in.xz0 * 2.8 + vec2<f32>(F.time * 0.09, 3.0));
+  let foamCol = mix(
+    vec3<f32>(0.62, 0.7, 0.68),
+    mix(vec3<f32>(0.88, 0.9, 0.89), vec3<f32>(0.95, 0.96, 0.94), foamAge),
+    sat(foam)
+  ) * F.day.rgb;
+  base = mix(base, foamCol, foam * mix(0.28, 0.72, onSheet));
+  // Clear run-up film tints sand without hiding it.
+  if (sheetFilm > 0.02) {
+    base = mix(base, mix(base, F.shalC.rgb * 1.05, 0.35), sheetFilm * 0.55);
+  }
 
   // On the sheet the wash is whitewater, not a mirror. The open sea keeps its Fresnel.
   let sheetK = smoothstep(0.5, 1.0, in.sheet);
-  var fresK = fres * reflK * (1.0 - foam * mix(0.45, 0.85, onSheet)) * film;
-  // The film on the sand is the water and the foam, not a mirror of the horizon.
-  fresK = mix(fresK, fresK * 0.6, sheetK);
+  // Soft Fresnel on thin film — wet sand gleams at grazing angles without a hard plate.
+  let filmFres = mix(0.35, 0.85, sat(pow(1.0 - ndv, 3.2))) * (0.4 + 0.6 * sheetFilm);
+  var fresK = fres * reflK * (1.0 - foam * mix(0.45, 0.88, onSheet)) * film;
+  fresK = mix(fresK, max(fresK * 0.45, filmFres * reflK * 0.55), sheetK);
   var col = mix(base, reflCol, fresK);
+  // Micro-sheen on the wet film and lace edges.
+  if (sheetK > 0.4) {
+    let sheen = pow(sat(dot(N, normalize(F.sunDir + V))), mix(48.0, 18.0, foam))
+      * (sheetFilm * 0.55 + onSheet * 0.35 + foam * 0.15);
+    col += F.sunCol * vec3<f32>(0.85, 0.92, 0.95) * sheen * 0.22 * sunShadow(in.world);
+  }
   // Capillary glitter stays in the specular lobe only; distance raises lobe width to kill fireflies.
   let foamK = 1.0 - foam * 0.85;
   let glK = open * ww.w * (1.0 - band.z * 0.85);
@@ -2513,9 +2564,12 @@ struct BlitOut {
     let dmn = in.xz0 - SH.origin;
     let fi = dot(dmn, SH.along) / SH.dx;
     let border = smoothstep(1.0, 16.0, fi) * smoothstep(SH.nx - 1.0, SH.nx - 16.0, fi);
-    let fade = smoothstep(-0.04, 0.04, sh.bed);
-    let body = max(smoothstep(0.012, 0.06, sh.h), smoothstep(0.12, 0.4, sh.foam));
-    alpha = border * fade * mix(body * 0.32, 0.85, smoothstep(0.22, 0.65, foam));
+    // Soft waterline — ragged wet edge, not a hard contour of the bed.
+    let ragged = n2(in.xz0 * 2.4) * 0.035 + n2(in.xz0 * 7.0 + vec2<f32>(F.time * 0.05, 0.0)) * 0.018;
+    let fade = smoothstep(-0.05 - ragged, 0.06 + ragged, sh.bed);
+    let body = max(smoothstep(0.006, 0.05, sh.h), smoothstep(0.08, 0.38, sh.foam));
+    let filmA = sheetFilm * 0.42;
+    alpha = border * fade * sat(mix(body * 0.28 + filmA, 0.92, smoothstep(0.18, 0.7, foam)));
   }
   return vec4<f32>(tonemap(airOver(col, in.clip.xy)), alpha);
 }

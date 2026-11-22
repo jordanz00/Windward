@@ -272,24 +272,32 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let peak = max(front - 0.5 * (frontL + frontR), 0.0) * invDx;
   // A straight crest produces almost no foam. Local peaks and converging
   // flow do, so the break comes apart along the beach instead of as one band.
-  let peakGate = smoothstep(0.004, 0.045, peak);
-  let conv = smoothstep(0.08, 0.7, -div);
+  let peakGate = smoothstep(0.003, 0.04, peak);
+  let conv = smoothstep(0.06, 0.65, -div);
+  // Alongshore modulation — cusps breathe so consecutive breakers do not stack as one stripe.
+  let pos = cellPos(x, z);
+  let cuspN = fract(sin(dot(pos, vec2<f32>(0.137, 0.091)) + U.time * 0.31) * 43758.17);
+  let cuspBias = 0.55 + 0.9 * cuspN;
   // Foam prefers crest peaks and converging flow — not a uniform shoreline mask.
-  foamN += brk * (0.02 + 1.05 * max(peakGate, conv * 0.75)) * (0.1 + lost * 0.7) * dt * 8.0;
-  let dilute = smoothstep(0.3, 0.04, foamN);
-  // Expansion, shear and retreat tear dilute foam into fragments.
-  foamN *= exp(-dt * (0.22 + 3.8 * max(div, 0.0) + 1.35 * abs(shear) + dilute * 1.35));
+  foamN += brk * (0.04 + 1.15 * max(peakGate, conv * 0.8) * cuspBias) * (0.12 + lost * 0.75) * dt * 9.0;
+  // Thin sheet aeration when fast water skims over nearly dry sand.
+  let skim = smoothstep(0.35, 1.1, Fr) * smoothstep(0.12, 0.02, hN) * smoothstep(-0.05, 0.08, b);
+  foamN += skim * (0.35 + 0.65 * peakGate) * dt * 2.4;
+  let dilute = smoothstep(0.28, 0.035, foamN);
+  // Expansion, shear and retreat tear dilute foam into fragments; dense lace lingers longer.
+  let retreat = clamp(-dot(vel, S) / max(sp, 0.15), 0.0, 1.0);
+  foamN *= exp(-dt * (0.16 + 3.4 * max(div, 0.0) + 1.2 * abs(shear) + dilute * 1.15 + retreat * 0.55));
   // A uniform collapse stays a clear sheet. Only the locally stronger
   // parts of the front throw foam, so the wash is not one white band.
-  foamN = clamp(foamN + spill * (0.12 + 1.7 * peakGate), 0.0, 1.25);
+  foamN = clamp(foamN + spill * (0.15 + 1.85 * peakGate * cuspBias), 0.0, 1.3);
 
   var ground = wet0.z;
-  if (hN < 0.025 && b > -0.04 && foamN > 0.04) {
-    ground = max(ground, foamN * 0.85);
-    foamN *= 0.45;
+  if (hN < 0.028 && b > -0.05 && foamN > 0.035) {
+    ground = max(ground, foamN * 0.8);
+    foamN *= 0.5;
   }
-  ground *= exp(-dt * 0.07);
-  if (hN > 0.08) { ground *= exp(-dt * 0.4); }
+  ground *= exp(-dt * 0.055);
+  if (hN > 0.08) { ground *= exp(-dt * 0.35); }
 
   // Coupling is a band of grid rows at the seaward side, not a contour of the bed.
   let off = f32(z) / max(U.nz - 1.0, 1.0);
@@ -344,9 +352,10 @@ async function createShore(device, world, anchor, shapeView) {
       const band = smooth01(1.15, 0.2, h) * smooth01(-1.1, -0.2, h);
       // Cusps and ridges live only in the sim bed. The drawn beach stays smooth,
       // so the run-up fingers without painting contour lines on the sand.
-      const cusp = (vnoise(x * 0.13, z * 0.13 + 3.0) - 0.5) * 0.36;
-      const ridge = (vnoise(x * 0.55, z * 0.55) - 0.5) * 0.1;
-      const grain = (vnoise(x * 1.9 + 4.0, z * 1.9) - 0.5) * 0.045;
+      const cusp = (vnoise(x * 0.11, z * 0.11 + 3.0) - 0.5) * 0.42
+        + (vnoise(x * 0.29, z * 0.29 + 8.0) - 0.5) * 0.18;
+      const ridge = (vnoise(x * 0.55, z * 0.55) - 0.5) * 0.12;
+      const grain = (vnoise(x * 1.9 + 4.0, z * 1.9) - 0.5) * 0.05;
       h += (cusp + ridge + grain) * band;
       // Deeper than the surf zone, the cell is the ocean. The solver owns the wash.
       let drive = 0;
