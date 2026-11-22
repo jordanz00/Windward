@@ -733,25 +733,26 @@ fn sunShadow(p: vec3<f32>) -> f32 {
   // Depth bias in light space (~1–2 texels) instead of a metre-scale world offset.
   let z = clamp(c.z / w - 0.0012, 0.0, 1.0);
   let t = 1.0 / 2048.0;
+  // CompareLevel: sunShadow is sampled from divergent water/leaf paths; plain Compare is illegal there.
   var s = 0.0;
-  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(-t, -t), z);
-  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(t, -t), z);
-  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(-t, t), z);
-  s += textureSampleCompare(shadowMap, shadowSamp, uv + vec2<f32>(t, t), z);
-  s += textureSampleCompare(shadowMap, shadowSamp, uv, z);
+  s += textureSampleCompareLevel(shadowMap, shadowSamp, uv + vec2<f32>(-t, -t), z);
+  s += textureSampleCompareLevel(shadowMap, shadowSamp, uv + vec2<f32>(t, -t), z);
+  s += textureSampleCompareLevel(shadowMap, shadowSamp, uv + vec2<f32>(-t, t), z);
+  s += textureSampleCompareLevel(shadowMap, shadowSamp, uv + vec2<f32>(t, t), z);
+  s += textureSampleCompareLevel(shadowMap, shadowSamp, uv, z);
   let inside = smoothstep(0.0, 0.04, raw.x) * smoothstep(1.0, 0.96, raw.x)
              * smoothstep(0.0, 0.04, raw.y) * smoothstep(1.0, 0.96, raw.y);
   let far = mix(shadowAt(p), s * 0.2, inside);
   // Close to the eye, the tight map. Soft penumbra matches sunlight past a frond.
   let recvNear = F.sunDir * (0.012 / sy);
   let cn = F.nearVP * vec4<f32>(p + recvNear, 1.0);
-  let un = vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5);
+  let un = clamp(vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5), vec2<f32>(0.001), vec2<f32>(0.999));
   let zn = clamp(cn.z - 0.0008, 0.0, 1.0);
   let tn = 3.6 / 2048.0;
   var sn = 0.0;
   for (var y = -1; y <= 1; y++) {
     for (var x = -1; x <= 1; x++) {
-      sn += textureSampleCompare(shadowNear, shadowSamp, un + vec2<f32>(f32(x), f32(y)) * tn, zn);
+      sn += textureSampleCompareLevel(shadowNear, shadowSamp, un + vec2<f32>(f32(x), f32(y)) * tn, zn);
     }
   }
   // Wider soft handoff so cascade edges do not jump when the eye moves.
@@ -2122,21 +2123,19 @@ const DROP_SPRAY: u32 = 60000u;
 // comes through gaps in the fronds as shafts and stops where a trunk or a hill is in the way.
 fn sunVis(p: vec3<f32>) -> f32 {
   // Tiny offset toward the sun so volumetric samples sit just above caster surfaces.
+  // Always sample both maps (no divergent if) — safer under air-pass wave divergence.
   let q = p + F.sunDir * 0.04;
   let cn = F.nearVP * vec4<f32>(q, 1.0);
   let nearIn = max(abs(cn.x), abs(cn.y));
-  var nearLit = 1.0;
-  if (nearIn < 0.98) {
-    nearLit = textureSampleCompareLevel(shadowNear, shadowSamp, vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5), clamp(cn.z - 0.0006, 0.0, 1.0));
-  }
+  let un = clamp(vec2<f32>(cn.x * 0.5 + 0.5, 0.5 - cn.y * 0.5), vec2<f32>(0.001), vec2<f32>(0.999));
+  let nearLit = textureSampleCompareLevel(shadowNear, shadowSamp, un, clamp(cn.z - 0.0006, 0.0, 1.0));
   let c = F.shadowVP * vec4<f32>(q, 1.0);
-  let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
-  var farLit = 1.0;
-  if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
-    farLit = textureSampleCompareLevel(shadowMap, shadowSamp, uv, clamp(c.z - 0.001, 0.0, 1.0));
-  }
+  let uv = clamp(vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5), vec2<f32>(0.001), vec2<f32>(0.999));
+  let farLit = textureSampleCompareLevel(shadowMap, shadowSamp, uv, clamp(c.z - 0.001, 0.0, 1.0));
   let wn = 1.0 - smoothstep(0.7, 0.96, nearIn);
-  return mix(farLit, nearLit, wn);
+  let inside = smoothstep(0.0, 0.04, uv.x) * smoothstep(1.0, 0.96, uv.x)
+    * smoothstep(0.0, 0.04, uv.y) * smoothstep(1.0, 0.96, uv.y);
+  return mix(mix(1.0, farLit, inside), nearLit, wn);
 }
 // Metres of a path that count, through a layer thinning upward as exp(-h/H), for a piece of
 // the path seg long that runs between heights ya and yb above the ground. Worked out rather
@@ -2574,12 +2573,6 @@ struct BlitOut {
   var fresK = fres * reflK * (1.0 - foam * mix(0.45, 0.88, onSheet)) * film;
   fresK = mix(fresK, max(fresK * 0.45, filmFres * reflK * 0.55), sheetK);
   var col = mix(base, reflCol, fresK);
-  // Micro-sheen on the wet film and lace edges.
-  if (sheetK > 0.4) {
-    let sheen = pow(sat(dot(N, normalize(F.sunDir + V))), mix(48.0, 18.0, foam))
-      * (sheetFilm * 0.55 + onSheet * 0.35 + foam * 0.15);
-    col += F.sunCol * vec3<f32>(0.85, 0.92, 0.95) * sheen * 0.22 * sunShadow(in.world);
-  }
   // Capillary glitter stays in the specular lobe only; distance raises lobe width to kill fireflies.
   let foamK = 1.0 - foam * 0.85;
   let glK = open * ww.w * (1.0 - band.z * 0.85);
@@ -2599,7 +2592,11 @@ struct BlitOut {
       spec = max(spec, ggxGlint(Nk, V, glRough, fres * reflK * 0.85));
     }
   }
+  // One shadow sample for water + sheet sheen (never behind a divergent if).
   let lit = sunShadow(in.world);
+  let sheen = pow(sat(dot(N, normalize(F.sunDir + V))), mix(48.0, 18.0, foam))
+    * (sheetFilm * 0.55 + onSheet * 0.35 + foam * 0.15) * sat(sheetK * 2.0);
+  col += F.sunCol * vec3<f32>(0.85, 0.92, 0.95) * sheen * 0.22 * lit;
   col += spec * foamK * lit * lit * mix(0.72, 0.4, band.z);
   let crestLight = pow(sat(1.0 - N.y), 1.6) * sat(S.disp.y * 0.8) * max(dot(F.sunDir, vec3<f32>(0.0, 1.0, 0.0)), 0.0);
   col += F.sunCol * vec3<f32>(0.4, 0.55, 0.5) * crestLight * 0.07;
