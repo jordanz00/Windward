@@ -1038,6 +1038,8 @@ struct MeshV {
   @location(2) col: vec3<f32>,
   @location(3) kind: f32,
   @location(4) uv: vec2<f32>,
+  // Pre-wind plant space — foliage cutouts must not crawl when the crown sways.
+  @location(5) rest: vec3<f32>,
 }
 struct MeshIn {
   @location(0) p: vec3<f32>,
@@ -1166,6 +1168,7 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
 }
 @vertex fn vsMesh(in: MeshIn) -> MeshV {
   var o: MeshV;
+  o.rest = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
   o.world = meshPlace(in);
   o.nrm = spinY(normalize(in.n.xyz / vec3<f32>(1.0, in.i1.y, 1.0)), in.i0.w);
   // A tree's own tint is in its leaves. Its bark stays close to bark.
@@ -1232,8 +1235,9 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
     let rim = 1.0 - abs(dot(n, Vv));
     let dist = length(F.camPos - in.world);
     let an = abs(n);
-    var pq = in.world.xz;
-    if (an.x > an.y && an.x > an.z) { pq = in.world.zy; } else if (an.z > an.y) { pq = in.world.xy; }
+    // Sample cutouts in rest pose so wind sway does not crawl holes across the crown.
+    var pq = in.rest.xz;
+    if (an.x > an.y && an.x > an.z) { pq = in.rest.zy; } else if (an.z > an.y) { pq = in.rest.xy; }
     let near = 1.0 - smoothstep(30.0, 85.0, dist);
     // Clumps a metre across at any distance; single leaves once they are big enough to see.
     let B = leafCells(pq * 0.85 + 17.0);

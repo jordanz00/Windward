@@ -1006,13 +1006,15 @@ Scatter.prototype.finish = function () {
   this.counts = new Int32Array(meshes.length);
   this.starts = new Int32Array(meshes.length);
   this.cursor = new Int32Array(meshes.length);
-  // Rotating draw lists — independent refs per pass, no per-frame array alloc.
+  // Rotating draw lists for per-frame passes only. Long-lived lists (island shadow)
+  // must pass their own array via `into` — never alias the pool.
   this.drawPool = [[], [], [], []];
   this.drawPoolI = 0;
 };
 // Cull, pick a level of detail, and group by mesh. Writes instances into out at
 // offset at (in instances) and returns the draws. vp null means no frustum test.
-Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser) {
+// into: optional persistent draw list (required for lists kept across frames).
+Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, into) {
   const d = this.data, counts = this.counts, starts = this.starts, slotOf = this.slotOf;
   const cap = (out.length / ISTRIDE) | 0;
   counts.fill(0);
@@ -1049,7 +1051,7 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser) {
     slotOf[i] = slot;
   }
   let run = at;
-  const draws = this.drawPool[this.drawPoolI++ & 3];
+  const draws = into || this.drawPool[this.drawPoolI++ & 3];
   draws.length = 0;
   for (let s = 0; s < counts.length; s++) {
     starts[s] = run;
@@ -2497,12 +2499,15 @@ async function main() {
     const instArr = new Float32Array(instCap * ISTRIDE);
     const instB = device.createBuffer({ size: instArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     // Island-wide shadow: coarsest LOD, culled to a practical reach so tiny understory is skipped.
+    // Own draw list — must not share the per-frame pool (that reused slot wiped casters → shadow glitches).
     const farArr = new Float32Array(Math.max(1, scatter.n) * ISTRIDE);
-    const farDraws = scatter.collect(farArr, 0, null, beach.x, 8, beach.z, 560, 9);
+    const farDraws = [];
+    scatter.collect(farArr, 0, null, beach.x, 8, beach.z, 560, 9, farDraws);
     const instFarB = upload(farArr, GPUBufferUsage.VERTEX);
     let mainDraws = [], reflDraws = [], shadowFor = null;
     let nearShadowKey = null;
     let nearShadowUnder = null;
+    const shadowSun = [0, 0, 0];
     const nearShadowScratch = [0, 0, 0, 0, 0, 0];
     // Plants, fish and insects are all drawn the same way: one buffer of prototypes, one of
     // instances, and a list of runs. A pipeline that is still being built draws nothing yet.
@@ -3098,7 +3103,7 @@ async function main() {
       }
       // Island shadow: redraw when the light has moved about half a degree.
       if (!shadowFor || uf[52] * shadowFor[0] + uf[53] * shadowFor[1] + uf[54] * shadowFor[2] < 0.99996) {
-        if (!shadowFor) shadowFor = nearShadowScratch;
+        if (!shadowFor) shadowFor = shadowSun;
         shadowFor[0] = uf[52]; shadowFor[1] = uf[53]; shadowFor[2] = uf[54];
         const spass = enc.beginRenderPass(shadowPass);
         spass.setPipeline(pipes.shadowTerrain); spass.setBindGroup(0, bgUB);
@@ -3113,8 +3118,8 @@ async function main() {
         const eyeMove = Math.hypot(camX - nsk[0], camY - nsk[1], camZ - nsk[2]);
         const sunDot = uf[52] * nsk[3] + uf[53] * nsk[4] + uf[54] * nsk[5];
         const underFlip = nearShadowUnder !== under;
-        // Soft PCF hides sub-metre shifts; avoid rebuilding the map every tiny step.
-        if (eyeMove > 0.7 || sunDot < 0.99985 || underFlip) {
+        // Soft PCF hides sub-metre shifts; keep cadence tight enough that frond shadows do not stick.
+        if (eyeMove > 0.5 || sunDot < 0.9999 || underFlip) {
           nsk[0] = camX; nsk[1] = camY; nsk[2] = camZ;
           nsk[3] = uf[52]; nsk[4] = uf[53]; nsk[5] = uf[54];
           nearShadowUnder = under;
