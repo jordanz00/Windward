@@ -164,9 +164,13 @@ function Mesh() { this.pos = []; this.nrm = []; this.col = []; this.sway = []; t
 Mesh.prototype.v = function (x, y, z, nx, ny, nz, r, g, b, s, kind, u, v) {
   const i = this.pos.length / 3;
   this.pos.push(x, y, z); this.nrm.push(nx, ny, nz); this.col.push(r, g, b); this.sway.push(s || 0);
-  this.kind.push(kind || 0); this.uv.push(u || 0, v || 0);
+  this.kind.push(kind === LEAF ? LEAF + (this.part || 0) : kind || 0); this.uv.push(u || 0, v || 0);
   return i;
 };
+// Starts a leaf. Every vertex of one leaf carries the same number of its own, under 0.4, on
+// top of its kind, where everything that reads the kind rounds it away. Between two levels
+// of detail a leaf comes and goes whole by that number (fsMesh).
+Mesh.prototype.leaf = function () { this.leaves = (this.leaves || 0) + 1; this.part = (this.leaves * 0.6180339887 % 1) * 0.4; };
 Mesh.prototype.tri = function (a, b, c) { this.idx.push(a, b, c); };
 function appendMesh(dst, src, x, y, z, rot, sc, tint, sy) {
   const c = Math.cos(rot), s = Math.sin(rot);
@@ -278,6 +282,7 @@ function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway, twist,
   sx /= sl; sz /= sl;
   const tw = twist || 0;
   const tipC = [col[0] * 1.18, col[1] * 0.92, col[2] * 0.55];
+  m.leaf();
   if (segs > 2) {
     // A broad blade: a stalk, then a long oval that arches over under its own weight, folded
     // along the midrib and a little wavy at the edge. Rows of three vertices, so the fold is real.
@@ -474,6 +479,7 @@ function makePalm(seed, lod) {
         // Mild fold shared for the whole leaflet — avoids left/right normal spikes.
         const fold0 = 0.28 + fr() * 0.12;
         const twistN = (fr() - 0.5) * 0.1;
+        m.leaf();
         for (let k = 0; k <= lseg; k++) {
           const s = k / lseg;
           const dir = unit([d[0], d[1] - hg * Math.pow(s, 1.25), d[2]]);
@@ -829,6 +835,7 @@ function makeTree(seed, lod) {
     const sd = unit(cross(up, d)), nn = unit(cross(d, sd));
     const ns = unit([nn[0] + out[0] * 0.9, nn[1] + out[1] * 0.9 + 0.25, nn[2] + out[2] * 0.9]);
     const ix = [];
+    m.leaf();
     // Stalk end, the two widest points, the tip: two triangles that meet along the midrib.
     for (const [t, side, c] of [[0, 0, 0.8], [0.46, 1, 1], [0.46, -1, 1], [1, 0, 1.12]]) {
       const h = side ? wid * 0.3 : -t * len * 0.3;
@@ -1080,9 +1087,8 @@ function Scatter() { this.protos = []; this.data = []; this.kind = []; }
 // lods: meshes from finest to coarsest. cuts: the distance where each one hands over.
 // far: the same for the mirror and the shadow maps, which start a level down; they are
 // given only where the view's cuts are further out than those passes have any use for.
-// leafy: the plant's leaves are single blades that can come and go one at a time (fsMesh).
-Scatter.prototype.proto = function (lods, radius, cuts, far, leafy) {
-  this.protos.push({ lods: lods, r: radius, cuts: cuts || [], far: far || cuts || [], leafy: leafy ? 128 : 0 });
+Scatter.prototype.proto = function (lods, radius, cuts, far) {
+  this.protos.push({ lods: lods, r: radius, cuts: cuts || [], far: far || cuts || [] });
   return this.protos.length - 1;
 };
 // soft: wind stiffness (i1.w); bias: leaf age/hue bias packed in tint.w (i2.w).
@@ -1186,17 +1192,20 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
             if (ok) {
               let lod = coarser;
               const bias = Math.min(28, r * 1.8), last = p.lods.length - 1, cuts = coarser ? p.far : p.cuts;
+              // The view's cuts are set for a canvas some 1400 pixels high. On a smaller one a
+              // blade is under a pixel sooner, and the level with wider blades takes over sooner.
+              const near = coarser ? 1 : Math.max(0.4, Math.min(1, 0.0008 / (this.pxw || 0.0008)));
               // From altitude, keep finer crowns a little longer.
               const airBias = ey > 35 ? Math.min(55, (ey - 35) * 0.45) : 0;
               while (lod < cuts.length && lod < last) {
-                const c = cuts[lod] + bias + airBias;
+                const c = cuts[lod] * near + bias + airBias;
                 if (dist <= c) break;
                 // In a view, a level does not switch at its cut. Over the next 14 m (less for
                 // a cut close by) the plant is drawn at both levels, and the finer one's share
                 // of it falls from all to none. The share follows distance alone, so there is
                 // no moment of change and nothing to flip back and forth at a boundary.
                 const t = (dist - c) / Math.min(c * 0.3, 14);
-                if (vp && t < 1) { q = Math.max(1, Math.min(63, Math.round((1 - t) * 64))) + p.leafy; break; }
+                if (vp && t < 1 && this.fade) { q = Math.max(1, Math.min(63, Math.round((1 - t) * 64))); break; }
                 lod++;
               }
               slot = this.slot0[this.kind[i]] + Math.min(lod, last);
@@ -1234,8 +1243,7 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
         const s = slotOf[i];
         if (s < 0) continue;
         // A plant between two levels goes into both, with the finer one's share packed above
-        // the wind exposure (which is under 2): 1..63 on the finer copy, 64 more on the
-        // coarser, and 128 more on both for a leafy plant.
+        // the wind exposure (which is under 2): 1..63 on the finer copy, 64 more on the coarser.
         const q = fadeQ[i], o = i * ISTRIDE;
         for (let b = q ? 1 : 0; b >= 0; b--) {
           const dst = cursor[s + b];
@@ -2406,7 +2414,11 @@ async function main() {
     const context = canvas.getContext('webgpu');
     const format = navigator.gpu.getPreferredCanvasFormat();
 
-    const code = shaderCode(q.hres, q.span, q.water);
+    // The scene and its mirror are drawn with four samples to the pixel. A palm's leaflets
+    // and a tree's leaves are a pixel wide or less from a few metres off, and with one sample
+    // each was there or not as it swayed, so every crown flashed in the wind.
+    const MS = qstr.get('msaa') === '0' ? 1 : 4;
+    const code = shaderCode(q.hres, q.span, q.water, MS);
     const mod = device.createShaderModule({ code: code });
     const simMod = device.createShaderModule({ code: SIM_WGSL });
     const oceanMod = device.createShaderModule({ code: OCEAN_WGSL });
@@ -2415,9 +2427,10 @@ async function main() {
     const ubLayout = layoutOf(device, VS | FS, 'u');
     const geoLayout = layoutOf(device, VS | FS, 'uttdcuttasdf');
     const simLayout = layoutOf(device, FS, 'tu');
-    const waterLayout = layoutOf(device, VS | FS, 'tdfstttf');
+    const zLetter = MS > 1 ? 'm' : 'd';
+    const waterLayout = layoutOf(device, VS | FS, 't' + zLetter + 'fstttf');
     // The air pass reads the scene's depth and nothing else from the second group.
-    const airLayout = layoutOf(device, FS, 'd', 1);
+    const airLayout = layoutOf(device, FS, zLetter, 1);
     const geoPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout] });
     const skyPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout] });
     // The sky's passes each read what the one before made: noise, then weather, then cloud
@@ -2461,6 +2474,8 @@ async function main() {
     // join when they are ready.
     // name, layout, vertex entry, fragment entry (none for a shadow), then what differs from
     // the common case: buffers, cull, depth, the target's format and blend, another module.
+    // What is drawn into the scene or its mirror, which is whatever keeps their depth
+    // format, is drawn with their samples.
     const jobs = [], lateJobs = [];
     let late = false;
     const whenBuilt = (name, set, promise) => (late ? lateJobs : jobs).push(promise.then((p) => { set[name] = p; }));
@@ -2471,11 +2486,12 @@ async function main() {
         vertex: { module: m, entryPoint: vs, buffers: o.buffers },
         fragment: fs ? { module: m, entryPoint: fs, targets: [{ format: o.format || sceneFmt, blend: o.blend }] } : undefined,
         primitive: { topology: 'triangle-list', cullMode: o.cull || 'none' },
-        depthStencil: o.depth
+        depthStencil: o.depth,
+        multisample: { count: fs && o.depth && o.depth.format === 'depth32float' ? MS : 1 }
       }));
     };
     // The sea first: its shader is the longest to compile, so it is given the longest start.
-    pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, depth: noZ });
+    pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
     pipe('sky', geoPL, 'vsSky', 'fsSky', { depth: depthOn('depth32float', true, 'always') });
     pipe('weather', skyPLs[0], 'vsSky', 'fsWeather', {});
     pipe('cloudShadow', skyPLs[1], 'vsSky', 'fsCloudShadow', {});
@@ -2683,7 +2699,7 @@ async function main() {
     }
     // Interior forest: pick form by habitat — slender near coast, emergent inland, rounded in dense cover.
     // Bounding radius must match canopy size or distant trees fail the pixel/frustum tests and pop.
-    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [16, 82], [0, 50], true));
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [16, 82], [0, 50]));
     let trees = 0;
     for (let i = 0; i < q.forest * 32 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
@@ -3019,6 +3035,7 @@ async function main() {
     mark('pipelines');
     const shadowPass = passOf(undefined, null, shadowView);
     let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null, airTex = null, bgAir = null;
+    let sceneMS = null, reflMS = null;
     let readTex = null, readDepth = null, readBuf = null, readBpr = 0;
     let bgGeoSet = [null, null], bgGeoR, bgUB, bgUBR, bgWater;
     let viewW = 2, viewH = 2;
@@ -3055,12 +3072,17 @@ async function main() {
       canvas.width = w; canvas.height = h;
       context.configure({ device: device, format: format, alphaMode: 'opaque' });
       destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth); destroyTex(airTex);
+      destroyTex(sceneMS); destroyTex(reflMS);
       sceneTex = targetOf(device, w, h, sceneFmt);
-      sceneDepth = targetOf(device, w, h, 'depth32float');
+      // The depth keeps every sample, since the passes after the scene read it. The colour's
+      // samples are averaged into sceneTex as the pass ends and are not kept.
+      sceneDepth = targetOf(device, w, h, 'depth32float', null, MS);
       swapDepth = targetOf(device, w, h, 'depth24plus', 0);
       const rw = Math.max(2, w >> 1), rh = Math.max(2, h >> 1);
       reflTex = targetOf(device, rw, rh, sceneFmt);
-      reflDepth = targetOf(device, rw, rh, 'depth32float', 0);
+      reflDepth = targetOf(device, rw, rh, 'depth32float', 0, MS);
+      sceneMS = MS > 1 ? targetOf(device, w, h, sceneFmt, 0, MS) : null;
+      reflMS = MS > 1 ? targetOf(device, rw, rh, sceneFmt, 0, MS) : null;
       airTex = targetOf(device, rw, rh, sceneFmt);
       viewW = w; viewH = h;
       if (READ) {
@@ -3076,9 +3098,13 @@ async function main() {
       const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView(), av = airTex.createView();
       // Views are made here, once per size, not once per frame.
       airPass.colorAttachments[0].view = av;
-      scenePass.colorAttachments[0].view = sv;
+      for (const [pass, view, ms] of [[scenePass, sv, sceneMS], [reflPass, rv, reflMS]]) {
+        const c = pass.colorAttachments[0];
+        c.view = ms ? ms.createView() : view;
+        c.resolveTarget = ms ? view : undefined;
+        c.storeOp = ms ? 'discard' : 'store';
+      }
       scenePass.depthStencilAttachment.view = sd;
-      reflPass.colorAttachments[0].view = rv;
       reflPass.depthStencilAttachment.view = reflDepth.createView();
       swapDepthView = swapDepth.createView();
       bgAir = groupOf(device, airLayout, [sd], 1);
@@ -3509,6 +3535,7 @@ async function main() {
       const tCull0 = performance.now();
       if (needCull) {
         scatter.pxw = uf[63] * 2 / viewH;
+        scatter.fade = MS > 1;
         mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, plantReach, 0);
         instEnd = mainDraws.end;
         if (reflOn) {

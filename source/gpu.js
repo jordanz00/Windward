@@ -2,12 +2,14 @@
 // part of the island that talks to the GPU says it through them.
 
 // What a binding is, by one letter: u uniform, r storage read, w storage written,
-// t texture read texel by texel, f filtered texture, d depth texture, s sampler,
+// t texture read texel by texel, f filtered texture, d depth texture, m a depth texture
+// with several samples to the pixel, s sampler,
 // c comparison sampler, o texture written by a compute pass, a filtered stack of textures,
 // v filtered volume. A dash leaves that binding's number unused.
 const BINDING = {
   u: { buffer: { type: 'uniform' } }, r: { buffer: { type: 'read-only-storage' } }, w: { buffer: { type: 'storage' } },
   t: { texture: { sampleType: 'unfilterable-float' } }, f: { texture: { sampleType: 'float' } }, d: { texture: { sampleType: 'depth' } },
+  m: { texture: { sampleType: 'depth', multisampled: true } },
   s: { sampler: { type: 'filtering' } }, c: { sampler: { type: 'comparison' } },
   o: { storageTexture: { access: 'write-only', format: 'rgba16float' } },
   a: { texture: { sampleType: 'float', viewDimension: '2d-array' } }, v: { texture: { sampleType: 'float', viewDimension: '3d' } }
@@ -24,9 +26,10 @@ function groupOf(device, layout, list, first) {
     entries: list.map((r, i) => r && { binding: (first || 0) + i, resource: r instanceof GPUBuffer ? { buffer: r } : r }).filter(Boolean)
   });
 }
-// A texture to draw into. It can be read afterwards unless `usage` says otherwise.
-function targetOf(device, w, h, format, usage) {
-  return device.createTexture({ size: [w, h], format: format, usage: GPUTextureUsage.RENDER_ATTACHMENT | (usage == null ? GPUTextureUsage.TEXTURE_BINDING : usage) });
+// A texture to draw into. It can be read afterwards unless `usage` says otherwise, and
+// holds `samples` samples to the pixel when that is given.
+function targetOf(device, w, h, format, usage, samples) {
+  return device.createTexture({ size: [w, h], format: format, sampleCount: samples || 1, usage: GPUTextureUsage.RENDER_ATTACHMENT | (usage == null ? GPUTextureUsage.TEXTURE_BINDING : usage) });
 }
 // A render pass: a colour view cleared to `clear` (kept when there is none), a depth view
 // cleared to far. Either may be left out, or null to be filled in later.

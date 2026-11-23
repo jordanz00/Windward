@@ -1,4 +1,4 @@
-function shaderCode(res, span, wgrid) {
+function shaderCode(res, span, wgrid, samples) {
   const texel = (span * 2) / (res - 1);
   return `struct Frame {
   viewProj: mat4x4<f32>,
@@ -96,7 +96,7 @@ struct ShoreU {
 @group(0) @binding(11) var cshMap: texture_2d<f32>;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
-@group(1) @binding(1) var sceneDepth: texture_depth_2d;
+@group(1) @binding(1) var sceneDepth: texture_depth_${samples > 1 ? 'multisampled_' : ''}2d;
 @group(1) @binding(2) var reflTex: texture_2d<f32>;
 @group(1) @binding(3) var reflSamp: sampler;
 @group(1) @binding(4) var shapeTex: texture_2d<f32>;
@@ -724,19 +724,21 @@ struct GeoV {
   return vec4<f32>(col, 1.0);
 }
 
+// A leaflet narrower than a pixel is shaded for a pixel whose centre it misses. Read at the
+// centre these would be read from beyond its edge, where colour and normal run on to
+// values no leaf has; centroid reads them from the part of the pixel it does cover.
 struct MeshV {
   @builtin(position) clip: vec4<f32>,
-  @location(0) world: vec3<f32>,
-  @location(1) nrm: vec3<f32>,
-  @location(2) col: vec3<f32>,
-  @location(3) kind: f32,
-  @location(4) uv: vec2<f32>,
+  @location(0) @interpolate(perspective, centroid) world: vec3<f32>,
+  @location(1) @interpolate(perspective, centroid) nrm: vec3<f32>,
+  @location(2) @interpolate(perspective, centroid) col: vec3<f32>,
+  @location(3) @interpolate(perspective, centroid) kind: f32,
+  @location(4) @interpolate(perspective, centroid) uv: vec2<f32>,
   // Pre-wind plant space — foliage cutouts must not crawl when the crown sways.
-  @location(5) rest: vec3<f32>,
+  @location(5) @interpolate(perspective, centroid) rest: vec3<f32>,
   // Between two levels of detail: how far the change has gone (see fsMesh).
   @location(6) @interpolate(flat) fade: f32,
-  // A number of its own for each leaf: flat, so it is that of the leaf's first vertex,
-  // the stalk end, which both of a leaf's triangles start from.
+  // A number of its own for each leaf, the same at all its vertices.
   @location(7) @interpolate(flat) leaf: f32,
 }
 struct MeshIn {
@@ -918,7 +920,7 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   o.kind = in.n.w;
   o.uv = in.uv;
   o.fade = floor(in.i1.z * 0.5);
-  o.leaf = hash31(in.p * 733.0);
+  o.leaf = fract(in.n.w) * 2.5;
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
   return o;
 }
@@ -955,24 +957,42 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
   }
   return vec4<f32>(sqrt(best), across, id);
 }
-@fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
+// The first n of a pixel's four samples, taken a diagonal pair at a time.
+fn sampleSet(n: u32) -> u32 {
+  return select(0u, 1u, n > 0u) | select(0u, 8u, n > 1u) | select(0u, 2u, n > 2u) | select(0u, 4u, n > 3u);
+}
+struct MeshOut {
+  @location(0) col: vec4<f32>,
+  @builtin(sample_mask) mask: u32,
+}
+@fragment fn fsMesh(in: MeshV) -> MeshOut {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
   // A plant between two levels of detail is drawn at both, and fade says how much of it is
-  // still the finer one: 1..63 of 64, with 64 added on the coarser copy. Each pixel has a
-  // fixed number from 0 to 1. Solid parts trade pixels: the finer level keeps those under
-  // its share and the coarser keeps the rest, so the two fill the plant between them
-  // exactly. A tree's leaves (128 added) do not, since two different sprays of leaves
-  // mixed pixel by pixel are grain. Each leaf comes or goes whole instead, at a point of
-  // its own in the change and over a quarter of it: the crown thins and fills leaf by leaf.
+  // still the finer one: 1..63 of 64, with 64 added on the coarser copy. The two share out
+  // the pixel's four samples: the finer level is drawn into as many as its share comes to
+  // and the coarser into the rest, so averaged the pixel is the two levels mixed, and
+  // between them they fill the plant exactly. Nothing is left out pixel by pixel: a
+  // pattern of holes fixed to the screen flashed as a crown moved under it in the wind.
+  // That is for the wood, which stands in the same place at both levels. The leaves do
+  // not, and two sets of them each half there are a pale ghost of a crown. A leaf comes or
+  // goes whole instead, at a point of its own in the change and over a quarter of it: the
+  // crown thins and fills leaf by leaf.
+  var mask = 15u;
   if (in.fade > 0.5) {
-    let leafy = in.fade > 128.5;
-    let code = in.fade - select(0.0, 128.0, leafy);
-    let coarse = code > 64.5;
-    let share = (code - select(0.0, 64.0, coarse)) / 64.0;
-    let d = fract(52.9829189 * fract(dot(floor(in.clip.xy), vec2<f32>(0.06711056, 0.00583715))));
-    if (leafy && in.kind > 1.5 && in.kind < 2.5) {
-      if (d >= (select(share, 1.0 - share, coarse) - in.leaf * 0.75) * 4.0) { discard; }
-    } else if ((d < share) == coarse) { discard; }
+    let coarse = in.fade > 64.5;
+    let share = (in.fade - select(0.0, 64.0, coarse)) / 64.0;
+    // Four samples give five steps. Neighbouring pixels round a quarter-step apart, which
+    // makes them sixteen, a sixteenth of the difference between two levels at a time.
+    let px = vec2<u32>(in.clip.xy);
+    let jit = (f32(((px.x & 1u) * 2u) ^ ((px.y & 1u) * 3u)) + 0.5) * 0.25;
+    if (in.kind > 1.5 && in.kind < 2.5) {
+      let n = u32(sat((select(share, 1.0 - share, coarse) - in.leaf * 0.75) * 4.0) * 4.0 + jit);
+      mask = select(sampleSet(n), 15u ^ sampleSet(4u - n), coarse);
+    } else {
+      mask = sampleSet(u32(share * 4.0 + jit));
+      if (coarse) { mask = 15u ^ mask; }
+    }
+    if (mask == 0u) { discard; }
   }
   var n = normalize(in.nrm);
   var alb = in.col;
@@ -1121,15 +1141,15 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
   if (leaf < 0.5 && above < 0.6) {
     col *= mix(0.6, 1.0, smoothstep(0.0, 0.6, above));
   }
-  return vec4<f32>(col, 1.0);
+  return MeshOut(vec4<f32>(col, 1.0), mask);
 }
 
 struct GrassV {
   @builtin(position) clip: vec4<f32>,
-  @location(0) world: vec3<f32>,
-  @location(1) nrm: vec3<f32>,
-  @location(2) uv: vec2<f32>,
-  @location(3) kind: f32,
+  @location(0) @interpolate(perspective, centroid) world: vec3<f32>,
+  @location(1) @interpolate(perspective, centroid) nrm: vec3<f32>,
+  @location(2) @interpolate(perspective, centroid) uv: vec2<f32>,
+  @location(3) @interpolate(perspective, centroid) kind: f32,
 }
 @vertex fn vsGrass(@location(0) p: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) inst: vec4<f32>) -> GrassV {
   let sc = abs(inst.w);
@@ -1978,8 +1998,17 @@ fn hidden(clip: vec4<f32>) -> bool {
   // The sea stops where the scene is in front of it, at any distance. The sheet is drawn over
   // the sand it runs across, which the coarser beach mesh may put a little in front of it,
   // so it is hidden only by what stands clear of it: a trunk, a rock, a rise in the beach.
-  let dep = textureLoad(sceneDepth, vec2<i32>(in.clip.xy), 0);
-  if (!(in.clip.z < dep) && (in.sheet < 0.5 || abs(worldAt(in.clip.xy, dep).y - in.world.y) > 0.2)) {
+  // With several samples to the pixel the scene may stand in front of the water in some and
+  // not in others, along the edge of a frond or a trunk. The water covers the pixel by the
+  // share it shows in, and what lies under it is the furthest of them.
+  var dep = 0.0;
+  var clear = 0.0;
+  for (var i = 0; i < ${samples}; i++) {
+    let di = textureLoad(sceneDepth, vec2<i32>(in.clip.xy), i);
+    dep = max(dep, di);
+    if (in.clip.z < di) { clear += ${(1 / samples).toFixed(4)}; }
+  }
+  if (clear <= 0.0 && (in.sheet < 0.5 || abs(worldAt(in.clip.xy, dep).y - in.world.y) > 0.2)) {
     discard;
     return vec4<f32>(0.0);
   }
@@ -2303,7 +2332,7 @@ fn hidden(clip: vec4<f32>) -> bool {
   col += F.sunCol * vec3<f32>(0.4, 0.55, 0.5) * crestLight * 0.07 * sunLit;
 
   col = airMix(col, -V, distS);
-  var alpha = 1.0;
+  var alpha = clear;
   if (in.sheet > 0.5) {
     let dmn = in.xz0 - SH.origin;
     let fi = dot(dmn, SH.along) / SH.dx;
