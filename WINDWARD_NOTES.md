@@ -26,13 +26,22 @@ Compact working notes. Update, do not grow.
 - Aerial perspective: `airMix`/`airKeep` = `pathKeep` through the same air as the sky, plus humidity veil. No other distance haze.
 - Humidity rises at dusk (`dusk` in `envStep`) as at dawn: that is what makes forest shafts at golden hour.
 - Exposure 0.74 * (L0/Lc)^0.47. Albedos are physical (grass ~0.1); do not brighten them to fix a dark frame.
+- Evening air: `env.low` (0 with the sun above ~24 deg, 1 near the horizon; uniform `F.day.w`) gates the meter and the tone curve; the sky terms are zero by themselves for a high sun. Captures of the framed afternoon are pixel-identical before and after. With a low sun the meter also reads the sky's own glow (`glow`, more when facing the sun), so the lens no longer opens for the dim ground until the sky is white; multiple scattering in `atmosphere()` loses with the sun's path once that path is deep (dome dims and loses blue); `tonemap` keeps part of a bright colour's hue (0.4 * low) instead of bleaching per channel; dusk fill starts at sy 0.06, air-pass shafts last to sy -0.02. No tint, no added pass or texture sample.
 
 ## Plants (source/app.js)
-- Forest tree: trunk + limbs, per lobe a solid hull (kind CROWN, never alpha-tested) and leaf sprays (kind LEAF, 4 verts / 2 tris each). LOD0 hull 0.78 + all sprays, LOD1 hull 0.92 + 1 spray in 4 (bigger leaves), LOD2 hull only. Cuts [0, 50] + bias 28 m.
+- Forest tree: trunk + limbs, per lobe a solid hull (kind CROWN, never alpha-tested) and leaf sprays (kind LEAF, 4 verts / 2 tris each). LOD0 hull 0.78 + all sprays, LOD1 hull 0.92 + 1 spray in 4 (bigger leaves), LOD2 hull only.
 - Crown hull shading (`fsMesh` kind 3): leaf-cell tone and tilt at three scales chosen by pixel footprint; far = boughs. No discard, no dither.
 - Broad/canopy plants: LOD0 arched multi-segment blades (`addLeaflet` segs), LOD1 flat 3-tri blades.
-- `Scatter.collect`: LOD hysteresis 6% (view only); view culls plants under 1.5 px; mirror culls small far plants; near shadow culls small casters past 0.42 of reach.
-- `?perf` logs CPU ms/frame and plant triangles (view / mirror / near shadow). Cliff view: 2256k / 1411k / under 2024k (was 2975k / 1734k / 1882k before the leaf crowns, 4930k / 3193k / 3589k with 7-vertex leaves).
+- LOD cross-fade (view and mirror; shadow maps switch): past a cut a plant is drawn at both levels for up to 14 m, the finer level's share falling 1 -> 0; solid parts trade pixels by a fixed screen-door pattern, tree leaves drop out one at a time. Share rides in instance `i1.z` with the wind exposure; `windExpo()` strips it. No hysteresis (nothing switches). View cuts are further out than before (tree 44-57 m and 110-124 m, rock 72-86 m); mirror and shadows keep the old cuts (`far`).
+- Wind (`plantLean`, `boughAt`): lean saturates with wind speed; boughs rock on top of the plant's own rocking, phased by where they stand on the plan; leaf flutter phased per leaf. Tree sway weights are in metres (x14). `meshPlace` and `meshPlaceLean` share one call, so both LOD copies, the shadow and perched insects move together. Open: crown foliage moves up to ~0.4 m against its limbs in gusts.
+- `Scatter.collect`: view culls plants under 1.5 px; mirror culls small far plants; near shadow culls small casters past 0.42 of reach.
+- `?perf` logs CPU ms/frame and plant triangles (view / mirror / near shadow). Cliff view was 2100k / 1411k / 2023k before the cross-fade moved the view's cuts out; `trees` scene view went 1409k -> 3101k with it (mirror, shadow unchanged). Cost on a real GPU not measured.
+
+## Walking, places, sound (source/app.js)
+- Walk collision: `walkBuild` puts trunks and rocks (circles), reef domes, and a link closing any gap between two columns too narrow to walk through, on a 4 m grid; `walkStep` moves in 0.12 m sub-steps and pushes out of anything entered, so the walker slides round. `walkTop` makes rocks and coral a floor for the eye. Eye = max(ground + 1.65, water + 0.42, top).
+- Places = the six views (`PLACES`, `spots`, keys 1-6). `goPlace(i, true)` travels (`advanceTrip`: rise, cross, settle; retargets from where it is; Walk/Fly cancel). Water is always `WATER`; there are no water presets.
+- View 4 is found by `findShallows` on the height field (knee-deep, bank near one side, open sea on the other, sun behind). It and `findBeach` take no random numbers: keep every `rnd()`/`hunt` call in `main()` in order or the island replants.
+- Audio: sources -> `master` -> `sfx` gain -> `under` filter -> out; score joins at `under`. SFX button / X (`ww-sfx` in localStorage), Music N, mute-all M.
 
 ## Shadows
 - Near cascade (2048^2, 20 m) is drawn every frame, texel-snapped. Baking only on eye movement froze swaying casters and made shadows jump.
@@ -52,17 +61,19 @@ Compact working notes. Update, do not grow.
 - `encCounted` facade must forward any new encoder method.
 
 ## Test (no GPU here: SwiftShader, software)
-- Harness in /tmp/harness (not in repo): `scenes.sh <out> <html> <port> [names]`, `dev.sh` sky-only page, `dbg.mjs` patched builds.
+- Harness in /tmp/harness (not in repo): `scenes.sh <out> <html> [names]` captures, `places.mjs` trips, `walk.mjs` collision runs, `evalpage.mjs` one expression in the page.
 - Capture params: `?shot=N&q=high&wx=..&tod=..&read[&rf=frame]`, plus `dyaw dpitch sunview shade up fwd side`, `at=x,z,yawDeg,pitchDeg,height`, `no=water,shore,drops,air`, `perf`.
-- Not verified here: real-GPU frame times, motion stability (no MSAA/TAA: thin geometry still aliases under motion).
+- Not verified here: real-GPU frame times, motion stability (no MSAA/TAA: thin geometry still aliases under motion), anything by ear (the audio context stays suspended headless).
 - App capture 1-4 min each at 800x500.
 
 ## Measured (SwiftShader, 4 cores, 800x500, High; s/frame, before -> after)
 - beach up 10.0 -> 2.1, cliff panorama 8.0 -> 3.3, sunset 8.0 -> 2.0, golden side 10.0 -> 3.3, towers 8.0 -> 1.8.
-- Build: gzip 117.4 KB, brotli 99.4 KB (was 113.8 / 96.5).
+- Build: gzip 120.5 KB, brotli 102.3 KB.
+- Walk runs (`walk.mjs high`, 3 x 600): 0 deadlocks, 0 held at the start (was 410 / 400). LOD collect: 15800 distances, largest change of share 1/64. Places: 84 trips, none through the ground. Exposure 17:42 away from / toward the sun: 1.76 -> 1.33, 1.25 -> 0.85.
 - Adjacent frames: sky diff ~0; 40 frames apart: cloud edges only (drift), no strip seams.
 
 ## Open
 - Shore sheet has a straight vertical edge where it meets the sea mesh (pre-existing; seen at beach, left of frame).
 - Bird's-eye: straight boundary low in frame over the lagoon (pre-existing).
 - No real-GPU timings yet.
+- Sky looking at a low sun: one cloud near the frame's edge is cut by a straight vertical line (seen at `shot=5&tod=17.7&sunview=1`, also before the evening work).
