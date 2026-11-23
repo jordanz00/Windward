@@ -151,6 +151,12 @@ const html = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Windward</title>
+<meta name="description" content="A tropical island you can walk, swim and fly in the browser. One HTML file drawn with WebGPU: no images, no 3D models, no audio files, no libraries.">
+<meta property="og:title" content="Windward">
+<meta property="og:description" content="A tropical island you can walk, swim and fly in the browser. One HTML file drawn with WebGPU: no images, no 3D models, no audio files, no libraries.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://jordanz00.github.io/Windward/media/lagoon.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <style>${cssOut}</style>
 </head>
 <body>

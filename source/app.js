@@ -258,11 +258,11 @@ function tube(m, pts, sides, seam, at) {
   }
   return [tx, ty, tz];
 }
-// A plain upright stem.
+// An upright stem in bark.
 function cylinder(sides, rings, r0, r1, h, col, swayTop) {
   const m = new Mesh(), pts = [];
   for (let i = 0; i <= rings; i++) pts.push([0, h * (i / rings), 0]);
-  tube(m, pts, sides, false, (t) => [r0 + (r1 - r0) * t, col[0], col[1], col[2], swayTop * t, SOLID, 0, 0]);
+  tube(m, pts, sides + 3, true, (t, ang, len) => [r0 + (r1 - r0) * t, col[0] * 1.3, col[1] * 1.3, col[2] * 1.3, swayTop * t, WOOD, ang / 6.2832, len]);
   return m;
 }
 

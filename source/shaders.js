@@ -385,7 +385,11 @@ fn caustic(p: vec3<f32>, foot: f32) -> vec3<f32> {
     let a = vec3<f32>(causWave(uv + split, t + 23.0), causWave(uv, t + 23.0), causWave(uv - split, t + 23.0));
     let b = causWave(uv2, t * 0.85 + 5.0);
     let thread = pow(min(a, vec3<f32>(b)) * 0.935, vec3<f32>(mix(1.7, 1.2, sat(depth / 9.0))));
-    net = mix(net, min(thread, vec3<f32>(3.4)) * 1.7, seen);
+    var web = min(thread, vec3<f32>(3.4)) * 1.7;
+    // From above, the moving surface smears the net. With the eye in the water nothing does:
+    // the cells are dim, the threads bright, and the average is still the same.
+    if (F.under > 0.5) { web = pow(web, vec3<f32>(1.6)) * 0.71; }
+    net = mix(net, web, seen);
   }
   let lit = cloudShade(p.xz, 0.0);
   let day = smoothstep(0.02, 0.12, F.sunTrue.y);

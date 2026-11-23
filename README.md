@@ -4,11 +4,13 @@ A small island you can walk, swim, and fly, drawn in the browser with WebGPU. Th
 
 It is in the same spirit as [Abyssal Garden](https://github.com/Noniv/abyssal-garden): one self-contained page, no engine, everything procedural. Techniques shared with that project — Beer's-law water fog, interference caustics, height-powered plant sway, Snell-window surface look, and procedural underwater ambience — are adapted here for a tropical island above and below the waterline.
 
-Best in Chrome. It also runs in Edge, and on a phone at Low detail.
+**[Try it in your browser](https://jordanz00.github.io/Windward/)** · Best in Chrome. It also runs in Edge, and on a phone at Low detail. Free, and open source under the MIT license.
+
+![The lagoon seen from the shore under passing clouds](media/lagoon.jpg)
 
 ## Try it
 
-Open `index.html` in Chrome, or serve the folder and open that address. WebGPU wants a normal browser context; if a double-click does nothing useful, use a local server:
+Open the [live page](https://jordanz00.github.io/Windward/), or clone the repository and open `index.html` in Chrome. WebGPU wants a normal browser context; if a double-click does nothing useful, use a local server:
 
 ```bash
 python3 -m http.server 4177
@@ -29,6 +31,7 @@ Wait for the coast to finish generating, then press **Enter**. You arrive over t
 | Time of day | Hour, or `T` (Shift goes back) |
 | Weather | Weather, or `R` (Shift goes back) |
 | Mute | `M` |
+| Music and effects | `N` music · `X` sound effects · `[` `]` music level |
 | Frame time | `H` — FPS, CPU ms, GPU ms (when supported), and whether the frame looks CPU- or GPU-bound. Never silently lowers quality |
 | Benchmark | `B` — timed fly-through with FPS / 1% low / CPU / cull / GPU / draws / passes; `G` flies the same path. `?bench=1` starts it after Enter |
 | Menu | `Esc` |
@@ -38,6 +41,10 @@ On a phone, drag to look while walking and tap the water. A second finger is Shi
 Low, Medium, and High are the same island with less or more in it. The choice is remembered. If a load dies, the next one steps down a level.
 
 You stay on the sand. Step into the water and you swim; hold `Q` to go under and look up through the surface. Once you are properly under you stay at that depth and swim slowly, so the fish can be watched. `6` puts you beside a coral head in the lagoon. `F` lets the camera leave the ground.
+
+| | |
+|---|---|
+| ![Palm Beach](media/beach.jpg) | ![Coral Garden, under the surface](media/coral.jpg) |
 
 ## How it is built
 
@@ -59,26 +66,39 @@ You stay on the sand. Step into the water and you swim; hold `Q` to go under and
 | `source/ui.css` | The card on top of the picture |
 | `source/build.mjs` | Joins the files above into `index.html` and reports the sizes |
 
-The water is a Gerstner swell running with the wind, with a bound harmonic that peaks the crests. As the bottom rises the crest leans forward and breaks into foam; the lagoon stays sheltered. On the beach a shallow-water grid, finer than the island mesh, takes the swell onto the sand. The water runs up as a thin sheet from its own momentum, and the foam is carried with that flow. The wind sea is two headings on two scales, so the crests do not repeat as one pattern. A third spectral cascade carries the 0.45 to 5 m chop that gives water its texture, the swell stays low offshore and stands up where the bottom shoals, and foam is drawn as a network whose ribbons widen with the simulated density. The interior is forest over leaf litter, rocks are cut along planes, and wet sand reflects the sky. Palms carry feathered fronds, the inland trees are a different shape, and the sound is a drifting surf bed with separate wave breaks and bird calls. Under that, an original score called Beneath the Blue unfolds at a slow tempo: written chords and melodic phrases, played by a pad, a bell, a soft pluck, and a rounded bass. N quiets it. The bracket keys set its presence. The surface mesh is packed tightly around the camera and runs out to the haze, so a crest nearby stays a curve. Past the mesh, the same sea is drawn to the horizon, and the island sits in open water in every direction. Color comes from depth: sand shows through the shallows, red light dies first offshore, and the glancing angle reflects the sky. The surface bends the view of the bottom, and the same waves focus the sun into caustics on the sand. A half-resolution mirror puts the island in the water. The long swell is still Gerstner. The shorter waves are a spectral tile, solved on the GPU, and the sun path is the facets of that surface: a pixel lights only when a facet faces the sun. Under the surface, the disk of sky is the refraction out of the water; outside that cone the surface reflects.
-
-A click writes into a height field on the GPU. The impulse is a crest with a trough around it, so the ring reads as a disturbance in the surface rather than a flat circle. It travels, meets the next click, and dies away. The swell is a set of layered waves, and the finer texture is the spectral tile, which drops out of the reflection once a pixel is wider than the wave. Looking along the water reflects the shore and the sky. Looking down shows the bottom through the water, darker and bluer as it gets deeper. There is no control panel. Each place chooses the swell, the color of the water, the sky, and where the camera sits: Tropical Lagoon, Open Ocean, Hidden Cove, Calm Lake, Stormy Ocean, Shallow Reef, and Swimming Pool.
-
-The seabed is a height field filled on the CPU once, then read by the GPU. Sunlight is a depth map of the ground and the trees, so a trunk throws a shadow across the sand and into the water. Plants and rocks are a few dozen prototype meshes, built once and drawn as instances; the wind moves the tips more than the trunk. Sound is filtered noise in the Web Audio API.
+The seabed is a height field filled on the CPU once, then read by the GPU. Sunlight is a depth map of the ground and the trees, so a trunk throws a shadow across the sand and into the water. Plants and rocks are a few dozen prototype meshes, built once and drawn as instances; the wind moves the tips more than the trunk. Sound is synthesised in the Web Audio API.
 
 Nothing is allocated per frame on purpose: the uniform buffer, the bird list, and the scratch matrices are reused.
+
+### Water
+
+- **Swell.** A Gerstner swell runs with the wind, with a bound harmonic that peaks the crests. It stays low offshore and stands up where the bottom shoals; there the crest leans forward and breaks into foam. The lagoon stays sheltered.
+- **Chop.** The shorter waves are three spectral tiles solved on the GPU, on two headings and two scales, so the crests do not repeat as one pattern. The finest carries the 0.45 to 5 m chop that gives water its texture, and drops out once a pixel is wider than the wave.
+- **Shore.** On the beach a shallow-water grid, finer than the island mesh, takes the swell onto the sand. The water runs up as a thin sheet from its own momentum, and the foam is carried with that flow as a network whose ribbons widen with the simulated density. Wet sand reflects the sky.
+- **Surface.** The mesh is packed tightly around the camera and runs out to the haze, so a crest nearby stays a curve; past the mesh the same sea is drawn to the horizon. A half-resolution mirror puts the island in the water. The sun path is the facets of the surface: a pixel lights only when a facet faces the sun.
+- **Colour.** Colour comes from depth: sand shows through the shallows, red light dies first offshore, and the glancing angle reflects the sky. The surface bends the view of the bottom. From below, the disk of sky is the refraction out of the water; outside that cone the surface reflects.
+- **Ripples.** A click writes into a height field on the GPU. The impulse is a crest with a trough around it, so the ring reads as a disturbance in the surface rather than a flat circle. It travels, meets the next click, and dies away.
+
+### Places and music
+
+Six places are worth the trip, and each sets where the camera sits: Palm Beach, Cliff Overlook, Island From Above, Lagoon Shallows, Offshore and Coral Garden.
+
+Under the surf and the birds, an original score called Beneath the Blue unfolds at a slow tempo: written chords and melodic phrases, played by a pad, a bell, a soft pluck, and a rounded bass. `N` quiets it. The bracket keys set its presence.
 
 ### Geometry, light and startup
 
 - **Instances.** Every plant, rock and boat is one of a few dozen prototype meshes in a single vertex buffer. Each placed copy is twelve floats: position, yaw, scale, tint. Every frame the CPU culls the copies against the view, picks a level of detail by distance, and writes one instance buffer that serves the main view, the mirror and the near shadow map.
-- **Palms.** A coconut palm is a curved, tapering trunk with leaf-scar rings and 20 to 26 fronds placed by age: young ones upright, old ones hanging and yellowing. Each frond is a curved rachis carrying separate folded leaflets. Three levels of detail share the same fronds, so a palm does not change shape as it recedes.
+- **Palms.** A coconut palm is a curved, tapering trunk with leaf-scar rings and 20 to 26 fronds placed by age: young ones upright, old ones hanging and yellowing. Each frond is a curved rachis carrying separate folded leaflets. Three levels of detail share the same fronds, so a palm does not change shape as it recedes. Close to, the bark is fibre cracked across, with the lip of each leaf scar standing proud.
 - **Forest trees.** A bowed trunk that flares into buttress roots, one limb to each mass of leaves, and five to eight leaf masses forming a spreading crown. The crown's surface is shaded as leaves, not as a blob: cells of single leaves with a midrib, lit on top and dark inside, thinning to sky at the silhouette. Bark is furrowed up the trunk with lichen in patches. Nine shapes, three levels of detail each.
 - **Forest floor.** Close to, fallen leaves lie on the ground, thick under the canopy and scattered on the open turf, and the turf is tufted. Sparse fallen palm fronds sit under the grove. Ferns, tree ferns and coastal shrubs use habitat-aware placement.
+- **Grass.** A tuft is nine thin blades, each bent in two segments. Tufts are sown at many sizes with smaller ones round each, so cover is dense without being even. Gusts roll through as waves, the tips flutter on top of that, and blades lean away and lie down where you walk.
 - **Boulders.** A lump cut along planes, then shaded with shared normals so the cuts read as worn faces instead of polygons.
 - **Shadows.** One depth map covers the island and is redrawn only when the sun moves. A second, 2048 texels across 52 m, follows the viewer so leaflets and trunks cast sharp shadows on the sand nearby.
 - **Sky.** One atmosphere, in `source/sky.js`. A weather map centred on the island says where the air holds cumulus, where a convective tower stands and how far along its life it is, where its anvil has spread, and where a stratocumulus deck lies; humidity sets the cloud base, instability the depth of the cumulus and the height of the towers, and each layer drifts with its own wind. Clouds are marched through a tileable noise volume made once on the GPU, with a height profile for each family, light attenuated toward the sun, and forward and multiple scattering. Cirrus is a thin sheet of fibres on the upper wind. The air is Rayleigh, Mie and ozone, with the sun's path worked out by Chapman's function so the same sum reddens the sun, the clouds and the ground. The result is a panorama kept as two copies, baked a strip per frame in turn and read as a blend, so no bake is seen arriving; a coarse copy of it lights the land.
 - **Cloud shadow and shafts.** The same clouds are marched once toward the sun into a shadow map. The land, the sea, the air pass and the animals read it, so a shadow on the sand belongs to a cloud that is in the sky. In the panorama the air's own light is taken away along each stretch of a view ray that lies in cloud shadow, which leaves the lit air between as shafts, in space and not on the screen.
 - **Sand.** Dry sand is shaded from a height: pits with raised rims, wind ripples in patches, and grain. Each scale is left out once it is smaller than a pixel. Below a ragged line the sand is damp, darker and smooth, and the last high wash has left a wrack line.
 - **Startup.** Pipelines compile in parallel while the height field, the planting, the wave spectra and the surf grid are made, with the sea's shader started first because it takes longest. The first picture waits only for the sky, the land, the plants, their shadows and the sea. The wash on the sand, the shafts in the air, the grass, the birds, fish, insects and rain are drawn from the frame their pipeline arrives, a fraction of a second later. `window.__perf` holds the time of each startup step in milliseconds, and `?perf` in the address logs it.
+- **Antialiasing.** The scene and its mirror are drawn with four samples to the pixel, so a leaflet thinner than a pixel fades instead of flickering as it sways. Levels of detail cross-fade through the same samples, a leaf at a time. `?msaa=0` turns it off.
 - **One of each.** Trunks, limbs, stems, coral branches and insect legs are swept by one `tube` function. Plants, rocks, boats, coral, fish and insects share one 32-byte vertex (position as floats, normal, colour and texture coordinate as half floats) and 16-bit indices. The sea shader and the surf solver read the wave tiles through the same lookup, the two sun glints on water are one GGX lobe, and the gust at a point is one function that the leaves, the birds, the insects and the sound all ask.
 
 ### Under the water
@@ -88,7 +108,7 @@ Nothing is allocated per frame on purpose: the uniform buffer, the bird list, an
 - **Swimming.** A fish instance is twelve floats. The vertex shader bends the body with a wave that runs from head to tail and grows as it goes, bends the whole fish into a turn, and sculls the paired fins. The tail beats faster the faster the fish goes and stops when it glides. Small fish move in bursts; large ones hold a steady pace.
 - **Behaviour.** A school knows where it is going: a home to hover over, or a round of stops to travel and linger at. A fish knows its wandering place in the school, its neighbours, the bottom ahead, the surface, the coral in its way, the larger fish that frighten it, and you. Chromis hover over branching coral, anemonefish keep to their anemone, butterflyfish and angelfish work from head to head, parrotfish tip down to graze, gobies sit on the sand and dart, trevally patrol the lagoon and pass close by the coral, fusiliers stream along the seaward face of the reef, and a few large fish cruise the deep water alone. When a trevally passes, or you swim in among them, a school tightens and moves off, then drifts back.
 - **Cost.** Schools near you are stepped every frame with every rule. Further out they are stepped one frame in three without the neighbour rules. Beyond that only the school moves, and its fish are carried along when they come back into range. Fish are culled against the view and drawn in one buffer, one draw per species and level of detail.
-- **Light.** Under water the sun loses its red with depth, the ripples gather it into caustics, the water itself lights the shaded side of things, and distance fades everything toward the colour of the water. Outside the window of sky, the underside of the surface mirrors the bottom.
+- **Light.** Under water the sun loses its red with depth, the ripples gather it into a net of bright threads on the bed, fringed with colour where the light splits and cast along the sun as the surface bends it, the water itself lights the shaded side of things, and distance fades everything toward the colour of the water. Outside the window of sky, the underside of the surface mirrors the bottom.
 
 ### The day, the weather and the air
 
@@ -109,59 +129,56 @@ Nothing is allocated per frame on purpose: the uniform buffer, the bird list, an
 
 ### Sound
 
-Surf, wind and birds were there before. Now cicada-like rasps sing in bouts through the heat of the day, loudest among trees; crickets chirp after dusk, each with its own pitch, pulse count and pace; a far chorus shimmers at night; birds sing most at first light and stop for rain, each singer with a phrase of its own that it repeats and another of its kind sometimes answers (a warbler's run of slurred notes, a dove's three low notes, a trill, gulls crying over the shore); rain has a hiss and a patter, with single drops off the leaves under trees; gusts rustle the canopy; and a bee, a mosquito or a dragonfly that comes close can be heard. Every layer is driven by the same hour, weather and place as the picture, and none of it is a recording or a loop.
+Surf, wind and birds are the bed. Over them, cicada-like rasps sing in bouts through the heat of the day, loudest among trees; crickets chirp after dusk, each with its own pitch, pulse count and pace; a far chorus shimmers at night; birds sing most at first light and stop for rain, each singer with a phrase of its own that it repeats and another of its kind sometimes answers (a warbler's run of slurred notes, a dove's three low notes, a trill, gulls crying over the shore); rain has a hiss and a patter, with single drops off the leaves under trees; gusts rustle the canopy; and a bee, a mosquito or a dragonfly that comes close can be heard. Every layer is driven by the same hour, weather and place as the picture, and none of it is a recording or a loop.
+
+### Capture parameters
 
 For captures, `?tod=<hour>` sets the clock, `?wx=<clear|clouds|gusts|overcast|drizzle|shower|after|mist>` sets the weather, and `&flow` lets both run. `&bug=<kind>` frames the nearest insect of that kind (`bd` is the distance in metres, `bst` its state, `hold` keeps it there, `bat=<n>` goes to the n-th place that kind lives first). `&sunview=<0..1>` faces the sun, pitched up by that share of its height, and `&shade` stands in the shadow of the nearest palm crown. `&bird=<metres>` flies three gulls past the camera at that distance. `&rf=<frame>` reads the picture back at that frame instead of the sixteenth.
 
 `?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
 
-## Size and cost
+## Size
 
-Measured on a software rasterizer (lavapipe, four cores, no GPU) at High detail, 1400 by 900, standing on the beach. "Before" is the build before the pass that shared the code; "after" is this one. Kilobytes are 1024 bytes.
+Kilobytes are 1024 bytes. `node source/build.mjs` prints these.
 
-| | Before | After |
-|---|---|---|
-| Source, all of `source/` but the build script | 427.3 KB | 412.6 KB |
-| of which script | 421.0 KB | 406.3 KB |
-| of which shaders (WGSL) | 132.6 KB | 127.8 KB |
-| `index.html` | 429.5 KB | 332.9 KB |
-| `index.html`, gzipped | 131.5 KB | 102.9 KB |
-| Shader modules | 5 | 4 |
-| Navigation to first picture | 1.39 to 1.47 s | 0.82 to 0.89 s |
-| Navigation to settled frame | 1.51 to 1.61 s | 0.88 to 1.10 s |
-| Buffers allocated | 30.9 MB | 21.4 MB |
-| Textures allocated | 69.2 MB | 53.2 MB |
-| Script time per frame, median over three views | 0.8 to 1.2 ms | 0.9 to 1.1 ms |
-| Render passes per frame | 7 | 7 |
-| Compute passes per frame | 15 | 2 |
-| Compute dispatches per frame | 15 | 15 |
-| Draw calls per frame | 90 | 90 |
-| Triangles per frame, beach | 1.58 M | 1.42 M |
-| Triangles per frame, from the air | 3.41 M | 3.25 M |
-| Buffer writes per frame | 13 | 12 |
-| Buffers, textures or bind groups created per frame | 0 | 0 |
+| | |
+|---|---|
+| Source that goes into the page, with its comments | 549.9 KB |
+| of which shaders (WGSL) | 180.1 KB |
+| `index.html` | 349.3 KB |
+| `index.html`, gzipped | 121.9 KB |
+| `index.html`, brotli | 103.4 KB |
 
-Memory is the sum of what the page asks the GPU for, not what a driver uses. Time on the GPU per frame, and frame rate, cannot be measured without a GPU and have not been.
+The build strips comments and spare whitespace and nothing else; names are not mangled. The page fetches nothing after it loads: no images, models, audio, fonts or scripts.
 
-## Performance engineering
+## Performance
 
-Optimizations target wasted work only. Native resolution, internal scale, plant density, plant reach, cloud march quality, shadow map size, reflections, and water detail stay at the chosen preset. The HUD (`H`) and `B` benchmark report CPU ms, GPU ms (timestamp queries when available), and whether the frame looks CPU- or GPU-bound — they never lower quality to chase FPS.
+Optimizations target wasted work only. Native resolution, plant density, plant reach, cloud march quality, shadow map size, reflections, and water detail stay at the chosen preset. The HUD (`H`) and the `B` benchmark report CPU ms, GPU ms (timestamp queries when available), and whether the frame looks CPU- or GPU-bound. They never lower quality to chase FPS.
 
-Abyssal Garden–inspired pieces in use: cell-sorted plant cull, camera-gated instance rebuilds (wind stays on the GPU), async GPU timestamps, and a repeatable Catmull-Rom fly path (`B` / `G`). Cloud occlusion on land, sea and air is one fetch from the cloud shadow map. Far plant vertices use mean wind instead of gust noise. Capillary / chop / FD water normals run only where their weights are visible.
+Pieces taken from Abyssal Garden's approach: cell-sorted plant cull, camera-gated instance rebuilds (wind stays on the GPU), async GPU timestamps, and a repeatable Catmull-Rom fly path (`B` / `G`). Cloud occlusion on land, sea and air is one fetch from the cloud shadow map. Far plant vertices use mean wind instead of gust noise. Capillary, chop and ripple normals run only where their weights are visible.
 
-Run `B` on a real GPU before and after changes and compare **GPU milliseconds**, not FPS estimates alone. This environment’s software rasterizer cannot produce honest GPU timings.
+To compare two builds, run `B` on each and compare GPU milliseconds, not FPS.
 
-## Graphics stability
+## Rendering stability
 
-**Release requirement:** zero artifact regressions, preserved visual fidelity, measurable performance improvement where achievable. Fix the renderer — never the graphical quality.
+Three failure modes are guarded against in the renderer itself, not by thinning the scene:
 
-Prohibited as “fixes”: lowering density, draw distance, native resolution, reflections, refraction, shadows, water/cloud detail, or material complexity; flattening lighting; or fogging over defects.
+1. **Tree crowns.** Four samples to the pixel and a cross-fade between levels of detail that shares them; cutouts sampled in the rest pose so they do not swim with the wind; finer levels of detail kept longer from altitude.
+2. **Ocean from any height.** Waves are filtered by pixel footprint and distance, which removes aliasing while the swell stays readable from the cliffs and from overhead.
+3. **Crossing the waterline.** The switch between above and below has hysteresis on the local wave height, and the mirror pass is skipped only while submerged, where it is not used.
 
-Rendering correctness is locked against three known failure modes without densifying or stripping detail:
+## Known limits
 
-1. **Aerial crowns** — rest-pose cutout sampling; same hole-rate thresholds with screen dither for stable alpha depth; sub-pixel leaflet depth separation; altitude keeps finer LODs longer (more detail, not less).
-2. **Altitude-stable ocean** — footprint/distance filtering kills aliasing while keeping swell readable from cliffs and overhead; near-plane surface push stops waterline mesh holes.
-3. **Waterline crossing** — hysteresis on local `waveY`; soft immersion for shaders; planar-reflection *pass* skipped only while submerged (unused by the Snell path — above-water reflections unchanged); safer refraction sampling near the eye.
+- It needs WebGPU. A browser without it gets a message, not the island.
+- High detail is meant for a desktop graphics card. If it is slow, pick Medium or Low on the card, or add `?msaa=0` to the address.
+- Automated checks ran on a software rasterizer, which shows what is drawn but cannot time a GPU. Frame rate has been seen on few machines. If it runs badly on yours, an issue with the `H` readout and your GPU is welcome.
+- Phones run it at Low detail; expect a low frame rate on a weak one.
+
+## How it was made
+
+The code was written by AI coding agents in [Cursor](https://cursor.com), directed over many prompts. The agents checked their own work by rendering frames in a headless browser, reading the pictures back, and measuring them. [WINDWARD_NOTES.md](WINDWARD_NOTES.md) is their working log: what each part does, what failed, and why things are the way they are.
+
+The main inspiration is [Abyssal Garden](https://github.com/Noniv/abyssal-garden) by Maksymilian Dendura, which showed how far one self-contained WebGPU page can go.
 
 ## License
 
