@@ -3009,7 +3009,8 @@ async function main() {
 
     device.lost.then((info) => { window.__gpuerr = 'lost ' + (info && info.message); console.error('LOST', info && info.message); });
     function frame(now) {
-      try { frameBody(now); } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
+      const c0 = performance.now();
+      try { frameBody(now); if (frames > 4) { PERF.cpuN = (PERF.cpuN || 0) + 1; PERF.cpuMs = (PERF.cpuMs || 0) + performance.now() - c0; } } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
     }
     // Bench path: forest → palms → coast → beach/ocean → aerial → clouds → underwater (AG fly idea).
     if (typeof WW_BENCH !== 'undefined') {
@@ -3587,6 +3588,10 @@ async function main() {
           c2.width = wCap; c2.height = hCap;
           c2.getContext('2d').putImageData(new ImageData(img, wCap, hCap), 0, 0);
           window.__png = c2.toDataURL('image/png');
+          if (qstr.has('perf')) {
+            const tri = (d) => { let n = 0; for (let i = 0; i < d.length; i += 5) n += d[i + 1] * d[i + 4]; return Math.round(n / 3000) + 'k'; };
+            console.log('PERF cpu ' + (PERF.cpuMs / PERF.cpuN).toFixed(2) + ' ms/frame over ' + PERF.cpuN + ', plant triangles: view ' + tri(mainDraws) + ', mirror ' + tri(reflDraws) + ', near shadow ' + tri(nearDraws));
+          }
           requestAnimationFrame(frame);
         }).catch((err) => { clearTimeout(readWatch); window.__gpuerr = String(err); console.error('READ', err); });
         return;

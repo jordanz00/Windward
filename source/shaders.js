@@ -952,6 +952,14 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
         n = normalize(n + (vec3<f32>(A.z, A.y + 0.5, A.w) - 0.5) * (1.1 * kA * mA));
       }
     }
+    // From far off a crown is boughs: masses of leaf a few metres across with shade between
+    // them, standing more or less level. Without them a far crown is a smooth green ball.
+    let kC = sat(foot * 5.0 - 0.3);
+    if (kC > 0.01) {
+      let C = leafCells(pq * 0.26 + 5.0);
+      alb *= mix(1.0, 0.5 + 0.75 * smoothstep(0.75, 0.2, C.x), kC * 0.85);
+      n = normalize(n + vec3<f32>(C.z - 0.5, 0.9, C.w - 0.5) * (0.9 * kC));
+    }
     if (dot(n, Vv) < 0.0) { n = -n; alb *= 0.5; }
   } else if (kind == 2) {
     // Leaflet: dull upper wax, pale underside, thin-film transmission — not green plastic.
@@ -1052,7 +1060,7 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
   if (kind == 3) {
     // Sun that has come down through the crown: the green light on its underside and its
     // shaded flank, which the shadow map alone would leave black.
-    col += alb * vec3<f32>(0.9, 1.2, 0.38) * F.sunCol * (0.2 * sat(0.6 - dot(n, F.sunDir) * 0.7) * cloudShade(in.world.xz, in.world.y));
+    col += alb * vec3<f32>(0.9, 1.2, 0.38) * F.sunCol * (0.24 * sat(0.6 - dot(n, F.sunDir) * 0.7) * sat(0.45 - n.y * 1.3) * cloudShade(in.world.xz, in.world.y));
   }
   // Where a trunk or a rock meets the ground, the ground hides the sky from it.
   let above = in.world.y - sampleField(in.world.xz).x;
@@ -2085,7 +2093,7 @@ struct BlitOut {
   let swash = sh.inside > 0.5 && sh.bed > -0.12 && (sh.h > 0.018 || sh.foam > 0.2);
   // Slightly wider depth epsilon near the eye — waterline intersection wobble.
   let zEps = mix(0.00015, 0.00055, sat(1.0 - length(in.world - F.camPos) / 8.0));
-  if (!swash && dep < 0.999 && dep < frag.z - zEps) { discard; }
+  if (!swash && dep < 0.99999 && dep < frag.z - zEps) { discard; }
 
   // Reflection uses a filtered macro normal — glint capillaries stay in the specular lobe only.
   let lost = sat(smoothstep(0.22, 1.6, foot) * mix(0.45, 1.0, scale) + band.z * 0.55);
@@ -2132,7 +2140,10 @@ struct BlitOut {
   let deepLit = F.deepC.rgb * bodyK;
   let shalLit = F.shalC.rgb * bodyK;
   var base = deepLit;
-  if (dep < 0.9995) {
+  // Any depth short of the far plane is the sea floor or something standing in the water.
+  // (A nearer cut-off left all water more than a couple of hundred metres off bottomless:
+  // from the air the lagoon and the shallows went the blue of the open sea.)
+  if (dep < 0.99999) {
     var look = in.clip.xy;
     var sp = worldAt(look, dep);
     var d = in.world.y - sp.y;
@@ -2162,7 +2173,7 @@ struct BlitOut {
       let bend = N.xz * clamp(d, 0.0, 3.0) * bendScale;
       let shifted = clamp(look + bend, vec2<f32>(1.0), F.res - vec2<f32>(1.0));
       let rd = textureLoad(sceneDepth, vec2<i32>(shifted), 0);
-      if (rd < 0.999) {
+      if (rd < 0.99999) {
         let rw = worldAt(shifted, rd);
         // Only accept refracted samples that stay below the water surface.
         if (rw.y < in.world.y - 0.03 && rw.y < F.camPos.y + 2.0) { look = shifted; sp = rw; d = in.world.y - rw.y; }
@@ -2182,7 +2193,7 @@ struct BlitOut {
   base = mix(base, deepLit, smoothstep(0.56, 0.78, max(abs(fu.x), abs(fu.y)) * 2.0));
   // The last few centimetres of water are a film over sand, not a mirror with an edge.
   var film = 1.0;
-  if (dep < 0.9995 && in.sheet < 0.5) {
+  if (dep < 0.99999 && in.sheet < 0.5) {
     film = smoothstep(0.0, 0.09, in.world.y - worldAt(in.clip.xy, dep).y);
   }
   // Fresh foam is bright and cool; aging lace goes warmer and duller.

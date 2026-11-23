@@ -143,7 +143,10 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   const heat = smooth01(0.12, 0.6, sy0) * (1 - env.cover);
   env.dew = 0.4 * dawn;
   env.mist = Math.max(v[2], 0.6 * dawn) * (1 - 0.75 * heat) * (1 - smooth01(4, 9, v[4]) * 0.8);
-  env.humid = Math.min(1, v[3] + 0.3 * dawn + 0.15 * smooth01(0, -0.2, sy0));
+  // The air dampens again as the afternoon cools: the haze of the last hour before sunset,
+  // and the reason low sun stands in shafts between the trunks.
+  const dusk = env.hour > 12 ? smooth01(0.4, 0.1, sy0) * smooth01(-0.15, 0, sy0) : 0;
+  env.humid = Math.min(1, v[3] + 0.3 * dawn + 0.28 * dusk + 0.15 * smooth01(0, -0.2, sy0));
   env.haze = Math.min(1, placeHaze + Math.max(0, env.humid - 0.25) * 0.9);
   // Trade wind follows the sea, with slow backing/veering — never snaps between frames.
   const angGoal = seaDir + 0.36 + 0.3 * Math.sin(time * 0.013) + 0.15 * Math.sin(time * 0.031 + 1);
