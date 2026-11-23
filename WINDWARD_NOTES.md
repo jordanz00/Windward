@@ -42,8 +42,11 @@ Compact working notes. Update, do not grow.
 - Planar reflection holds land and plants only (no sky draw; alpha = coverage). Sky reflection is analytic per wave normal.
 - Shadow dims the water body (`bodyK`), foam and sun glitter, never the mirrored sky.
 - Sea floor is read wherever scene depth < 0.99999. The old 0.9995 cut made all water past ~200 m bottomless (dark lagoon from the air, hard line across the frame).
+- Everything drawn after the blit (water, shore sheet, insects, drops) is hidden by land in its fragment shader, from the scene's depth texture (`hidden()`, top of `fsWater`). The blit writes no depth; the swap pass depth buffer holds insects only. Do not go back to a `frag_depth` copy plus hardware test.
+- Shore sheet: hidden by anything more than 0.2 m off its own surface in world height. The old depth epsilon let it draw over trunks at any range and over the forest from the air.
 
 ## Known traps
+- User screenshot (Chrome/macOS, old build, Fly, low sun): water-coloured patches on forest crowns. Not reproduced on SwiftShader beyond the shore sheet; real-GPU check still owed.
 - Water vs near plane: `vsWater` slides verts level, never flattens onto near plane (was drawing sea in the sky when looking up).
 - Water pipeline uses 15 of 16 sampled textures.
 - `encCounted` facade must forward any new encoder method.

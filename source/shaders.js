@@ -1750,6 +1750,7 @@ const DROP_SPRAY: u32 = 60000u;
   return o;
 }
 @fragment fn fsDrops(in: DropV) -> @location(0) vec4<f32> {
+  if (hidden(in.clip)) { discard; }
   var a = in.col.a;
   let r = length(in.uv);
   if (in.form < 0.5) {
@@ -1899,26 +1900,35 @@ fn airOver(col: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
   return col * a.a + a.rgb;
 }
 
-// The finished scene, with the air over it, to the screen. It writes the scene's depth
-// so that what is drawn afterwards, the water and the insects, is hidden by the land.
-struct BlitOut {
-  @builtin(frag_depth) d: f32,
-  @location(0) c: vec4<f32>,
-}
-@fragment fn fsBlit(in: SkyV) -> BlitOut {
+// The finished scene, with the air over it, to the screen.
+@fragment fn fsBlit(in: SkyV) -> @location(0) vec4<f32> {
   let px = vec2<i32>(in.clip.xy);
   // Under water the eye opens up: the same scene is exposed a little brighter.
   var col = tonemap(airOver(textureLoad(sceneTex, px, 0).rgb, in.clip.xy) * (1.0 + 0.3 * F.under));
   if (F.under > 0.5) {
     col *= mix(1.0, 0.72, sat(length(in.clip.xy / F.res - 0.5) * 1.35));
   }
-  var o: BlitOut;
-  o.d = textureLoad(sceneDepth, px, 0);
-  o.c = vec4<f32>(col, 1.0);
-  return o;
+  return vec4<f32>(col, 1.0);
+}
+
+// What is drawn over the finished scene, the water, the insects and the drops, is hidden by
+// the land by asking the scene's own depth, here. No second depth buffer carries a copy of
+// it for the hardware to test against: that copy is the one thing between the passes that a
+// GPU may keep differently from the texture it was written from. A fragment whose own depth
+// is not a number is hidden too.
+fn hidden(clip: vec4<f32>) -> bool {
+  return !(clip.z < textureLoad(sceneDepth, vec2<i32>(clip.xy), 0));
 }
 
 @fragment fn fsWater(in: WaterV) -> @location(0) vec4<f32> {
+  // The sea stops where the scene is in front of it, at any distance. The sheet is drawn over
+  // the sand it runs across, which the coarser beach mesh may put a little in front of it,
+  // so it is hidden only by what stands clear of it: a trunk, a rock, a rise in the beach.
+  let dep = textureLoad(sceneDepth, vec2<i32>(in.clip.xy), 0);
+  if (!(in.clip.z < dep) && (in.sheet < 0.5 || abs(worldAt(in.clip.xy, dep).y - in.world.y) > 0.2)) {
+    discard;
+    return vec4<f32>(0.0);
+  }
   let sh0 = shoreFetch(in.xz0);
   let shoreD = in.xz0 - SH.origin;
   let shoreOff = dot(shoreD, SH.sea) / SH.dx / max(SH.nz, 1.0);
@@ -2090,13 +2100,6 @@ struct BlitOut {
 
   let frag = in.clip;
   let px = vec2<i32>(frag.xy);
-  let dep = textureLoad(sceneDepth, px, 0);
-  // Land, trees and boats in front of this fragment stay as the blit left them.
-  // The sheet is allowed to draw over the sand it is running across.
-  let swash = sh.inside > 0.5 && sh.bed > -0.12 && (sh.h > 0.018 || sh.foam > 0.2);
-  // Slightly wider depth epsilon near the eye — waterline intersection wobble.
-  let zEps = mix(0.00015, 0.00055, sat(1.0 - length(in.world - F.camPos) / 8.0));
-  if (!swash && dep < 0.99999 && dep < frag.z - zEps) { discard; }
 
   // Reflection uses a filtered macro normal — glint capillaries stay in the specular lobe only.
   let lost = sat(smoothstep(0.22, 1.6, foot) * mix(0.45, 1.0, scale) + band.z * 0.55);

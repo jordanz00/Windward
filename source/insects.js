@@ -793,6 +793,7 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
   return o;
 }
 @fragment fn fsBug(in: BugV) -> @location(0) vec4<f32> {
+  if (hidden(in.clip)) { discard; }
   let sh = sunShadow(in.world) * cloudShade(in.world.xz, in.world.y);
   let fw = fwidth(in.uv);
   let k = i32(in.kind + 0.5);

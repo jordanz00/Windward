@@ -2241,6 +2241,10 @@ async function main() {
     const shadowFmt = 'depth16unorm';
     // Mild slope-scaled bias; receivers add a small constant in-shader (large bias detaches shadows).
     const shadowZ = { ...sceneZ, format: shadowFmt, depthBias: 1, depthBiasSlopeScale: 1.35, depthBiasClamp: 0.002 };
+    // Over the finished frame the land hides a fragment in the fragment shader, by the scene's
+    // own depth texture (hidden() in the shaders). The pass's depth buffer starts empty and
+    // holds only the insects, which sort among themselves and stand in front of the drops.
+    const noZ = depthOn('depth24plus', false, 'always');
     const overZ = depthOn('depth24plus', false, 'less');
     const over = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
     const lerp = { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' };
@@ -2268,7 +2272,7 @@ async function main() {
       }));
     };
     // The sea first: its shader is the longest to compile, so it is given the longest start.
-    pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, depth: overZ });
+    pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, depth: noZ });
     pipe('sky', geoPL, 'vsSky', 'fsSky', { depth: depthOn('depth32float', true, 'always') });
     pipe('weather', skyPLs[0], 'vsSky', 'fsWeather', {});
     pipe('cloudShadow', skyPLs[1], 'vsSky', 'fsCloudShadow', {});
@@ -2280,7 +2284,7 @@ async function main() {
     pipe('shadowTerrain', skyPL, 'vsShadowTerrain', null, { buffers: posBuf, cull: 'back', depth: shadowZ });
     pipe('shadowMesh', skyPL, 'vsShadowMesh', null, { buffers: meshBuffers, depth: shadowZ });
     // The finished scene goes to the screen through the water's own two groups.
-    pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: depthOn('depth24plus', true, 'always') });
+    pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: noZ });
     const oceanLayout = layoutOf(device, GPUShaderStage.COMPUTE, 'rwuo');
     const oceanPL = device.createPipelineLayout({ bindGroupLayouts: [oceanLayout] });
     const oceanPipes = {};
@@ -2289,10 +2293,8 @@ async function main() {
     }
     late = true;
     // The wash on the beach starts from still water and takes its first frames to arrive, so
-    // its pipeline can too. The beach mesh is coarser than the sheet, so a depth test hides the
-    // wash behind the sand it is running over. Trees and cliffs are still rejected in the
-    // fragment shader.
-    pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: depthOn('depth24plus', false, 'always') });
+    // its pipeline can too.
+    pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
     pipe('air', airPL, 'vsSky', 'fsAir', {});
     pipe('grass', geoPL, 'vsGrass', 'fsGrass', { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: sceneZ });
     pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: [vbuf(16, [[0, 0, 3], [1, 12, 1]]), oneVec4], depth: sceneZ });
@@ -2300,7 +2302,7 @@ async function main() {
     pipe('shadowFish', skyPL, 'vsShadowFish', null, { buffers: meshBuffers, depth: shadowZ });
     // Insects go straight onto the finished frame, after the water, so a clear wing over the
     // lagoon is a film over the lagoon and not a hole in it.
-    pipe('bug', geoPL, 'vsBug', 'fsBug', { buffers: bugBuffers, format: format, blend: over, depth: depthOn('depth24plus', true, 'less') });
+    pipe('bug', airPL, 'vsBug', 'fsBug', { buffers: bugBuffers, format: format, blend: over, depth: depthOn('depth24plus', true, 'less') });
     pipe('shadowBug', skyPL, 'vsShadowBug', null, { buffers: bugBuffers, depth: shadowZ });
     pipe('drops', airPL, 'vsDrops', 'fsDrops', { format: format, blend: over, depth: overZ });
     pipe('sim', simPL, 'vs', 'fs', { module: simMod });
@@ -3521,6 +3523,7 @@ async function main() {
           pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
           pass.drawIndexed(shoreMesh.idx.length);
         }
+        pass.setBindGroup(1, bgAir);
         drawMeshes(pass, pipes.bug, geoNow, bugVB, bugIB, bugInstB, bugDraws);
         if (!under && pipes.drops && !NO.drops) {
           // Spray always, where waves break; rain and its splashes by how hard it is falling;
