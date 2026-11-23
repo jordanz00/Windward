@@ -621,15 +621,37 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let gl = vec3<f32>(0.2, 0.2, 0.17) * (up * k + F.sunCol / max(F.lit.y, 1e-3) * max(F.sunDir.y, 0.0) * (1.0 - 0.7 * sat(F.mood.y)));
   return vec4<f32>(acc * k + gl * (1.0 - ny) * 0.5, 1.0);
 }
+// Lightning is light from inside the cloud, so it is added where the sky is read rather than
+// baked into the panorama: it is there for a tenth of a second and a bake takes many frames.
+const BOLT_C = vec3<f32>(0.76, 0.84, 1.0);
+// How the flash spreads through the cloud round it: a core where the channel is, a wide
+// glow about that, and a little over the whole sky.
+fn boltGlow(rd: vec3<f32>) -> f32 {
+  let c = dot(rd, normalize(F.bolt.xyz - F.camPos));
+  return 0.045 + 0.27 * pow(sat(c * 0.5 + 0.5), 5.0) + 1.5 * pow(sat(c), 40.0);
+}
+// What it throws on a surface facing n. It is a wide light, so it wraps well round.
+fn boltOn(n: vec3<f32>) -> vec3<f32> {
+  if (F.bolt.w <= 0.0) { return vec3<f32>(0.0); }
+  let d = F.bolt.xyz - F.camPos;
+  let r = length(d);
+  let near = 1.0 / (1.0 + r * r / 1.2e7);
+  return BOLT_C * (F.bolt.w * near * (0.4 + 0.6 * sat(dot(n, d / r) * 0.75 + 0.25)));
+}
 fn skyIrr(n: vec3<f32>) -> vec3<f32> {
   let u = atan2(n.z, n.x) / 6.2831853 + 0.5;
   let px = vec2<f32>(1.0 + u * 32.0, 0.5 + (clamp(n.y, -1.0, 1.0) + 1.0) * 7.5);
-  return textureSampleLevel(skyMap, skySamp, px / floor(F.skyD.xy / 8.0), 0, 3.0).rgb * max(F.lit.y, 0.0);
+  return textureSampleLevel(skyMap, skySamp, px / floor(F.skyD.xy / 8.0), 0, 3.0).rgb * max(F.lit.y, 0.0) + boltOn(n);
 }
-fn skyDim(rd: vec3<f32>) -> vec3<f32> {
+fn skyDimRaw(rd: vec3<f32>) -> vec3<f32> {
   let uv = skyUV(rd);
   let e = 8.0 / F.skyD.y;
-  return textureSampleLevel(skyMap, skySamp, vec2<f32>(uv.x, clamp(uv.y, e, 1.0 - e)), 0, 4.0).rgb * max(F.lit.y, 0.0);
+  return textureSampleLevel(skyMap, skySamp, vec2<f32>(uv.x, clamp(uv.y, e, 1.0 - e)), 0, 4.0).rgb;
+}
+fn skyDim(rd: vec3<f32>) -> vec3<f32> {
+  var col = skyDimRaw(rd) * max(F.lit.y, 0.0);
+  if (F.bolt.w > 0.0) { col += BOLT_C * (F.bolt.w * 0.3 * boltGlow(rd)); }
+  return col;
 }
 
 // disc is 1 where the sun itself may show, 0 for the glow of the air alone.
@@ -644,7 +666,14 @@ fn skyLook(rd: vec3<f32>, disc: f32) -> vec3<f32> {
     let face = smoothstep(1.0, 0.85, r) * (0.55 + 0.45 * sqrt(max(1.0 - r * r, 0.0)));
     col += F.disc.rgb * sunT(max(F.camPos.y, 0.0) * 0.001, F.sunTrue.y) * (16.0 * face + 0.5 * exp(-r * 0.9)) * s.a * disc;
   }
-  return col * max(F.lit.y, 0.0);
+  col *= max(F.lit.y, 0.0);
+  if (F.bolt.w > 0.0) {
+    // Thin cloud lets more of it out than thick, as it does daylight, so the flash shows the
+    // cloud's own shapes. The rain under it is lit as well.
+    let thin = clamp(dot(s.rgb, vec3<f32>(0.3, 0.6, 0.1)) / max(dot(skyDimRaw(rd), vec3<f32>(0.3, 0.6, 0.1)), 1e-5), 0.45, 1.9);
+    col += BOLT_C * (F.bolt.w * boltGlow(rd) * ((1.0 - s.a) * thin + 0.1 + 0.25 * F.wx.x * (1.0 - sat(rd.y * 4.0))));
+  }
+  return col;
 }
 fn skyColor(rd: vec3<f32>) -> vec3<f32> { return skyLook(rd, 1.0); }
 // The air a distant thing is seen through: the glow of the horizon that way. The rows of

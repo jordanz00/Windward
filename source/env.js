@@ -16,13 +16,14 @@ const WEATHER = {
   overcast: ['Overcast', 0.8, 0, 0, 0.55, 5, 0.4, 0.35, 0.92, 0.3, 0.1],
   drizzle: ['Light rain', 0.86, 0.3, 0.06, 0.8, 4, 0.35, 0.3, 1, 0.35, 0],
   shower: ['Tropical shower', 0.95, 1, 0.05, 1, 9, 0.9, 0.55, 0.85, 1, 0.2],
+  storm: ['Thunderstorm', 1, 1, 0.06, 1, 12.5, 1, 0.6, 1, 1, 0],
   after: ['After the rain', 0.3, 0, 0.12, 0.8, 2.5, 0.25, 0.28, 0.1, 0.85, 0.45],
   mist: ['Mist', 0.08, 0, 1, 0.85, 1.2, 0.1, 0.1, 0.1, 0.1, 0.2]
 };
 // What tends to follow what. A shower builds, falls and clears; it does not switch on.
 const WX_NEXT = {
   clear: ['clear', 'clouds', 'clouds', 'gusts'], clouds: ['clear', 'clouds', 'overcast', 'gusts'], gusts: ['clouds', 'clear'],
-  overcast: ['drizzle', 'clouds', 'shower'], drizzle: ['shower', 'overcast', 'after'], shower: ['after', 'drizzle'],
+  overcast: ['drizzle', 'clouds', 'shower'], drizzle: ['shower', 'overcast', 'after'], shower: ['after', 'drizzle', 'after', 'storm'], storm: ['shower', 'after'],
   after: ['clouds', 'clear', 'mist'], mist: ['clear', 'clouds']
 };
 const DAY_STOPS = [[6.2, 'First light'], [8, 'Morning'], [12, 'Midday'], [ENV_H0, 'Afternoon'], [ENV_OPEN, 'Golden hour'], [18.02, 'Sunset'], [18.55, 'Blue hour'], [22.5, 'Night']];
@@ -127,6 +128,52 @@ function envSet(wx, snap) {
   if (!WEATHER[wx]) return;
   env.wx = wx; env.hold = 150 + Math.random() * 240;
   if (snap) { env.v = WEATHER[wx].slice(1); env.wet = wx === 'after' ? 0.85 : env.v[1] > 0 ? 1 : 0; }
+}
+// Lightning. A flash is a few return strokes down one channel, each a sharp rise and a fast
+// decay some tens of milliseconds after the last, which is why it flickers. Six in ten reach
+// the sea and show their channel; the rest stay inside the cloud and only light it. The
+// thunder leaves with the flash and arrives at the speed of sound.
+const bolt = { wait: 3, t: 0, end: 0, strokes: [], pos: [0, 900, 4000], show: 0, seed: 0, now: 0, due: [] };
+function boltStrike(cx, cz, fx, fz) {
+  const R = Math.random;
+  const ground = R() < 0.6;
+  // Most fall where the eye is turned, so a storm is seen as well as heard.
+  const a = Math.atan2(fz, fx) + (R() < 0.7 ? (R() - 0.5) * 1.2 : R() * 6.2832);
+  const d = ground ? 1200 + 4800 * Math.pow(R(), 1.5) : 2500 + 9000 * R();
+  bolt.pos = [cx + Math.cos(a) * d, ground ? 900 : 1500 + 3000 * R(), cz + Math.sin(a) * d];
+  bolt.show = ground ? 1 : 0; bolt.seed = R() * 97; bolt.t = 0; bolt.strokes = [];
+  let t = 0;
+  // A far flash is a dimmer one.
+  const dim = 1 / (1 + d * d / 8e7);
+  for (let i = 0, n = ground ? 1 + ((R() * 3) | 0) : 2 + ((R() * 2) | 0); i < n; i++) {
+    bolt.strokes.push([t, dim * (ground ? (i ? 0.3 + 0.6 * R() : 1) : 0.35 + 0.5 * R()), ground ? 0.03 + 0.05 * R() : 0.06 + 0.09 * R()]);
+    t += 0.045 + (ground ? 0.09 : 0.16) * R();
+  }
+  bolt.end = t + 0.6;
+  bolt.due.push([d / 343, d]);
+}
+// Never more than three strokes to a flash, so the screen does not strobe. Where the visitor
+// has asked for less motion the flicker goes altogether: one slow swell, a third as bright.
+const boltCalm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Returns how far off a thunderclap that arrives this frame was struck, or 0.
+function boltStep(dt, cx, cz, fx, fz) {
+  if (env.wx === 'storm' && env.v[1] > 0.6 && env.v[0] > 0.5) {
+    bolt.wait -= dt;
+    if (bolt.wait < 0) { bolt.wait = 2.5 + 11 * Math.pow(Math.random(), 1.6); boltStrike(cx, cz, fx, fz); }
+  } else bolt.wait = Math.min(bolt.wait, 1.5 + 2 * Math.random());
+  bolt.now = 0;
+  if (bolt.t < bolt.end) {
+    bolt.t += dt;
+    let lit = 0, on = false;
+    for (const k of bolt.strokes) if (bolt.t >= k[0]) { lit += k[1] * Math.exp(-(bolt.t - k[0]) / k[2]); on = true; }
+    // Between strokes a little current keeps the channel glowing.
+    bolt.now = Math.min(1.2, lit) + (on && bolt.t < bolt.end - 0.55 ? 0.06 : 0);
+    if (bolt.now < 0.004) bolt.now = 0;
+    if (boltCalm) bolt.now = 0.35 * Math.pow(Math.sin(Math.PI * Math.min(1, bolt.t / bolt.end)), 2);
+  }
+  let heard = 0;
+  for (let i = bolt.due.length - 1; i >= 0; i--) if ((bolt.due[i][0] -= dt) <= 0) { heard = bolt.due[i][1]; bolt.due.splice(i, 1); }
+  return heard;
 }
 function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   if (env.goal != null) {
@@ -258,4 +305,6 @@ function envWrite(arr, o, sunAng, sunK) {
   arr[o + 47] = k.depth;
   arr[o + 50] = k.tower[0]; arr[o + 51] = k.tower[1];
   arr.set([k.lean[0], k.lean[1], k.deckThick, k.rise], o + 52);
+  // The flash is given in what the eye is opened to, so it dazzles by night and by day alike.
+  arr.set([bolt.pos[0], bolt.pos[1], bolt.pos[2], bolt.now * 2.7 / Math.max(env.expo, 0.05), bolt.seed, bolt.show, 0, 0], o + 56);
 }

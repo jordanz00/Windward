@@ -105,3 +105,16 @@ Compact working notes. Update, do not grow.
 - Bird's-eye: straight boundary low in frame over the lagoon (pre-existing).
 - No real-GPU timings yet.
 - Sky looking at a low sun: one cloud near the frame's edge is cut by a straight vertical line (seen at `shot=5&tod=17.7&sunview=1`, also before the evening work).
+
+## Thunderstorm
+
+- `WEATHER.storm` sits after `shower` in the cycle; left alone, a shower turns into one a quarter of the time. Strikes start once rain > 0.6 and cover > 0.5.
+- `bolt` / `boltStep` in `env.js`: strike position (70% within about 35 degrees of where the camera faces), strokes `[time, strength, decay]`, `bolt.now` is the brightness this frame. Thunder is queued at distance / 343 s and played by `audio.thunder(d)`.
+- Uniforms `F.bolt` (xyz position, w brightness divided by exposure) and `F.boltB` (seed, channel shown) at floats 244..251; the frame buffers are 1008 bytes.
+- Light is added at lookup, never baked: `skyLook` (cloud glow, weighted by `1 - alpha` and by how thin the cloud is against mip 4), `skyDim` (air pass, wet glints), `skyIrr` via `boltOn(n)` (everything `shade()` lights), rain streaks. Water gets it through `skyReflect`.
+- `boltSeen` in `fsSky` draws the channel as the ray's nearest pass to an upright at the strike, offset by three octaves of 1D noise, with two forks. It is drawn in the sky pass, so anything nearer hides it and nothing further than the strike exists to be wrongly in front.
+- At most three strokes to a flash (WCAG's limit is three flashes a second). With `prefers-reduced-motion` a flash is one slow swell at 0.35.
+- Off in `read`/`shot` captures. `?bolt=1` holds a ground stroke ahead of the camera, `?bolt=2` an in-cloud flash, `&far=<m>` sets its distance.
+- Not verified: the timing and loudness of thunder (no audio in the harness), and the flicker in motion on a real GPU.
+
+- Found while testing the storm on the real page: `api.air` named `airCoastF`, which does not exist, in the gust whoosh (gust over 7 m/s and rising). It threw and stopped the frame loop for good. It had been there since the shared-wind commit and would trip in Wind gusts and Tropical shower with sound running; now `airCoast.filter`. The capture harness never ran it because captures have no audio.

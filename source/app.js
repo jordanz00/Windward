@@ -1842,10 +1842,10 @@ function makeAudio() {
     if (s.gust > api._gustPeak + 1.8 && s.gust > 7) {
       api._gustPeak = s.gust;
       const t = ac.currentTime;
-      airCoastF.frequency.cancelScheduledValues(t);
-      airCoastF.frequency.setValueAtTime(airCoastF.frequency.value, t);
-      airCoastF.frequency.exponentialRampToValueAtTime(900, t + 0.15);
-      airCoastF.frequency.exponentialRampToValueAtTime(520, t + 1.4);
+      airCoast.filter.frequency.cancelScheduledValues(t);
+      airCoast.filter.frequency.setValueAtTime(airCoast.filter.frequency.value, t);
+      airCoast.filter.frequency.exponentialRampToValueAtTime(900, t + 0.15);
+      airCoast.filter.frequency.exponentialRampToValueAtTime(520, t + 1.4);
     }
     api._gustPeak += (s.gust - api._gustPeak) * 0.04;
     ease(bee.g, m * 0.05 * near(s.heard.bee, 1.2)); bee.f.value = 205 + 18 * Math.sin(ac.currentTime * 11);
@@ -1936,6 +1936,37 @@ function makeAudio() {
     if (again > 0) setTimeout(() => sing(b, again - 1), (end + R(0.7, 2.2)) * 1000);
     else if (Math.random() < 0.35) { const o = singers.filter((x) => x.kind === b.kind && x !== b)[0]; if (o) setTimeout(() => sing(o, 0), (end + R(0.6, 2)) * 1000); }
   }
+  // Thunder: a crack when the stroke was close, then the low roll of the rest of the channel
+  // arriving from further and further off. Distance takes the top off it and stretches it out.
+  api.thunder = (d) => {
+    if (!api.alive || muted) return;
+    const t = ac.currentTime, near = Math.exp(-d / 2600), len = 3.5 + 3.5 * Math.random() + d / 2200;
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const f = ac.createBiquadFilter(), f2 = ac.createBiquadFilter(), g = ac.createGain(), p = ac.createStereoPanner();
+    f.type = 'lowpass'; f2.type = 'lowpass'; f2.frequency.value = 900; p.pan.value = Math.random() - 0.5;
+    f.frequency.setValueAtTime(180 + 1500 * near, t); f.frequency.exponentialRampToValueAtTime(60, t + len);
+    const peak = 0.5 + 2.6 * near;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.04 + 0.5 * (1 - near));
+    let at = t + 0.3 + 0.5 * (1 - near), lvl = peak;
+    while (at < t + len - 0.8) {
+      lvl *= 0.5 + 0.35 * Math.random();
+      g.gain.exponentialRampToValueAtTime(lvl * (0.35 + 0.3 * Math.random()), at);
+      at += 0.2 + 0.5 * Math.random();
+      g.gain.exponentialRampToValueAtTime(lvl, at);
+      at += 0.25 + 0.6 * Math.random();
+    }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    src.connect(f); f.connect(f2); f2.connect(g); g.connect(p); p.connect(master);
+    src.start(t, Math.random() * 20); src.stop(t + len + 0.1);
+    if (near > 0.45) {
+      const c = ac.createBufferSource(), cf = ac.createBiquadFilter(), cg = ac.createGain();
+      c.buffer = burst; cf.type = 'highpass'; cf.frequency.value = 700;
+      cg.gain.setValueAtTime(0.5 * near * near, t); cg.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+      c.connect(cf); cf.connect(cg); cg.connect(master);
+      c.start(t, Math.random()); c.stop(t + 0.3);
+    }
+  };
   function crash() {
     if (!api.alive || muted) return;
     const t = ac.currentTime;
@@ -2894,9 +2925,9 @@ async function main() {
       return;
     }
     mark('wgsl');
-    const uf = new Float32Array(244);
-    const ur = new Float32Array(244);
-    const un = new Float32Array(244);
+    const uf = new Float32Array(252);
+    const ur = new Float32Array(252);
+    const un = new Float32Array(252);
     for (let i = 0; i < 8; i++) {
       const w = WAVES[i];
       const L = Math.hypot(w[0], w[1]) || 1;
@@ -2905,9 +2936,9 @@ async function main() {
     }
     ur.set(uf);
 
-    const ubuf = device.createBuffer({ size: 976, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const rbuf = device.createBuffer({ size: 976, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const nbuf = device.createBuffer({ size: 976, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const ubuf = device.createBuffer({ size: 1008, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 1008, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const nbuf = device.createBuffer({ size: 1008, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const htex = device.createTexture({
       size: [q.hres, q.hres],
@@ -3416,6 +3447,14 @@ async function main() {
         if (READ && frames < 14) env.expoSmooth = null;
       }
       envStep(dt, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
+      if (qstr.has('bolt')) {
+        // A held flash for a capture: 1 is a stroke to the sea ahead, 2 one inside the cloud.
+        const far = +qstr.get('far') || 2400, g = qstr.get('bolt') !== '2';
+        bolt.pos = [camX + Math.sin(yaw) * far, g ? 900 : 2600, camZ - Math.cos(yaw) * far]; bolt.show = g ? 1 : 0; bolt.seed = 31.7; bolt.now = 0.85;
+      } else if (!READ && !qstr.has('shot')) {
+        const heard = boltStep(dt, camX, camZ, Math.sin(yaw), -Math.cos(yaw));
+        if (heard && audio && audio.thunder && mode > 0) audio.thunder(heard);
+      }
 
       if (mode === 0 && !qstr.has('shot')) {
         const a = time * 0.045;

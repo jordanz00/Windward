@@ -114,7 +114,9 @@ Under the surf and the birds, an original score called Beneath the Blue unfolds 
 
 - **One environment.** `env.js` holds a clock, a weather state and a wind, and everything else reads them: the sun and sky, the sea's height and chop, the plants, the rain, the insects and the sound. Nothing has a time of day of its own.
 - **The day.** The sun rides a tilted circle through the sky, rising at six and setting at eighteen. Its colour is what is left after its path through the air, so it reddens as it drops; the sky's own light is tracked separately and takes over through twilight; after that a pale moon lights the ground. Exposure opens as the light goes, but not all the way, so night is dark, and it closes when the camera faces the sun. Nothing tints the picture: the warmth of a low sun is what the air has left of it. A full day takes about an hour and a half unless you step it. The stops are first light, morning, midday, afternoon, golden hour, sunset, blue hour and night.
-- **Weather.** Clear, passing clouds, gusty, overcast, light rain, a tropical shower, the hour after rain, and morning mist. Each is a row of numbers: cloud cover, rain, mist, humidity, wind speed, gustiness. The state eases from one row to the next over a minute or so, and left alone it wanders between kinds that follow one another. Ground gets wet while it rains and dries afterwards; dew and mist form at dawn and burn off as the sun climbs.
+- **Weather.** Clear, passing clouds, gusty, overcast, light rain, a tropical shower, a thunderstorm, the hour after rain, and morning mist. Each is a row of numbers: cloud cover, rain, mist, humidity, wind speed, gustiness. The state eases from one row to the next over a minute or so, and left alone it wanders between kinds that follow one another. Ground gets wet while it rains and dries afterwards; dew and mist form at dawn and burn off as the sun climbs.
+
+- **Thunderstorm.** A flash is a few return strokes tens of milliseconds apart, which is why it flickers. Six in ten come down to the sea as a forked channel; the rest stay in the cloud. The light is added where the sky is read, not baked into it: it glows through the cloud around the strike, brighter where the cloud is thin, and falls on the land, the rain, the wet surfaces and the sea's reflection from the direction of the strike. Thunder is filtered noise that arrives at the speed of sound, so a far strike is heard seconds late and lower. `?wx=storm` opens in one.
 - **Wind.** One field: a prevailing direction that meanders, a speed, and gusts that travel downwind as patches a few tens of metres across. Palms lean and rock at a rate set by their own size, fronds and leaves flutter on top of that, plants in the lee of the forest move less, grass bends, the small chop on the sea grows with the wind, clouds drift with it, rain slants with it, and insects are carried by it.
 - **Air.** Distance fades toward the colour of the horizon in that direction, with blue scattered out first and a low humid layer that thickens with moisture and rain. On top of that a half-resolution pass marches each view ray through the near air against the shadow maps, so where there is mist, damp forest air, spray over the surf or rain, sunlight shows as shafts between whatever is shading it and disappears when the sun is covered. Each step asks the shadow map three times, since what the leaves let through changes faster along a ray than the air does. Each step adds the sunlight that reaches it, past the leaves and past the clouds, by a normalised forward phase, and the light of the sky. Under trees the air also holds motes (pollen, dust) that are too few to dim anything but throw the sun forward, so light coming down between the crowns stands in the air as warm shafts, strongest in the forest with a low sun. Under water the same pass draws the rays that come down through the surface.
 - **Rain and spray.** Rain is streaks that fall at the speed and slant the wind gives them, in a volume that moves with you, with a splash where a drop meets the ground and rings on still water. Wet sand and leaves darken and shine. Spray is thrown where the surf simulation says water is breaking, and blown downwind. Fine motes show in humid air against the light.
@@ -133,7 +135,7 @@ Surf, wind and birds are the bed. Over them, cicada-like rasps sing in bouts thr
 
 ### Capture parameters
 
-For captures, `?tod=<hour>` sets the clock, `?wx=<clear|clouds|gusts|overcast|drizzle|shower|after|mist>` sets the weather, and `&flow` lets both run. `&bug=<kind>` frames the nearest insect of that kind (`bd` is the distance in metres, `bst` its state, `hold` keeps it there, `bat=<n>` goes to the n-th place that kind lives first). `&sunview=<0..1>` faces the sun, pitched up by that share of its height, and `&shade` stands in the shadow of the nearest palm crown. `&bird=<metres>` flies three gulls past the camera at that distance. `&rf=<frame>` reads the picture back at that frame instead of the sixteenth.
+For captures, `?tod=<hour>` sets the clock, `?wx=<clear|clouds|gusts|overcast|drizzle|shower|storm|after|mist>` sets the weather, and `&flow` lets both run. `&bug=<kind>` frames the nearest insect of that kind (`bd` is the distance in metres, `bst` its state, `hold` keeps it there, `bat=<n>` goes to the n-th place that kind lives first). `&sunview=<0..1>` faces the sun, pitched up by that share of its height, and `&shade` stands in the shadow of the nearest palm crown. `&bird=<metres>` flies three gulls past the camera at that distance. `&rf=<frame>` reads the picture back at that frame instead of the sixteenth.
 
 `?shot=6` with `&fish=<0-7>` follows one species (`fd` is the distance in metres, `nth` picks the school, `calm` stops them minding the camera, `warm` runs the animals for that many seconds first).
 
@@ -143,11 +145,11 @@ Kilobytes are 1024 bytes. `node source/build.mjs` prints these.
 
 | | |
 |---|---|
-| Source that goes into the page, with its comments | 549.9 KB |
-| of which shaders (WGSL) | 180.1 KB |
-| `index.html` | 352.4 KB |
-| `index.html`, gzipped | 123.1 KB |
-| `index.html`, brotli | 104.4 KB |
+| Source that goes into the page, with its comments | 566.9 KB |
+| of which shaders (WGSL) | 185.4 KB |
+| `index.html` | 358.0 KB |
+| `index.html`, gzipped | 124.9 KB |
+| `index.html`, brotli | 106.0 KB |
 
 The build strips comments and spare whitespace and nothing else; names are not mangled. The page fetches nothing after it loads: no images, models, audio, fonts or scripts.
 

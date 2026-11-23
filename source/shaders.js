@@ -64,6 +64,10 @@ function shaderCode(res, span, wgrid, samples) {
   skyS: vec4<f32>,
   skyD: vec4<f32>,
   cldE: vec4<f32>,
+  // Lightning. bolt: where the flash is (m; y is the height of the glow in the cloud) and how
+  // bright it is now. boltB: its seed, and whether a channel comes down out of the cloud.
+  bolt: vec4<f32>,
+  boltB: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var htex: texture_2d<f32>;
@@ -1530,17 +1534,62 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   return airMix(col, -V, distS);
 }
 
+// The channel of a stroke that reaches the sea: a crooked line down from the cloud with two
+// forks that give out part way, seen from the side. q is how far the ray passes from the
+// upright through the strike, y how high it is there, t how far away.
+fn boltKink(y: f32, s: f32) -> f32 {
+  let a = y / 310.0 + s;
+  let b = y / 83.0 + s * 3.1;
+  let c = y / 21.0 + s * 7.3;
+  let fa = fract(a); let fb = fract(b); let fc = fract(c);
+  return (mix(hash21(vec2<f32>(floor(a), s)), hash21(vec2<f32>(floor(a) + 1.0, s)), fa * fa * (3.0 - 2.0 * fa)) - 0.5) * 240.0
+    + (mix(hash21(vec2<f32>(floor(b), s + 5.0)), hash21(vec2<f32>(floor(b) + 1.0, s + 5.0)), fb) - 0.5) * 60.0
+    + (mix(hash21(vec2<f32>(floor(c), s + 9.0)), hash21(vec2<f32>(floor(c) + 1.0, s + 9.0)), fc) - 0.5) * 15.0;
+}
+fn boltLine(d: f32, w: f32) -> f32 {
+  return w * w / (d * d + w * w) + 0.05 * w / (abs(d) + 12.0 * w);
+}
+fn boltSeen(rd: vec3<f32>) -> vec3<f32> {
+  if (F.bolt.w * F.boltB.y <= 0.0) { return vec3<f32>(0.0); }
+  let h = rd.xz;
+  let hl = max(length(h), 1e-4);
+  let to = F.bolt.xz - F.camPos.xz;
+  let t = dot(to, h) / (hl * hl);
+  if (t <= 0.0) { return vec3<f32>(0.0); }
+  let y = F.camPos.y + rd.y * t;
+  let top = F.cldB.z * 1000.0 + 120.0;
+  if (y < 0.0 || y > top) { return vec3<f32>(0.0); }
+  let q = (to.x * h.y - to.y * h.x) / hl;
+  let s = F.boltB.x;
+  let w = max(2.6, t * hl * 0.0014);
+  // Pinned to the strike at the sea, wandering more the higher it is.
+  let k0 = boltKink(y, s) - boltKink(0.0, s);
+  var g = boltLine(q - k0, w);
+  for (var i = 0; i < 2; i++) {
+    let fs = s + 13.0 + f32(i) * 17.0;
+    let y0 = top * (0.5 + 0.3 * hash21(vec2<f32>(fs, 1.0)));
+    let y1 = y0 * (0.25 + 0.4 * hash21(vec2<f32>(fs, 2.0)));
+    if (y < y0 && y > y1) {
+      let side = select(-1.0, 1.0, hash21(vec2<f32>(fs, 3.0)) > 0.5);
+      let kf = boltKink(y0, s) - boltKink(0.0, s) + (y0 - y) * side * (0.35 + 0.5 * hash21(vec2<f32>(fs, 4.0)))
+        + (boltKink(y, fs) - boltKink(y0, fs)) * 0.6;
+      g += boltLine(q - kf, w * 0.7) * 0.4 * smoothstep(y1, y1 + (y0 - y1) * 0.4, y);
+    }
+  }
+  return BOLT_C * (F.bolt.w * 46.0 * g * smoothstep(top, top - 160.0, y) * exp(-t * hl * F.wx.x * 0.00012));
+}
 @fragment fn fsSky(in: SkyV) -> @location(0) vec4<f32> {
   let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
   // From under water, whatever nothing else covers is more water.
   if (F.under > 0.5) { return vec4<f32>(waterHaze(rd.y), 1.0); }
+  let seen = boltSeen(rd);
   // Any ray that meets the sea plane is open ocean, so the water does not end at the mesh.
   if (rd.y < -0.0003 && F.camPos.y > 0.2 && F.under < 0.5) {
     let t = -F.camPos.y / rd.y;
     if (t > 1.0 && t < 250000.0) {
       let xz = F.camPos.xz + rd.xz * t;
       // The mesh covers the near water. This fills anything it does not, including the horizon.
-      return vec4<f32>(farOcean(xz), 1.0);
+      return vec4<f32>(farOcean(xz) + seen, 1.0);
     }
   }
   var col = skyColor(rd);
@@ -1559,7 +1608,7 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
       col += vec3<f32>(0.92, 0.94, 1.0) * (smoothstep(0.0078, 0.0066, md) * face * 0.9 + exp(-md * 26.0) * 0.012) * F.moon.w * open;
     }
   }
-  return vec4<f32>(col, 1.0);
+  return vec4<f32>(col + seen, 1.0);
 }
 
 struct WaterV {
@@ -1784,7 +1833,7 @@ const DROP_SPRAY: u32 = 60000u;
   o.seed = h.x;
   var pos = vec3<f32>(0.0);
   var a = 0.0;
-  var light = F.amb.rgb;
+  var light = F.amb.rgb + BOLT_C * (F.bolt.w * 0.55);
   if (ii < DROP_SPLASH) {
     // A streak the length the drop falls while the eye's shutter is open.
     let box = vec3<f32>(22.0, 14.0, 22.0);
