@@ -1171,7 +1171,9 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
               const cxi = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
               const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
               // The mirrored view (coarser) is seen only in moving water: small plants far off are not in it.
-              ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * (coarser ? 0.03 : 0.0016);
+              // In the view itself a plant under a pixel and a half across is left out, whatever the
+              // size of the canvas: drawn, it is a dot that comes and goes as the eye turns.
+              ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * (coarser ? 0.03 : Math.max(0.0016, (this.pxw || 0) * 1.5));
             }
             if (ok) {
               let lod = coarser;
@@ -3313,6 +3315,7 @@ async function main() {
       let instEnd = lastInstEnd;
       const tCull0 = performance.now();
       if (needCull) {
+        scatter.pxw = uf[63] * 2 / viewH;
         mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, plantReach, 0);
         instEnd = mainDraws.end;
         if (reflOn) {
