@@ -609,7 +609,7 @@ function makeFern(seed) {
 }
 
 // Small understory tree / juvenile palm-like canopy: short trunk, irregular radial leaves.
-function makeCanopy(seed) {
+function makeCanopy(seed, lod) {
   const rnd = seeded(seed || 5);
   const m = new Mesh();
   const H = 0.55 + rnd() * 0.45;
@@ -624,13 +624,13 @@ function makeCanopy(seed) {
     const col = [0.06 + rnd() * 0.06, 0.22 + rnd() * 0.14, 0.04 + rnd() * 0.04];
     const up = form === 0 ? 0.55 + rnd() * 0.35 : 0.12 + rnd() * 0.4;
     addLeaflet(m, Math.cos(ang) * 0.05, H - 0.02, Math.sin(ang) * 0.05,
-      Math.cos(ang), up, Math.sin(ang), reach, wid, col, 0.22 + rnd() * 0.12, (rnd() - 0.5) * 0.5, 6);
+      Math.cos(ang), up, Math.sin(ang), reach, wid, col, 0.22 + rnd() * 0.12, (rnd() - 0.5) * 0.5, lod ? 0 : 4);
   }
   return m;
 }
 
 // Broad-leaf understory: banana-like large blades or multi-fan tropical foliage.
-function makeBroad(seed) {
+function makeBroad(seed, lod) {
   const rnd = seeded(seed || 3);
   const m = new Mesh();
   const form = seed % 3;
@@ -645,7 +645,7 @@ function makeBroad(seed) {
       const col = [0.1 + rnd() * 0.05, 0.3 + rnd() * 0.1, 0.07];
       addLeaflet(m, Math.cos(ang) * 0.04, H * 0.7, Math.sin(ang) * 0.04,
         Math.cos(ang) * 0.4, 0.75 + rnd() * 0.4, Math.sin(ang) * 0.4,
-        0.42 + rnd() * 0.22, 0.085 + rnd() * 0.04, col, 0.4, (rnd() - 0.5) * 0.35, 7);
+        0.42 + rnd() * 0.22, 0.085 + rnd() * 0.04, col, 0.4, (rnd() - 0.5) * 0.35, lod ? 0 : 5);
     }
   } else {
     const fans = 5 + (seed % 4);
@@ -658,7 +658,7 @@ function makeBroad(seed) {
         const a = ang + (k - (nLeaf - 1) * 0.5) * (0.22 + rnd() * 0.12);
         const col = [0.08 + rnd() * 0.07, 0.24 + rnd() * 0.14, 0.05 + rnd() * 0.04];
         addLeaflet(m, x, H * (0.55 + rnd() * 0.3), z, Math.cos(a), 0.25 + rnd() * 0.45, Math.sin(a),
-          0.18 + rnd() * 0.16, 0.035 + rnd() * 0.03, col, 0.3 + rnd() * 0.2, (rnd() - 0.5) * 0.45, 4);
+          0.18 + rnd() * 0.16, 0.035 + rnd() * 0.03, col, 0.3 + rnd() * 0.2, (rnd() - 0.5) * 0.45, lod ? 0 : 3);
       }
     }
   }
@@ -822,26 +822,23 @@ function makeTree(seed, lod) {
   ];
   const unit = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
   const cross = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-  // One leaf: an ovate blade folded along its midrib, six vertices. d is the way it points,
+  // One leaf: a blade folded along its midrib, four vertices. d is the way it points,
   // up the way its face looks, out the way the crown's surface looks there: the shading
   // normal leans toward that, so a crown is lit as one rounded mass and not as noise.
   const leafAt = (o, d, up, out, len, wid, col, sway) => {
     const sd = unit(cross(up, d)), nn = unit(cross(d, sd));
     const ns = unit([nn[0] + out[0] * 0.9, nn[1] + out[1] * 0.9 + 0.25, nn[2] + out[2] * 0.9]);
     const ix = [];
-    for (const [t, w, c] of [[0, 0.12, 0.8], [0.4, 1, 1], [0.74, 0.7, 1.06], [1, 0, 1.12]]) {
-      const drop = t * t * len * 0.3, lift = w * wid * 0.32;
-      for (const side of w > 0 ? [1, -1] : [0]) {
-        ix.push(m.v(o[0] + d[0] * len * t + sd[0] * wid * w * side + nn[0] * (lift - drop),
-          o[1] + d[1] * len * t + sd[1] * wid * w * side + nn[1] * (lift - drop),
-          o[2] + d[2] * len * t + sd[2] * wid * w * side + nn[2] * (lift - drop),
-          ns[0] - sd[0] * side * 0.3, ns[1] - sd[1] * side * 0.3, ns[2] - sd[2] * side * 0.3,
-          col[0] * c, col[1] * c, col[2] * c, sway * (1 + 0.5 * t), LEAF, side, t));
-      }
+    // Stalk end, the two widest points, the tip: two triangles that meet along the midrib.
+    for (const [t, side, c] of [[0, 0, 0.8], [0.46, 1, 1], [0.46, -1, 1], [1, 0, 1.12]]) {
+      const h = side ? wid * 0.3 : -t * len * 0.3;
+      ix.push(m.v(o[0] + d[0] * len * t + sd[0] * wid * side + nn[0] * h,
+        o[1] + d[1] * len * t + sd[1] * wid * side + nn[1] * h,
+        o[2] + d[2] * len * t + sd[2] * wid * side + nn[2] * h,
+        ns[0] - sd[0] * side * 0.3, ns[1] - sd[1] * side * 0.3, ns[2] - sd[2] * side * 0.3,
+        col[0] * c, col[1] * c, col[2] * c, sway * (1 + 0.5 * t), LEAF, side, t));
     }
-    m.tri(ix[0], ix[2], ix[1]); m.tri(ix[1], ix[2], ix[3]);
-    m.tri(ix[2], ix[4], ix[3]); m.tri(ix[3], ix[4], ix[5]);
-    m.tri(ix[4], ix[6], ix[5]);
+    m.tri(ix[0], ix[3], ix[1]); m.tri(ix[0], ix[2], ix[3]);
   };
   for (let i = 0; i < lobes; i++) {
     const blob = icosphere(lod ? 1 : 2, 1, [0.1, 0.1, 0.1]), n = blob.pos.length / 3;
@@ -865,14 +862,14 @@ function makeTree(seed, lod) {
     const swayAt = (y) => (form === 5 ? 0.04 : 0.028) + Math.max(0, Math.min(1, y * 0.5 + 0.5)) * 0.038;
     // The mass inside: what shows between the leaves, and all there is of a far tree. Near,
     // it sits back under the leaves and is their shade; far, it is the crown and is their colour.
-    const core = lod < 2 ? 0.78 : 1.04, dark = lod < 2 ? 0.7 : 0.95;
+    const core = [0.78, 0.92, 1.04][lod], dark = [0.8, 0.9, 0.95][lod];
     for (let v = 0; v < n; v++) {
       const x = blob.pos[v * 3], y = blob.pos[v * 3 + 1], z = blob.pos[v * 3 + 2];
       const lump = lumpAt(x, y, z) * core;
       const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.5 : flat), pz = z * lump * size;
       blob.pos[v * 3] = px + cx; blob.pos[v * 3 + 1] = py + cy; blob.pos[v * 3 + 2] = pz + cz;
       const up = Math.max(0, Math.min(1, y * 0.5 + 0.5));
-      const lightK = (0.5 + 0.5 * up) * dark;
+      const lightK = (0.7 + 0.3 * up) * dark;
       // Sparse crowns leave darker interiors; rounded ones stay denser/brighter on top.
       const dens = form === 2 ? 1.08 : form === 4 ? 0.85 : 1;
       blob.col[v * 3] = green[0] * lightK * dens;
@@ -887,8 +884,8 @@ function makeTree(seed, lod) {
     // end with its leaves turned out to the light. The coarser level keeps one spray in four
     // and makes its leaves bigger, so the crown covers the same sky from further off.
     const lr = seeded(sd * 53 + i * 131 + 7);
-    const nSpray = Math.max(28, Math.min(104, Math.round(1250 * size * size)));
-    const big = lod ? 2.05 : 1;
+    const nSpray = Math.max(26, Math.min(76, Math.round(1100 * size * size)));
+    const big = lod ? 2.3 : 1.12;
     for (let k = 0; k < nSpray; k++) {
       // Even over the sphere, from the top down to well under the equator.
       const yy = 1 - (k + 0.5) / nSpray * 1.72, rad = Math.sqrt(Math.max(0, 1 - yy * yy)), ga = k * 2.39996 + i;
@@ -901,7 +898,7 @@ function makeTree(seed, lod) {
       const upK = Math.max(0, Math.min(1, dir[1] * 0.5 + 0.5)), lightK = 0.5 + 0.62 * upK * upK;
       // A side of the twig, and the other side.
       const sa = unit(cross(out, [0.31, 0.9, 0.29])), sb = cross(out, sa);
-      const nLeaf = lod ? 5 : 6;
+      const nLeaf = lod ? 4 : 5;
       for (let q = 0; q < 6; q++) {
         const r0l = lr(), r1l = lr(), r2l = lr(), r3l = lr();
         if (q >= nLeaf) continue;
@@ -910,7 +907,7 @@ function makeTree(seed, lod) {
         const d = unit([sa[0] * ca + sb[0] * sn + out[0] * 0.3, sa[1] * ca + sb[1] * sn + out[1] * 0.3 - 0.3 - r1l * 0.35, sa[2] * ca + sb[2] * sn + out[2] * 0.3]);
         const face = unit([out[0] * 0.7 + (r2l - 0.5) * 0.5, out[1] * 0.7 + 0.75, out[2] * 0.7 + (r3l - 0.5) * 0.5]);
         const len = (0.026 + 0.014 * r2l) * big, tone = lightK * (0.82 + 0.5 * r3l), young = r1l > 0.86 ? 1 : 0;
-        leafAt([o[0] + d[0] * 0.004, o[1] + d[1] * 0.004, o[2] + d[2] * 0.004], d, face, out, len, len * (0.36 + 0.1 * r0l),
+        leafAt([o[0] + d[0] * 0.004, o[1] + d[1] * 0.004, o[2] + d[2] * 0.004], d, face, out, len, len * (0.3 + 0.08 * r0l),
           [green[0] * tone * (1 + 0.9 * young), green[1] * tone * (1 + 0.35 * young), green[2] * tone * 0.9], swayAt(dir[1]) + 0.012);
       }
     }
@@ -1164,14 +1161,17 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
           const dy = y - ey;
           const dist = Math.hypot(distXZ, dy);
           if (dist - r < reachI) {
-            let ok = true;
+            // The near shadow map (no view, coarser): a small plant's shadow is lost in the
+            // map's filter past the middle of the box, so it is not drawn into it there.
+            let ok = vp || !coarser || r > 1.2 || dist < reach * 0.42;
             if (vp) {
               const hr = Math.max(r, sc * 0.55);
               const cy = y + hr * 0.55;
               const cw = vp[3] * x + vp[7] * cy + vp[11] * z + vp[15];
               const cxi = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
               const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
-              ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * 0.0016;
+              // The mirrored view (coarser) is seen only in moving water: small plants far off are not in it.
+              ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * (coarser ? 0.03 : 0.0016);
             }
             if (ok) {
               let lod = coarser;
@@ -2381,9 +2381,9 @@ async function main() {
       return Math.atan2(-gz, -gx) + (rnd() - 0.5) * 1.4;
     };
     const shrubIds = protoSet([5, 9, 14, 22, 27], makeShrub, 1.2);
-    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd), makeCanopy(sd)], 2.4, [55]));
+    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd, 0), makeCanopy(sd, 1)], 2.4, [0]));
     const fernIds = protoSet([7, 12, 19, 24, 30, 33], makeFern, 1.6);
-    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd), makeBroad(sd)], 2.8, [50]));
+    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd, 0), makeBroad(sd, 1)], 2.8, [0]));
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
     const palmSites = [];
     const fernBudget = Math.max(14, (q.broad * 0.7) | 0);
@@ -2475,7 +2475,7 @@ async function main() {
     }
     // Interior forest: pick form by habitat — slender near coast, emergent inland, rounded in dense cover.
     // Bounding radius must match canopy size or distant trees fail the pixel/frustum tests and pop.
-    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [8, 72]));
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [0, 50]));
     let trees = 0;
     for (let i = 0; i < q.forest * 32 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
@@ -3590,6 +3590,8 @@ async function main() {
           window.__png = c2.toDataURL('image/png');
           if (qstr.has('perf')) {
             const tri = (d) => { let n = 0; for (let i = 0; i < d.length; i += 5) n += d[i + 1] * d[i + 4]; return Math.round(n / 3000) + 'k'; };
+            const top = (d) => { const r = []; for (let i = 0; i < d.length; i += 5) r.push([d[i + 1] / 3 * d[i + 4], d[i + 1] / 3, d[i + 4]]); return r.sort((x, y) => y[0] - x[0]).slice(0, 14).map((x) => x[1] + 'x' + x[2]).join(' '); };
+            console.log('PERF top view ' + top(mainDraws) + ' | shadow ' + top(nearDraws));
             console.log('PERF cpu ' + (PERF.cpuMs / PERF.cpuN).toFixed(2) + ' ms/frame over ' + PERF.cpuN + ', plant triangles: view ' + tri(mainDraws) + ', mirror ' + tri(reflDraws) + ', near shadow ' + tri(nearDraws));
           }
           requestAnimationFrame(frame);
