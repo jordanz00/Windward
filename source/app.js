@@ -1941,8 +1941,17 @@ const K = Object.create(null);
 ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight'].forEach((c) => { K[c] = 0; });
 let lookX = 0, lookY = 0, dragging = false, touchN = 0;
 let velX = 0, velY = 0, velZ = 0;
-let walkHits = []; // x, z, radius — rocks, trunks, coral for walking collision
+// What a walker cannot pass through: trunks, boulders and the skiff as upright columns,
+// coral and sea stacks as domes. Each is a circle on the plan at the eye's height.
+let walkHits = []; // x, z, radius of each column, as it is planted
 let reefBlocks = null;
+let walkC = null, walkL = null, walkGrid = null; // x, z, radius, centre height, dome?; links; 4 m cells of both
+// The pad keeps the near plane out of the bark and no more: a walker fits between any two
+// trunks that stand apart.
+const WALK_PAD = 0.22, WALK_CELL = 4;
+const walkOut = [0, 0];
+// The height the eye came to stand at on the last step, before any easing toward it.
+let walkEye = 1e9;
 
 // T moves the clock to the next part of the day. R changes the weather, which then stays
 // until R is pressed again past the end of the list, where the island takes it back.
@@ -1987,19 +1996,164 @@ function tryLockPointer() {
     try { canvas.requestPointerLock(); } catch (e2) { fail(); }
   }
 }
-function walkBlocked(x, z, y) {
-  const rPad = 0.4;
-  for (let i = 0; i < walkHits.length; i += 3) {
-    if (Math.hypot(x - walkHits[i], z - walkHits[i + 1]) < walkHits[i + 2] + rPad) return true;
-  }
-  const B = reefBlocks;
-  if (B) {
-    for (let o = 0; o < B.length; o += 4) {
-      if (Math.abs(y - B[o + 1]) > B[o + 3] + 1.2) continue;
-      if (Math.hypot(x - B[o], z - B[o + 2]) < B[o + 3] + rPad) return true;
+function walkBuild() {
+  const B = reefBlocks || [], nc = walkHits.length / 3, n = nc + B.length / 4;
+  walkC = new Float32Array(n * 5);
+  for (let i = 0; i < nc; i++) walkC.set([walkHits[i * 3], walkHits[i * 3 + 1], walkHits[i * 3 + 2], 0, 0], i * 5);
+  for (let i = 0; i < B.length / 4; i++) walkC.set([B[i * 4], B[i * 4 + 2], B[i * 4 + 3], B[i * 4 + 1], 1], (nc + i) * 5);
+  // Two columns too close to walk between are one obstacle: the gap is closed by a link from
+  // one to the other, so the pair is walked round like a wall and has no notch to stop in.
+  // A link is the two circles and the straight sides that touch both; its last number is
+  // the slant of those sides, which is how far along the link the nearest side leans.
+  const L = [], linked = new Uint8Array(n);
+  for (let i = 0; i < nc * 3; i += 3) {
+    for (let j = i + 3; j < nc * 3; j += 3) {
+      const dx = walkHits[j] - walkHits[i];
+      if (Math.abs(dx) > 7) continue;
+      const ri = walkHits[i + 2], rj = walkHits[j + 2], d = Math.hypot(dx, walkHits[j + 1] - walkHits[i + 1]);
+      if (d >= ri + rj + WALK_PAD * 2 + 0.15) continue;
+      // A column standing wholly within another adds nothing to it.
+      if (d <= Math.abs(ri - rj)) { linked[(ri < rj ? i : j) / 3] = 1; continue; }
+      const s = (ri - rj) / d;
+      linked[i / 3] = linked[j / 3] = 1;
+      L.push(walkHits[i], walkHits[i + 1], walkHits[j], walkHits[j + 1], ri, rj, s / Math.sqrt(1 - s * s));
     }
   }
-  return false;
+  walkL = new Float32Array(L);
+  // Everything is listed in every cell it reaches into, so a step reads one cell. Links are
+  // listed as -1 - their offset. A link's ends are its columns, which are then not listed
+  // themselves: the two would push a walker different ways where they meet.
+  walkGrid = new Map();
+  const list = (id, xa, xb, za, zb) => {
+    const x1 = Math.floor(xb / WALK_CELL), z1 = Math.floor(zb / WALK_CELL);
+    for (let cz = Math.floor(za / WALK_CELL); cz <= z1; cz++) {
+      for (let cx = Math.floor(xa / WALK_CELL); cx <= x1; cx++) {
+        const key = (cx + 512) * 1024 + cz + 512, cell = walkGrid.get(key);
+        if (cell) cell.push(id); else walkGrid.set(key, [id]);
+      }
+    }
+  };
+  for (let i = 0; i < n * 5; i += 5) {
+    const r = walkC[i + 2] + WALK_PAD;
+    if (!linked[i / 5]) list(i, walkC[i] - r, walkC[i] + r, walkC[i + 1] - r, walkC[i + 1] + r);
+  }
+  for (let j = 0; j < L.length; j += 7) {
+    const r = Math.max(L[j + 4], L[j + 5]) + WALK_PAD;
+    list(-1 - j, Math.min(L[j], L[j + 2]) - r, Math.max(L[j], L[j + 2]) + r, Math.min(L[j + 1], L[j + 3]) - r, Math.max(L[j + 1], L[j + 3]) + r);
+  }
+}
+// Moves a point out of whatever it stands in, to the nearest edge: walking into a trunk
+// slides round it, and an eye set down inside one is put beside it, never held there.
+// Returns 0 if the point stood free, 1 if it was moved and came to rest, 2 if it was still
+// being moved after six rounds, as it is in a nook where two obstacles meet at a sharp angle.
+function walkFree(x, z, y) {
+  let pass = 0;
+  for (; pass < 6 && walkGrid; pass++) {
+    const cell = walkGrid.get((Math.floor(x / WALK_CELL) + 512) * 1024 + Math.floor(z / WALK_CELL) + 512);
+    if (!cell) break;
+    let hit = false;
+    for (let k = 0; k < cell.length; k++) {
+      const i = cell[k];
+      let ox, oz, R;
+      if (i < 0) {
+        // The circle of a link that the point is nearest to: found along the slant of the
+        // link's side, not straight across, or the wider end would stand out of its link.
+        const j = -1 - i, bx = walkL[j + 2] - walkL[j], bz = walkL[j + 3] - walkL[j + 1], px = x - walkL[j], pz = z - walkL[j + 1];
+        const t = Math.max(0, Math.min(1, (px * bx + pz * bz - Math.abs(px * bz - pz * bx) * walkL[j + 6]) / (bx * bx + bz * bz)));
+        ox = walkL[j] + bx * t; oz = walkL[j + 1] + bz * t; R = walkL[j + 4] + (walkL[j + 5] - walkL[j + 4]) * t + WALK_PAD;
+      } else {
+        ox = walkC[i]; oz = walkC[i + 1]; R = walkC[i + 2] + WALK_PAD;
+        // Coral and sea stacks are domes: straight-sided below their middle, so there is
+        // no going in under one, and round above it, where an eye higher up passes closer.
+        const dy = y - walkC[i + 3];
+        if (walkC[i + 4] && dy > 0) {
+          R = R * R - dy * dy;
+          if (R <= 0) continue;
+          R = Math.sqrt(R);
+        }
+      }
+      // A point put on an edge is out of it, whichever side of the edge rounding leaves it.
+      const dx = x - ox, dz = z - oz, d2 = dx * dx + dz * dz;
+      if (d2 >= R * (R - 2e-6)) continue;
+      const d = Math.sqrt(d2);
+      if (d > 1e-4) { x = ox + dx / d * R; z = oz + dz / d * R; } else x = ox + R;
+      hit = true;
+    }
+    if (!hit) break;
+  }
+  walkOut[0] = x; walkOut[1] = z;
+  return pass > 5 ? 2 : pass ? 1 : 0;
+}
+// The top of the coral or sea stack under a point. It is a floor to the eye: a diver comes
+// to rest on a dome and does not sink into it from above.
+function walkTop(x, z) {
+  const cell = walkGrid && walkGrid.get((Math.floor(x / WALK_CELL) + 512) * 1024 + Math.floor(z / WALK_CELL) + 512);
+  let top = -1e9;
+  for (let k = 0; cell && k < cell.length; k++) {
+    const i = cell[k];
+    if (i < 0 || !walkC[i + 4]) continue;
+    const R = walkC[i + 2] + WALK_PAD, dx = x - walkC[i], dz = z - walkC[i + 1], h2 = R * R - dx * dx - dz * dz;
+    if (h2 > 0) top = Math.max(top, walkC[i + 3] + Math.sqrt(h2));
+  }
+  return top;
+}
+// One walking step of dt seconds at the velocity held in velX, velZ.
+function walkStep(dt, time) {
+  const speed = Math.hypot(velX, velZ);
+  let held = false;
+  if (speed * dt > 1e-5) {
+    const x0 = camX, z0 = camZ;
+    // Short steps: a run at a low frame rate neither passes through a trunk nor steps over a bank.
+    const n = Math.ceil(speed * dt / 0.12), h = dt / n, e = 0.4;
+    const wl = waveY(world, camX, camZ, time) - 0.25;
+    for (let s = 0; s < n; s++) {
+      let mx = velX * h, mz = velZ * h;
+      // Ground too steep to climb takes the climb out of a step and leaves the rest, so a
+      // cliff is walked along and never holds the walker. Water counts as level.
+      const gx = (Math.max(fieldSample(world, camX + e, camZ), wl) - Math.max(fieldSample(world, camX - e, camZ), wl)) / (2 * e);
+      const gz = (Math.max(fieldSample(world, camX, camZ + e), wl) - Math.max(fieldSample(world, camX, camZ - e), wl)) / (2 * e);
+      const g2 = gx * gx + gz * gz;
+      if (g2 > 1.21) {
+        const up = mx * gx + mz * gz;
+        if (up > 0) { const k = Math.min(1, (Math.sqrt(g2) - 1.1) / 0.9) * up / g2; mx -= gx * k; mz -= gz * k; }
+      }
+      // A step that does not come to rest, that ends further off than it set out to go
+      // (thrown across an obstacle out of a nook) or that ends behind where it began is
+      // not taken. The walker stays, and is moved only if that place is itself inside something.
+      // Rocks are met at the lower of where the eye is and where it is settling to: they
+      // are as wide or wider lower down, so neither is ever inside one.
+      const y = Math.min(walkEye, camY), met = walkFree(camX + mx, camZ + mz, y), ax = walkOut[0] - camX, az = walkOut[1] - camZ;
+      if (met > 1 || ax * mx + az * mz < 0 || Math.hypot(ax, az) > Math.hypot(mx, mz) * 1.5 + 0.01) walkFree(camX, camZ, y);
+      camX = walkOut[0]; camZ = walkOut[1];
+      if (met) held = true;
+    }
+    held = held && Math.hypot(camX - x0, camZ - z0) < speed * dt * 0.5;
+    // What is left of the velocity is what the ground allowed. Being moved out of a trunk adds none.
+    const vx = (camX - x0) / dt, vz = (camZ - z0) / dt, k = Math.min(1, speed / (Math.hypot(vx, vz) || 1));
+    velX = vx * k; velZ = vz * k;
+  }
+  const gh = fieldSample(world, camX, camZ);
+  const wh = waveY(world, camX, camZ, time);
+  if (gh < wh - 0.25) {
+    if (K.KeyQ) dive = Math.min(6, dive + dt * 1.6);
+    else if (K.KeyE || K.Space) dive = Math.max(0, dive - dt * 2.2);
+    else if (dive < 0.7) dive = Math.max(0, dive - dt * 0.35);
+    // A diver pressing on against coral floats up until the way is clear over it. A hollow
+    // among the coral heads, sunk into from above, is left the same way and holds nobody.
+    if (held && !K.KeyQ) dive = Math.max(0, Math.min(dive, wh + 0.42 - camY) - dt * 1.5);
+  } else {
+    dive = Math.max(0, Math.min(dive, 0.7) - dt * 3.5);
+  }
+  // One height from dry land through wading to swimming and diving: the eye stands over the
+  // ground or floats, whichever is higher, and a dive lowers both. Nothing switches at the
+  // waterline, so a wave passing the walker's knees does not move the eye.
+  // A rock is a floor too: a wave that falls away under a swimmer over one leaves the eye
+  // resting on it, where a wall at the lower height would have pushed the swimmer off.
+  const top = walkTop(camX, camZ);
+  const eye = walkEye = Math.max(gh + 1.65 - 1.2 * Math.min(1, dive / 0.7), wh + 0.42 - dive, top);
+  camY += (eye - camY) * (qstr.has('shot') ? 1 : 1 - Math.exp(-dt * 18));
+  // The easing is for comfort; it is never allowed to leave the eye in the ground or the coral.
+  camY = Math.max(camY, gh + 0.3, top);
 }
 function bootKeys() {
   addEventListener('keydown', (e) => {
@@ -2417,7 +2571,7 @@ async function main() {
       const tint = [0.88 + rnd() * 0.2, 0.9 + rnd() * 0.16, 0.8 + rnd() * 0.2];
       const psc = 0.75 + rnd() * 0.45;
       scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.88 + rnd() * 0.28, 1.1 + rnd() * 0.35, plantBias());
-      walkHits.push(x, z, 0.4 * psc);
+      walkHits.push(x, z, 0.22 * psc);
       palmSites.push(x, z, h);
       palms++;
     }
@@ -2436,7 +2590,7 @@ async function main() {
       if (palms < q.palms && h > 0.55 && h < 5.8 && s < 0.34 && clump > 0.38 && (h < 2.2 || clump2 > 0.35)) {
         const psc = 0.7 + rnd() * 0.55;
         scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.85 + rnd() * 0.35, 1.05 + rnd() * 0.4, plantBias());
-        walkHits.push(x, z, 0.4 * psc);
+        walkHits.push(x, z, 0.22 * psc);
         palmSites.push(x, z, h);
         palms++;
       } else if (shrubs < shrubBudget && h > 0.3 && h < 2.8 && s < 0.4 && clump > 0.3 && (h < 1.6 || clump2 > 0.4)) {
@@ -2507,7 +2661,7 @@ async function main() {
         if (deep.length) pickIds = deep;
       }
       scatter.add(pickIds[(rnd() * pickIds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, sy, 0.7 + rnd() * 0.55, rnd());
-      walkHits.push(x, z, 0.55 * tall);
+      walkHits.push(x, z, 0.03 * tall);
       trees++;
     }
     for (let i = 0; i < q.rocks * 20 && rocks < q.rocks; i++) {
@@ -2520,7 +2674,8 @@ async function main() {
       if (vnoise(x * 0.04, z * 0.04) < 0.58) continue;
       const sc = 0.35 + rnd() * 1.1;
       scatter.add(pick(rockIds, x, z), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
-      walkHits.push(x, z, 0.65 * sc);
+      // A boulder lower than the knee is stepped over.
+      if (sc > 0.75) walkHits.push(x, z, 0.6 * sc);
       rocks++;
     }
     // Sparse fallen fronds under palms — organic litter, not denser planting.
@@ -2542,7 +2697,7 @@ async function main() {
       if (h < -6 || h > -0.4) continue;
       const sc = 1.5 + rnd() * 2.8;
       scatter.add(rockIds[stacks % 2], x, h - sc * 0.2, z, rnd() * 6, sc, [0.9, 0.86, 0.8], 1.05 + rnd() * 0.9);
-      walkHits.push(x, z, 0.7 * sc);
+      walkHits.push(x, z, 0.65 * sc);
       stackList.push(x, h + sc * 0.3, z, sc * 0.9);
       stacks++;
     }
@@ -2563,6 +2718,7 @@ async function main() {
     scatter.finish();
     const fishLife = new FishLife(world, reef, q, stackList);
     reefBlocks = fishLife.blocks;
+    walkBuild();
     const fishPack = packMeshes(fishMeshes());
     // The underwater place: beside a coral head that has a school over it.
     {
@@ -3163,6 +3319,9 @@ async function main() {
           velY += (ty - velY) * (wishY ? kA : kF);
           velZ += (tz - velZ) * (wishX || wishZ || wishY ? kA : kF);
           camX += velX * dt; camY += velY * dt; camZ += velZ * dt;
+          // Flying stops at the ground instead of passing under it.
+          const floor = fieldSample(world, camX, camZ) + 0.4;
+          if (camY < floor) { camY = floor; if (velY < 0) velY = 0; }
         } else {
           const ground = fieldSample(world, camX, camZ);
           const wy = waveY(world, camX, camZ, time);
@@ -3175,31 +3334,7 @@ async function main() {
           velX += (tx - velX) * (moving ? kA : kF);
           velZ += (tz - velZ) * (moving ? kA : kF);
           velY = 0;
-          const step = Math.hypot(velX, velZ) * dt;
-          if (step > 1e-5) {
-            const nx = camX + velX * dt, nz = camZ + velZ * dt;
-            const nh = fieldSample(world, nx, nz);
-            // Respect slopes and solid props; try axis slides when blocked.
-            if (nh < ground + 0.85 && !walkBlocked(nx, nz, camY)) {
-              camX = nx; camZ = nz;
-            } else {
-              const xOnly = !walkBlocked(camX + velX * dt, camZ, camY) && fieldSample(world, camX + velX * dt, camZ) < ground + 0.85;
-              const zOnly = !walkBlocked(camX, camZ + velZ * dt, camY) && fieldSample(world, camX, camZ + velZ * dt) < ground + 0.85;
-              if (xOnly) camX += velX * dt; else velX = 0;
-              if (zOnly) camZ += velZ * dt; else velZ = 0;
-            }
-          }
-          const gh = fieldSample(world, camX, camZ);
-          const wh = waveY(world, camX, camZ, time);
-          if (gh < wh - 0.25) {
-            if (K.KeyQ) dive = Math.min(6, dive + dt * 1.6);
-            else if (K.KeyE || K.Space) dive = Math.max(0, dive - dt * 2.2);
-            else if (dive < 0.7) dive = Math.max(0, dive - dt * 0.35);
-            camY = Math.max(gh + 0.45, wh + 0.42 - dive);
-          } else {
-            dive = 0;
-            camY = gh + 1.65;
-          }
+          walkStep(dt, time);
         }
         const rr = Math.hypot(camX, camZ);
         if (rr > 980) { camX *= 980 / rr; camZ *= 980 / rr; }
