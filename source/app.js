@@ -22,6 +22,9 @@ const SUN = (function () {
 })();
 
 const qstr = new URLSearchParams(location.search);
+// Capture aid: ?no=water,shore,drops,air leaves those draws out, to see which one owns a fault.
+const NO = {};
+(qstr.get('no') || '').split(',').forEach((k) => { NO[k] = 1; });
 // Startup phases in ms since script start. Read as window.__perf, or printed with ?perf.
 const PERF = { t0: performance.now() };
 function mark(k) { PERF[k] = Math.round(performance.now() - PERF.t0); }
@@ -267,7 +270,7 @@ function seeded(seed) {
   };
 }
 
-function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway, twist) {
+function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway, twist, segs) {
   const dl = Math.hypot(dirx, diry, dirz) || 1;
   dirx /= dl; diry /= dl; dirz /= dl;
   let sx = -dirz, sz = dirx;
@@ -275,6 +278,31 @@ function addLeaflet(m, ox, oy, oz, dirx, diry, dirz, len, wid, col, sway, twist)
   sx /= sl; sz /= sl;
   const tw = twist || 0;
   const tipC = [col[0] * 1.18, col[1] * 0.92, col[2] * 0.55];
+  if (segs > 2) {
+    // A broad blade: a stalk, then a long oval that arches over under its own weight, folded
+    // along the midrib and a little wavy at the edge. Rows of three vertices, so the fold is real.
+    let px = ox, py = oy, pz = oz, prev = -1;
+    for (let k = 0; k <= segs; k++) {
+      const t = k / segs;
+      const w = wid * Math.pow(Math.sin(Math.PI * Math.pow(t, 0.72)), 0.6) * (1 - 0.2 * t) * (1 + 0.07 * Math.sin(t * 23 + tw * 9));
+      // The blade's own direction here: it starts along dir and bends down.
+      const bend = t * t * (0.55 + Math.abs(tw) * 0.5), ax = dirx, ay = diry - bend, az = dirz, al = Math.hypot(ax, ay, az) || 1;
+      const ux = -ay * dirx / al, uy = Math.hypot(ax, az) / al + 0.2, uz = -ay * dirz / al, ul = Math.hypot(ux, uy, uz) || 1;
+      const c = t > 0.8 ? tipC : col, sw = sway * (0.18 + t * t * 1.2), fold = w * 0.3;
+      const row = m.v(px, py, pz, ux / ul, uy / ul, uz / ul, c[0] * 1.1, c[1] * 1.1, c[2] * 1.1, sw, LEAF, 0, t);
+      for (const side of [1, -1]) {
+        m.v(px + sx * (w + tw * t * 0.3 * wid) * side, py + fold, pz + sz * (w + tw * t * 0.3 * wid) * side,
+          ux / ul - sx * side * 0.35, uy / ul, uz / ul - sz * side * 0.35, c[0], c[1], c[2], sw, LEAF, side, t);
+      }
+      if (prev >= 0) {
+        m.tri(prev, row, prev + 1); m.tri(prev + 1, row, row + 1);
+        m.tri(prev, prev + 2, row); m.tri(prev + 2, row + 2, row);
+      }
+      prev = row;
+      px += ax / al * len / segs; py += ay / al * len / segs; pz += az / al * len / segs;
+    }
+    return;
+  }
   const vert = (t, side) => {
     // Taper, slight fold, midrib bias, and a soft twist along the blade.
     const w = wid * (1 - Math.pow(t, 1.15) * 0.9) * (0.92 + 0.08 * Math.sin(t * 9));
@@ -581,7 +609,7 @@ function makeFern(seed) {
 }
 
 // Small understory tree / juvenile palm-like canopy: short trunk, irregular radial leaves.
-function makeCanopy(seed) {
+function makeCanopy(seed, lod) {
   const rnd = seeded(seed || 5);
   const m = new Mesh();
   const H = 0.55 + rnd() * 0.45;
@@ -596,13 +624,13 @@ function makeCanopy(seed) {
     const col = [0.06 + rnd() * 0.06, 0.22 + rnd() * 0.14, 0.04 + rnd() * 0.04];
     const up = form === 0 ? 0.55 + rnd() * 0.35 : 0.12 + rnd() * 0.4;
     addLeaflet(m, Math.cos(ang) * 0.05, H - 0.02, Math.sin(ang) * 0.05,
-      Math.cos(ang), up, Math.sin(ang), reach, wid, col, 0.22 + rnd() * 0.12, (rnd() - 0.5) * 0.5);
+      Math.cos(ang), up, Math.sin(ang), reach, wid, col, 0.22 + rnd() * 0.12, (rnd() - 0.5) * 0.5, lod ? 0 : 4);
   }
   return m;
 }
 
 // Broad-leaf understory: banana-like large blades or multi-fan tropical foliage.
-function makeBroad(seed) {
+function makeBroad(seed, lod) {
   const rnd = seeded(seed || 3);
   const m = new Mesh();
   const form = seed % 3;
@@ -617,7 +645,7 @@ function makeBroad(seed) {
       const col = [0.1 + rnd() * 0.05, 0.3 + rnd() * 0.1, 0.07];
       addLeaflet(m, Math.cos(ang) * 0.04, H * 0.7, Math.sin(ang) * 0.04,
         Math.cos(ang) * 0.4, 0.75 + rnd() * 0.4, Math.sin(ang) * 0.4,
-        0.42 + rnd() * 0.22, 0.1 + rnd() * 0.05, col, 0.4, (rnd() - 0.5) * 0.35);
+        0.42 + rnd() * 0.22, 0.085 + rnd() * 0.04, col, 0.4, (rnd() - 0.5) * 0.35, lod ? 0 : 5);
     }
   } else {
     const fans = 5 + (seed % 4);
@@ -630,7 +658,7 @@ function makeBroad(seed) {
         const a = ang + (k - (nLeaf - 1) * 0.5) * (0.22 + rnd() * 0.12);
         const col = [0.08 + rnd() * 0.07, 0.24 + rnd() * 0.14, 0.05 + rnd() * 0.04];
         addLeaflet(m, x, H * (0.55 + rnd() * 0.3), z, Math.cos(a), 0.25 + rnd() * 0.45, Math.sin(a),
-          0.18 + rnd() * 0.16, 0.035 + rnd() * 0.03, col, 0.3 + rnd() * 0.2, (rnd() - 0.5) * 0.45);
+          0.18 + rnd() * 0.16, 0.035 + rnd() * 0.03, col, 0.3 + rnd() * 0.2, (rnd() - 0.5) * 0.45, lod ? 0 : 3);
       }
     }
   }
@@ -792,6 +820,26 @@ function makeTree(seed, lod) {
     0.1 + hue * 0.04 + (form === 2 ? 0.02 : 0),
     0.025 + (1 - hue) * 0.015
   ];
+  const unit = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const cross = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  // One leaf: a blade folded along its midrib, four vertices. d is the way it points,
+  // up the way its face looks, out the way the crown's surface looks there: the shading
+  // normal leans toward that, so a crown is lit as one rounded mass and not as noise.
+  const leafAt = (o, d, up, out, len, wid, col, sway) => {
+    const sd = unit(cross(up, d)), nn = unit(cross(d, sd));
+    const ns = unit([nn[0] + out[0] * 0.9, nn[1] + out[1] * 0.9 + 0.25, nn[2] + out[2] * 0.9]);
+    const ix = [];
+    // Stalk end, the two widest points, the tip: two triangles that meet along the midrib.
+    for (const [t, side, c] of [[0, 0, 0.8], [0.46, 1, 1], [0.46, -1, 1], [1, 0, 1.12]]) {
+      const h = side ? wid * 0.3 : -t * len * 0.3;
+      ix.push(m.v(o[0] + d[0] * len * t + sd[0] * wid * side + nn[0] * h,
+        o[1] + d[1] * len * t + sd[1] * wid * side + nn[1] * h,
+        o[2] + d[2] * len * t + sd[2] * wid * side + nn[2] * h,
+        ns[0] - sd[0] * side * 0.3, ns[1] - sd[1] * side * 0.3, ns[2] - sd[2] * side * 0.3,
+        col[0] * c, col[1] * c, col[2] * c, sway * (1 + 0.5 * t), LEAF, side, t));
+    }
+    m.tri(ix[0], ix[3], ix[1]); m.tri(ix[0], ix[2], ix[3]);
+  };
   for (let i = 0; i < lobes; i++) {
     const blob = icosphere(lod ? 1 : 2, 1, [0.1, 0.1, 0.1]), n = blob.pos.length / 3;
     const ang = form === 4 ? rnd() * 6.28 : i * 2.399 + rnd() * (form === 2 ? 0.35 : 0.9);
@@ -809,22 +857,60 @@ function makeTree(seed, lod) {
       }
       addLimb(m, q, r0 * (i === 0 ? 0.55 : 0.32), r0 * 0.12, [5, 4][lod], bark, 0.012, 0.032, 0);
     }
+    // Where the lobe's surface is, in the direction (x, y, z) from its middle.
+    const lumpAt = (x, y, z) => 0.7 + 0.42 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9) + 0.24 * vnoise(x * 5.3 + i * 7.7, z * 5.3 + y * 4.1 + sd);
+    const swayAt = (y) => (form === 5 ? 0.04 : 0.028) + Math.max(0, Math.min(1, y * 0.5 + 0.5)) * 0.038;
+    // The mass inside: what shows between the leaves, and all there is of a far tree. Near,
+    // it sits back under the leaves and is their shade; far, it is the crown and is their colour.
+    const core = [0.78, 0.92, 1.04][lod], dark = [0.8, 0.9, 0.95][lod];
     for (let v = 0; v < n; v++) {
       const x = blob.pos[v * 3], y = blob.pos[v * 3 + 1], z = blob.pos[v * 3 + 2];
-      const lump = 0.7 + 0.42 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9) + 0.24 * vnoise(x * 5.3 + i * 7.7, z * 5.3 + y * 4.1 + sd);
+      const lump = lumpAt(x, y, z) * core;
       const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.5 : flat), pz = z * lump * size;
       blob.pos[v * 3] = px + cx; blob.pos[v * 3 + 1] = py + cy; blob.pos[v * 3 + 2] = pz + cz;
       const up = Math.max(0, Math.min(1, y * 0.5 + 0.5));
-      const lightK = 0.32 + 0.68 * up * up;
+      const lightK = (0.7 + 0.3 * up) * dark;
       // Sparse crowns leave darker interiors; rounded ones stay denser/brighter on top.
       const dens = form === 2 ? 1.08 : form === 4 ? 0.85 : 1;
       blob.col[v * 3] = green[0] * lightK * dens;
       blob.col[v * 3 + 1] = green[1] * lightK * dens;
       blob.col[v * 3 + 2] = green[2] * lightK * dens;
-      blob.sway[v] = (form === 5 ? 0.04 : 0.028) + up * 0.038;
+      blob.sway[v] = swayAt(y);
       blob.kind[v] = CROWN;
     }
     appendMesh(m, blob, 0, 0, 0, 0, 1, null, 1);
+    if (lod === 2) continue;
+    // The leaves: sprays set over the lobe, thick on top and thin underneath, each a twig's
+    // end with its leaves turned out to the light. The coarser level keeps one spray in four
+    // and makes its leaves bigger, so the crown covers the same sky from further off.
+    const lr = seeded(sd * 53 + i * 131 + 7);
+    const nSpray = Math.max(26, Math.min(76, Math.round(1100 * size * size)));
+    const big = lod ? 2.3 : 1.12;
+    for (let k = 0; k < nSpray; k++) {
+      // Even over the sphere, from the top down to well under the equator.
+      const yy = 1 - (k + 0.5) / nSpray * 1.72, rad = Math.sqrt(Math.max(0, 1 - yy * yy)), ga = k * 2.39996 + i;
+      const j0 = lr(), j1 = lr(), j2 = lr(), j3 = lr();
+      if (lod && (k & 3)) { for (let q = 0; q < 6 * 4; q++) lr(); continue; }
+      const dir = unit([rad * Math.cos(ga) + (j0 - 0.5) * 0.3, yy + (j1 - 0.5) * 0.3, rad * Math.sin(ga) + (j2 - 0.5) * 0.3]);
+      const lump = lumpAt(dir[0], dir[1], dir[2]) * (0.9 + j3 * 0.16);
+      const o = [cx + dir[0] * lump * size, cy + dir[1] * lump * size * (dir[1] < 0 ? flat * 0.5 : flat), cz + dir[2] * lump * size];
+      const out = unit([dir[0], dir[1] / flat, dir[2]]);
+      const upK = Math.max(0, Math.min(1, dir[1] * 0.5 + 0.5)), lightK = 0.5 + 0.62 * upK * upK;
+      // A side of the twig, and the other side.
+      const sa = unit(cross(out, [0.31, 0.9, 0.29])), sb = cross(out, sa);
+      const nLeaf = lod ? 4 : 5;
+      for (let q = 0; q < 6; q++) {
+        const r0l = lr(), r1l = lr(), r2l = lr(), r3l = lr();
+        if (q >= nLeaf) continue;
+        const a = q / nLeaf * 6.2832 + r0l * 0.9, ca = Math.cos(a), sn = Math.sin(a);
+        // Leaves stand out round the twig and hang a little; their faces look up and out.
+        const d = unit([sa[0] * ca + sb[0] * sn + out[0] * 0.3, sa[1] * ca + sb[1] * sn + out[1] * 0.3 - 0.3 - r1l * 0.35, sa[2] * ca + sb[2] * sn + out[2] * 0.3]);
+        const face = unit([out[0] * 0.7 + (r2l - 0.5) * 0.5, out[1] * 0.7 + 0.75, out[2] * 0.7 + (r3l - 0.5) * 0.5]);
+        const len = (0.026 + 0.014 * r2l) * big, tone = lightK * (0.82 + 0.5 * r3l), young = r1l > 0.86 ? 1 : 0;
+        leafAt([o[0] + d[0] * 0.004, o[1] + d[1] * 0.004, o[2] + d[2] * 0.004], d, face, out, len, len * (0.3 + 0.08 * r0l),
+          [green[0] * tone * (1 + 0.9 * young), green[1] * tone * (1 + 0.35 * young), green[2] * tone * 0.9], swayAt(dir[1]) + 0.012);
+      }
+    }
   }
   return m;
 }
@@ -1043,6 +1129,7 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
   const d = this.data, counts = this.counts, starts = this.starts, slotOf = this.slotOf;
   const order = this.cellOrder, cellStart = this.cellStart, seenGen = this.seenGen;
   const cap = (out.length / ISTRIDE) | 0;
+  const hys = vp && !coarser ? (this.lodWas || (this.lodWas = new Uint8Array(this.kind.length).fill(255))) : null;
   counts.fill(0);
   // Generation stamp avoids clearing the whole slot array each collect (AG-style).
   let epoch = this.epoch + 1;
@@ -1074,14 +1161,19 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
           const dy = y - ey;
           const dist = Math.hypot(distXZ, dy);
           if (dist - r < reachI) {
-            let ok = true;
+            // The near shadow map (no view, coarser): a small plant's shadow is lost in the
+            // map's filter past the middle of the box, so it is not drawn into it there.
+            let ok = vp || !coarser || r > 1.2 || dist < reach * 0.42;
             if (vp) {
               const hr = Math.max(r, sc * 0.55);
               const cy = y + hr * 0.55;
               const cw = vp[3] * x + vp[7] * cy + vp[11] * z + vp[15];
               const cxi = vp[0] * x + vp[4] * cy + vp[8] * z + vp[12];
               const cv = vp[1] * x + vp[5] * cy + vp[9] * z + vp[13];
-              ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * 0.0016;
+              // The mirrored view (coarser) is seen only in moving water: small plants far off are not in it.
+              // In the view itself a plant under a pixel and a half across is left out, whatever the
+              // size of the canvas: drawn, it is a dot that comes and goes as the eye turns.
+              ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * (coarser ? 0.03 : Math.max(0.0016, (this.pxw || 0) * 1.5));
             }
             if (ok) {
               let lod = coarser;
@@ -1089,6 +1181,16 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
               // From altitude, keep finer crowns a little longer — LOD pops read as broken tops.
               const airBias = ey > 35 ? Math.min(55, (ey - 35) * 0.45) : 0;
               while (lod < p.cuts.length && dist > p.cuts[lod] + bias + airBias) lod++;
+              // A plant near a cut keeps the level it had: an eye hovering at the boundary
+              // does not flip it back and forth.
+              if (hys) {
+                const was = hys[i];
+                if (was !== 255 && was !== lod) {
+                  const c = p.cuts[Math.min(lod, was)] + bias + airBias;
+                  if (Math.abs(dist - c) < c * 0.06 && was < p.lods.length) lod = was;
+                }
+                hys[i] = lod;
+              }
               slot = this.slot0[this.kind[i]] + Math.min(lod, p.lods.length - 1);
               counts[slot]++;
             }
@@ -2101,7 +2203,7 @@ async function main() {
     const context = canvas.getContext('webgpu');
     const format = navigator.gpu.getPreferredCanvasFormat();
 
-    const code = shaderCode(q.hres, q.span);
+    const code = shaderCode(q.hres, q.span, q.water);
     const mod = device.createShaderModule({ code: code });
     const simMod = device.createShaderModule({ code: SIM_WGSL });
     const oceanMod = device.createShaderModule({ code: OCEAN_WGSL });
@@ -2139,6 +2241,10 @@ async function main() {
     const shadowFmt = 'depth16unorm';
     // Mild slope-scaled bias; receivers add a small constant in-shader (large bias detaches shadows).
     const shadowZ = { ...sceneZ, format: shadowFmt, depthBias: 1, depthBiasSlopeScale: 1.35, depthBiasClamp: 0.002 };
+    // Over the finished frame the land hides a fragment in the fragment shader, by the scene's
+    // own depth texture (hidden() in the shaders). The pass's depth buffer starts empty and
+    // holds only the insects, which sort among themselves and stand in front of the drops.
+    const noZ = depthOn('depth24plus', false, 'always');
     const overZ = depthOn('depth24plus', false, 'less');
     const over = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
     const lerp = { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' };
@@ -2166,18 +2272,19 @@ async function main() {
       }));
     };
     // The sea first: its shader is the longest to compile, so it is given the longest start.
-    pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, depth: overZ });
+    pipe('water', waterPL, 'vsWater', 'fsWater', { buffers: gridBuf, format: format, depth: noZ });
     pipe('sky', geoPL, 'vsSky', 'fsSky', { depth: depthOn('depth32float', true, 'always') });
     pipe('weather', skyPLs[0], 'vsSky', 'fsWeather', {});
     pipe('cloudShadow', skyPLs[1], 'vsSky', 'fsCloudShadow', {});
     pipe('skyBake', skyPLs[2], 'vsSky', 'fsSkyBake', {});
     pipe('skyDim', skyPLs[3], 'vsSky', 'fsSkyDim', { blend: { color: lerp, alpha: lerp } });
+    pipe('skyIrr', skyPLs[3], 'vsSky', 'fsSkyIrr', {});
     pipe('terrain', geoPL, 'vsTerrain', 'fsTerrain', { buffers: posBuf, cull: 'back', depth: sceneZ });
     pipe('mesh', geoPL, 'vsMesh', 'fsMesh', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowTerrain', skyPL, 'vsShadowTerrain', null, { buffers: posBuf, cull: 'back', depth: shadowZ });
     pipe('shadowMesh', skyPL, 'vsShadowMesh', null, { buffers: meshBuffers, depth: shadowZ });
     // The finished scene goes to the screen through the water's own two groups.
-    pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: depthOn('depth24plus', true, 'always') });
+    pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: noZ });
     const oceanLayout = layoutOf(device, GPUShaderStage.COMPUTE, 'rwuo');
     const oceanPL = device.createPipelineLayout({ bindGroupLayouts: [oceanLayout] });
     const oceanPipes = {};
@@ -2186,10 +2293,8 @@ async function main() {
     }
     late = true;
     // The wash on the beach starts from still water and takes its first frames to arrive, so
-    // its pipeline can too. The beach mesh is coarser than the sheet, so a depth test hides the
-    // wash behind the sand it is running over. Trees and cliffs are still rejected in the
-    // fragment shader.
-    pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: depthOn('depth24plus', false, 'always') });
+    // its pipeline can too.
+    pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
     pipe('air', airPL, 'vsSky', 'fsAir', {});
     pipe('grass', geoPL, 'vsGrass', 'fsGrass', { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: sceneZ });
     pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: [vbuf(16, [[0, 0, 3], [1, 12, 1]]), oneVec4], depth: sceneZ });
@@ -2197,7 +2302,7 @@ async function main() {
     pipe('shadowFish', skyPL, 'vsShadowFish', null, { buffers: meshBuffers, depth: shadowZ });
     // Insects go straight onto the finished frame, after the water, so a clear wing over the
     // lagoon is a film over the lagoon and not a hole in it.
-    pipe('bug', geoPL, 'vsBug', 'fsBug', { buffers: bugBuffers, format: format, blend: over, depth: depthOn('depth24plus', true, 'less') });
+    pipe('bug', airPL, 'vsBug', 'fsBug', { buffers: bugBuffers, format: format, blend: over, depth: depthOn('depth24plus', true, 'less') });
     pipe('shadowBug', skyPL, 'vsShadowBug', null, { buffers: bugBuffers, depth: shadowZ });
     pipe('drops', airPL, 'vsDrops', 'fsDrops', { format: format, blend: over, depth: overZ });
     pipe('sim', simPL, 'vs', 'fs', { module: simMod });
@@ -2280,9 +2385,9 @@ async function main() {
       return Math.atan2(-gz, -gx) + (rnd() - 0.5) * 1.4;
     };
     const shrubIds = protoSet([5, 9, 14, 22, 27], makeShrub, 1.2);
-    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd), makeCanopy(sd)], 2.4, [55]));
+    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd, 0), makeCanopy(sd, 1)], 2.4, [0]));
     const fernIds = protoSet([7, 12, 19, 24, 30, 33], makeFern, 1.6);
-    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd), makeBroad(sd)], 2.8, [50]));
+    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd, 0), makeBroad(sd, 1)], 2.8, [0]));
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
     const palmSites = [];
     const fernBudget = Math.max(14, (q.broad * 0.7) | 0);
@@ -2374,7 +2479,7 @@ async function main() {
     }
     // Interior forest: pick form by habitat — slender near coast, emergent inland, rounded in dense cover.
     // Bounding radius must match canopy size or distant trees fail the pixel/frustum tests and pop.
-    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [60, 200]));
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [0, 50]));
     let trees = 0;
     for (let i = 0; i < q.forest * 32 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
@@ -2779,7 +2884,10 @@ async function main() {
     addEventListener('resize', resize);
 
     function drawWorld(pass, ub, geo, birds, draws) {
-      pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3);
+      // The mirrored view holds the land and what grows on it and nothing else. The sky the
+      // water reflects is worked out where it is used, for the tilt of each wave; a mirrored
+      // picture of it, pushed about and blurred, laid pale columns over the swell.
+      if (birds) { pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3); }
       pass.setPipeline(pipes.terrain); pass.setBindGroup(0, geo);
       pass.setVertexBuffer(0, terrainVB); pass.setIndexBuffer(terrainIB, 'uint32');
       pass.drawIndexed(terrain.idx.length);
@@ -2835,7 +2943,7 @@ async function main() {
       arr[68] = up[0]; arr[69] = up[1]; arr[70] = up[2]; arr[71] = clipBelow;
       arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;
       arr[79] = q.clouds;
-      arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0;
+      arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0; arr[87] = 0;
       // Gerstner + capillary heading: place swell blended toward the shared trades.
       arr[128] = wp.amp * env.sea; arr[129] = wp.spd; arr[130] = wp.frq;
       arr[131] = lerpAng(wp.dir, env.ang, 0.35);
@@ -2905,7 +3013,8 @@ async function main() {
 
     device.lost.then((info) => { window.__gpuerr = 'lost ' + (info && info.message); console.error('LOST', info && info.message); });
     function frame(now) {
-      try { frameBody(now); } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
+      const c0 = performance.now();
+      try { frameBody(now); if (frames > 4) { PERF.cpuN = (PERF.cpuN || 0) + 1; PERF.cpuMs = (PERF.cpuMs || 0) + performance.now() - c0; } } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
     }
     // Bench path: forest → palms → coast → beach/ocean → aerial → clouds → underwater (AG fly idea).
     if (typeof WW_BENCH !== 'undefined') {
@@ -3208,6 +3317,7 @@ async function main() {
       let instEnd = lastInstEnd;
       const tCull0 = performance.now();
       if (needCull) {
+        scatter.pxw = uf[63] * 2 / viewH;
         mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, plantReach, 0);
         instEnd = mainDraws.end;
         if (reflOn) {
@@ -3218,7 +3328,7 @@ async function main() {
           reflDraws = bugDrawsEmpty;
         }
         // Near shadows: collect at the candidate bake center so casters match the next lock.
-        nearDraws = scatter.collect(instArr, instEnd, null, nearCand[0], nearCand[1], nearCand[2], NEAR_R * 1.2, 1);
+        nearDraws = scatter.collect(instArr, instEnd, null, nearCand[0], nearCand[1], nearCand[2], NEAR_R * 1.45, 1);
         instEnd = nearDraws.end;
         if (instEnd) device.queue.writeBuffer(instB, 0, instArr.subarray(0, Math.min(instEnd, instCap) * ISTRIDE));
         cullKey[0] = camX; cullKey[1] = camY; cullKey[2] = camZ;
@@ -3346,8 +3456,10 @@ async function main() {
         const eyeMove = Math.hypot(camX - nsk[0], camY - nsk[1], camZ - nsk[2]);
         const sunDot = uf[52] * nsk[3] + uf[53] * nsk[4] + uf[54] * nsk[5];
         const underFlip = nearShadowUnder !== under;
-        // Soft PCF hides sub-metre shifts; keep cadence tight enough that frond shadows do not stick.
-        if (eyeMove > 0.35 || sunDot < 0.99992 || underFlip || !haveLockedNear) {
+        // Drawn every frame. What casts into it sways, and a map kept until the eye had moved
+        // held those shadows still and then let them jump. The box moves in whole texels, so
+        // what stands still casts a shadow that stands still.
+        {
           nsk[0] = camX; nsk[1] = camY; nsk[2] = camZ;
           nsk[3] = uf[52]; nsk[4] = uf[53]; nsk[5] = uf[54];
           nearShadowUnder = under;
@@ -3387,7 +3499,7 @@ async function main() {
       {
         const ap = enc.beginRenderPass(airPass);
         // Until its pipeline is built the pass only clears, which reads as clear air.
-        if (pipes.air) {
+        if (pipes.air && !NO.air) {
           ap.setPipeline(pipes.air); ap.setBindGroup(0, geoNow); ap.setBindGroup(1, bgAir);
           ap.draw(3);
         }
@@ -3401,16 +3513,19 @@ async function main() {
         const pass = enc.beginRenderPass(swapPass);
         pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgWater);
         pass.setPipeline(pipes.blit); pass.draw(3);
-        pass.setPipeline(pipes.water);
-        pass.setVertexBuffer(0, waterVB); pass.setIndexBuffer(waterIB, 'uint32');
-        pass.drawIndexed(water.idx.length);
-        if (pipes.shore) {
+        if (!NO.water) {
+          pass.setPipeline(pipes.water);
+          pass.setVertexBuffer(0, waterVB); pass.setIndexBuffer(waterIB, 'uint32');
+          pass.drawIndexed(water.idx.length);
+        }
+        if (pipes.shore && !NO.shore) {
           pass.setPipeline(pipes.shore);
           pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
           pass.drawIndexed(shoreMesh.idx.length);
         }
+        pass.setBindGroup(1, bgAir);
         drawMeshes(pass, pipes.bug, geoNow, bugVB, bugIB, bugInstB, bugDraws);
-        if (!under && pipes.drops) {
+        if (!under && pipes.drops && !NO.drops) {
           // Spray always, where waves break; rain and its splashes by how hard it is falling;
           // motes by how much the damp air and the low sun have to show.
           pass.setPipeline(pipes.drops); pass.setBindGroup(0, geoNow); pass.setBindGroup(1, bgAir);
@@ -3479,6 +3594,12 @@ async function main() {
           c2.width = wCap; c2.height = hCap;
           c2.getContext('2d').putImageData(new ImageData(img, wCap, hCap), 0, 0);
           window.__png = c2.toDataURL('image/png');
+          if (qstr.has('perf')) {
+            const tri = (d) => { let n = 0; for (let i = 0; i < d.length; i += 5) n += d[i + 1] * d[i + 4]; return Math.round(n / 3000) + 'k'; };
+            const top = (d) => { const r = []; for (let i = 0; i < d.length; i += 5) r.push([d[i + 1] / 3 * d[i + 4], d[i + 1] / 3, d[i + 4]]); return r.sort((x, y) => y[0] - x[0]).slice(0, 14).map((x) => x[1] + 'x' + x[2]).join(' '); };
+            console.log('PERF top view ' + top(mainDraws) + ' | shadow ' + top(nearDraws));
+            console.log('PERF cpu ' + (PERF.cpuMs / PERF.cpuN).toFixed(2) + ' ms/frame over ' + PERF.cpuN + ', plant triangles: view ' + tri(mainDraws) + ', mirror ' + tri(reflDraws) + ', near shadow ' + tri(nearDraws));
+          }
           requestAnimationFrame(frame);
         }).catch((err) => { clearTimeout(readWatch); window.__gpuerr = String(err); console.error('READ', err); });
         return;
@@ -3574,6 +3695,12 @@ async function main() {
         camX += Math.sin(yaw) * num('fwd') + Math.cos(yaw) * num('side');
         camZ += -Math.cos(yaw) * num('fwd') + Math.sin(yaw) * num('side');
         if (qstr.has('up')) { fly = true; camY += num('up'); }
+        // at=x,z,yaw,pitch,height: stand anywhere, angles in degrees, height above the ground or the sea.
+        if (qstr.has('at')) {
+          const a = qstr.get('at').split(',').map(Number);
+          camX = a[0] || 0; camZ = a[1] || 0; yaw = (a[2] || 0) * Math.PI / 180; pitch = (a[3] || 0) * Math.PI / 180;
+          camY = Math.max(fieldSample(world, camX, camZ), 0) + (a[4] || 1.7); fly = true;
+        }
         birdNear = num('bird');
         // fish=<species> frames one fish (fd under 1.6 m) or its school; calm stops them minding the camera;
         // warm runs the animals for that many seconds first.

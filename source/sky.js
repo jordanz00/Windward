@@ -92,7 +92,9 @@ function createSky(device, o) {
   const L = o.layouts;
   const groups = [groupOf(device, L[0], [nv, samp], 8), groupOf(device, L[1], [nv, samp, wx], 8), groupOf(device, L[2], [nv, samp, wx, shade], 8),
     groupOf(device, L[3], [null, samp, null, null, pano.createView({ dimension: '2d-array', mipLevelCount: 1 })], 8)];
-  const wxPass = passOf(wx), shadePass = passOf(shade), panoPass = [passOf(layer(0, 0)), passOf(layer(1, 0))], dimPass = passOf(layer(0, 4));
+  // The gathered sky again, as a source: only the small mip, so the mip beside it can be drawn into.
+  const irrGroup = groupOf(device, L[3], [null, samp, null, null, pano.createView({ dimension: '2d-array', baseMipLevel: 4, mipLevelCount: 1 })], 8);
+  const wxPass = passOf(wx), shadePass = passOf(shade), panoPass = [passOf(layer(0, 0)), passOf(layer(1, 0))], dimPass = passOf(layer(0, 4)), irrPass = passOf(layer(0, 3));
   let count = -1, todo = 0, tick = 0;
   return {
     view: pano.createView({ dimension: '2d-array' }), shade: shade, wx: wx, noise: noise, pano: pano,
@@ -132,6 +134,13 @@ function createSky(device, o) {
       }
       if (first) enc.copyTextureToTexture({ texture: pano }, { texture: pano, origin: [0, 0, 1] }, [W, H, 1]);
       one(dimPass, pipes.skyDim, groups[3], first ? 1 : 0.15);
+      // What the whole sky sheds on a surface facing each way: a corner of the next mip.
+      if (pipes.skyIrr) {
+        const p = enc.beginRenderPass(irrPass);
+        p.setPipeline(pipes.skyIrr); p.setBindGroup(0, ub); p.setBindGroup(1, irrGroup);
+        p.setViewport(0, 0, 34, 16, 0, 1); p.setScissorRect(0, 0, 34, 16);
+        p.draw(3); p.end();
+      }
     }
   };
 }
@@ -226,9 +235,12 @@ fn atmosphere(rd: vec3<f32>, h0: f32) -> Air {
   let g = 0.8;
   let pM = 0.1194 * ((1.0 - g * g) * (1.0 + mu * mu)) / ((2.0 + g * g) * pow(1.0 + g * g - 2.0 * g * mu, 1.5));
   var a: Air;
-  // The factor stands for the light that reaches the eye after several scatterings, which this
-  // sum leaves out. The forward glare round the sun is nearly all first scattering and is not raised by it.
-  a.c = F.disc.rgb * 8.2 * (sR * BR * pR + sM * bM * pM * 0.3 + sS * 0.02);
+  // disc is the sun as the light it puts on a matt white surface, so its light scattered once
+  // is pi times the sums. The rest of the factor stands for the light that reaches the eye after
+  // several scatterings, which this sum leaves out: with it the sky sheds on level ground about
+  // a quarter of what the high sun does, as it is measured to. The forward glare round the sun
+  // is nearly all first scattering and is not raised by it.
+  a.c = F.disc.rgb * 5.6 * (sR * BR * pR + sM * bM * pM * 0.44 + sS * 0.02);
   a.t = exp(-((BR + BO) * od.x + bM * od.y));
   return a;
 }
@@ -573,6 +585,43 @@ struct SkyBake { @location(0) c: vec4<f32> }
     }
   }
   return acc / ws;
+}
+// ---- Irradiance. The light the whole sky and the ground under it shed on a surface, for
+// each way the surface can face: the sky gathered over the hemisphere and weighted by the
+// cosine, which is what a matt surface answers to. Kept in a 34 by 16 corner of the
+// panorama's mip 3: across is the facing's azimuth with a column of overlap at each end,
+// up is its height from straight down to straight up. In the units of sunCol.
+@fragment fn fsSkyIrr(in: SkyV) -> @location(0) vec4<f32> {
+  let az = (in.clip.x - 1.0) / 32.0 * 6.2831853 - PI;
+  let ny = clamp((in.clip.y - 0.5) / 7.5 - 1.0, -1.0, 1.0);
+  let nh = sqrt(max(1.0 - ny * ny, 0.0));
+  let n = vec3<f32>(nh * cos(az), ny, nh * sin(az));
+  let e = 8.0 / F.skyD.y;
+  var acc = vec3<f32>(0.0);
+  var up = vec3<f32>(0.0);
+  // 24 by 6 directions, each standing for the same share of the dome.
+  for (var j = 0; j < 6; j++) {
+    let sy = (f32(j) + 0.5) / 6.0;
+    let ch = sqrt(1.0 - sy * sy);
+    for (var i = 0; i < 24; i++) {
+      let a = (f32(i) + 0.5 * f32(j & 1)) / 24.0 * 6.2831853;
+      let d = vec3<f32>(ch * cos(a), sy, ch * sin(a));
+      let uv = skyUV(d);
+      let L = textureSampleLevel(skyBase, nSamp, vec2<f32>(uv.x, clamp(uv.y, e, 1.0 - e)), 0, 0.0).rgb;
+      acc += L * max(dot(n, d), 0.0);
+      up += L * sy;
+    }
+  }
+  // Each direction is 2 pi / 144 of solid angle, and a matt surface divides by pi.
+  let k = 2.0 / 144.0;
+  // Under the horizon is the ground and the sea, lit by the sun and by that same sky.
+  let gl = vec3<f32>(0.2, 0.2, 0.17) * (up * k + F.sunCol / max(F.lit.y, 1e-3) * max(F.sunDir.y, 0.0) * (1.0 - 0.7 * sat(F.mood.y)));
+  return vec4<f32>(acc * k + gl * (1.0 - ny) * 0.5, 1.0);
+}
+fn skyIrr(n: vec3<f32>) -> vec3<f32> {
+  let u = atan2(n.z, n.x) / 6.2831853 + 0.5;
+  let px = vec2<f32>(1.0 + u * 32.0, 0.5 + (clamp(n.y, -1.0, 1.0) + 1.0) * 7.5);
+  return textureSampleLevel(skyMap, skySamp, px / floor(F.skyD.xy / 8.0), 0, 3.0).rgb * max(F.lit.y, 0.0);
 }
 fn skyDim(rd: vec3<f32>) -> vec3<f32> {
   let uv = skyUV(rd);
