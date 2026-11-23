@@ -1287,6 +1287,39 @@ function downhillYaw(world, x, z) {
   return Math.atan2(-dx, dz);
 }
 
+// A place to stand knee-deep in the lagoon and a way to look from it: clear water ahead with a
+// shore beyond it, a wooded bank close on one side and the open sea on the other, and the sun
+// behind the shoulder so that the bank is lit and the water is not glare. It is searched for,
+// not drawn at random, so the planting that follows is the same whatever it finds.
+function findShallows(world, at, sx, sz) {
+  let best = null, bs = 0;
+  for (let dz = -64; dz <= 64; dz += 4) {
+    for (let dx = -64; dx <= 64; dx += 4) {
+      const x = at.x + dx, z = at.z + dz, h = fieldSample(world, x, z);
+      if (h > -0.2 || h < -0.45) continue;
+      for (let k = 0; k < 16; k++) {
+        const yaw = k * Math.PI / 8;
+        // Along the middle of the frame and each side of it: how far the water runs, and how
+        // much dry land stands behind where it ends, the nearer counting for more.
+        const run = [0, 0, 0], bank = [0, 0, 0];
+        for (let r = 0; r < 3; r++) {
+          const fx = Math.sin(yaw + (r - 1) * 0.4), fz = -Math.cos(yaw + (r - 1) * 0.4);
+          let shore = false;
+          for (let d = 6; d <= 126; d += 6) {
+            const g = fieldSample(world, x + fx * d, z + fz * d);
+            if (!shore && g < -0.15) run[r] = d;
+            else { shore = true; if (g > 0.5) bank[r] += 20 / d; }
+          }
+        }
+        const n = run[0] < run[2] ? 0 : 2;
+        if (run[1] < 30 || run[n] < 18 || run[n] > 36 || run[2 - n] < 120) continue;
+        const sc = 2.5 - (Math.sin(yaw) * sx - Math.cos(yaw) * sz) * 1.5 - Math.abs(run[1] - 55) / 55 + Math.min(bank[1], 1.5) + Math.min(bank[n], 1.5);
+        if (sc > bs) { bs = sc; best = { x: x, z: z, h: h, yaw: yaw }; }
+      }
+    }
+  }
+  return best;
+}
 // Look toward the water across a stretch of sand, not down the long axis of a spit.
 // A real strip of sand with the sea a few meters downhill. The random hunt
 // misses it: the shelf is only a handful of meters wide.
@@ -1338,16 +1371,18 @@ function smooth01(e0, e1, x) {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
 }
-const PLACES = {
-  lagoon: { title: 'Tropical Lagoon', line: 'Clear water over pale sand', swatch: 'linear-gradient(#cfe7ea, #2f9d96 46%, #e4d2ae)', amp: 0.55, spd: 0.85, frq: 0.9, dir: 0.08, layers: 7, cx: 0.9, rough: 0.09, refl: 0.82, refr: 1.15, alpha: 1, depthK: 0.55, sun: 1.02, sky: 1.02, sunAng: -0.1, sim: 1, rip: 0.75, ripSpd: 0.95, disturb: 0.85, ripSize: 1.15, deep: [0.012, 0.08, 0.11], shal: [0.05, 0.26, 0.24], mood: [0.55, 0, 0.12, 0.65], dist: 22, pitch: 0.36, spot: 3 },
-  ocean: { title: 'Open Ocean', line: 'Long swell running to the horizon', swatch: 'linear-gradient(#b7cbe4, #1d5f98 42%, #0c335c)', amp: 1.15, spd: 0.78, frq: 0.62, dir: 0.04, layers: 8, cx: 0.72, rough: 0.16, refl: 1.02, refr: 0.68, alpha: 0.9, depthK: 1.35, sun: 0.96, sky: 0.98, sunAng: 0.05, sim: 0.9, rip: 0.5, ripSpd: 0.8, disturb: 0.75, ripSize: 1.7, deep: [0.008, 0.026, 0.065], shal: [0.018, 0.075, 0.11], mood: [0.22, 0.04, 0.32, 0.8], dist: 52, pitch: 0.16, spot: 4 },
-  cove: { title: 'Hidden Cove', line: 'Quiet water under the cliff', swatch: 'linear-gradient(#c5d0c4, #6e9084 44%, #314e4c)', amp: 0.58, spd: 0.92, frq: 1.02, dir: 0.32, layers: 6, cx: 0.78, rough: 0.12, refl: 0.8, refr: 1.02, alpha: 1, depthK: 0.82, sun: 0.94, sky: 0.96, sunAng: 0.22, sim: 0.95, rip: 0.65, ripSpd: 0.85, disturb: 0.8, ripSize: 1.05, deep: [0.014, 0.05, 0.08], shal: [0.045, 0.17, 0.15], mood: [0.32, 0.1, 0.22, 1.0], dist: 18, pitch: 0.4, spot: 1 },
-  lake: { title: 'Calm Lake', line: 'A glass surface and a long reflection', swatch: 'linear-gradient(#e4ebe6, #8aa4a6 52%, #3c5552)', amp: 0.1, spd: 0.38, frq: 0.88, dir: 0.2, layers: 4, cx: 0.4, rough: 0.045, refl: 1.18, refr: 0.7, alpha: 0.94, depthK: 1.05, sun: 0.88, sky: 0.94, sunAng: 0.16, sim: 0.65, rip: 0.32, ripSpd: 0.5, disturb: 0.5, ripSize: 1.7, deep: [0.016, 0.04, 0.048], shal: [0.038, 0.1, 0.085], mood: [0.12, 0.14, 0.48, 0.2], dist: 30, pitch: 0.12, spot: 3 },
-  storm: { title: 'Stormy Ocean', line: 'A heavy sky and a short, steep sea', swatch: 'linear-gradient(#8b9094, #2a3842 48%, #141c22)', amp: 1.42, spd: 1.18, frq: 0.92, dir: 0.35, layers: 8, cx: 1.15, rough: 0.22, refl: 0.72, refr: 0.55, alpha: 0.8, depthK: 1.2, sun: 0.46, sky: 0.66, sunAng: 0.42, sim: 1.05, rip: 0.9, ripSpd: 1.15, disturb: 1.05, ripSize: 1.6, deep: [0.01, 0.025, 0.04], shal: [0.025, 0.06, 0.07], mood: [0, 0.62, 0.38, 1.05], dist: 34, pitch: 0.4, spot: 4 },
-  reef: { title: 'Shallow Reef', line: 'The bottom showing through turquoise', swatch: 'linear-gradient(#d7f0ea, #2eae9e 40%, #e7d3a4)', amp: 0.26, spd: 0.95, frq: 1.18, dir: 0, layers: 6, cx: 0.95, rough: 0.07, refl: 0.5, refr: 1.4, alpha: 1, depthK: 0.28, sun: 1.05, sky: 1.02, sunAng: -0.04, sim: 1, rip: 0.85, ripSpd: 1, disturb: 0.75, ripSize: 0.95, deep: [0.022, 0.12, 0.13], shal: [0.16, 0.36, 0.28], mood: [0.62, 0, 0.08, 0.35], dist: 16, pitch: 0.78, tx: 196, tz: -2, yaw: 2.6 },
-  pool: { title: 'Swimming Pool', line: 'Still water, and the sand underneath', swatch: 'linear-gradient(#e7f2f2, #8fd0cc 58%, #d5e0cf)', amp: 0.035, spd: 0.32, frq: 1.7, dir: 0, layers: 2, cx: 0.22, rough: 0.03, refl: 1.0, refr: 1.45, alpha: 1, depthK: 0.2, sun: 1.05, sky: 1.02, sunAng: 0.18, sim: 1, rip: 0.5, ripSpd: 0.6, disturb: 0.55, ripSize: 0.65, deep: [0.022, 0.15, 0.19], shal: [0.22, 0.42, 0.38], mood: [0.35, 0, 0.04, 0.12], dist: 9, pitch: 1.02, spot: 3 }
-};
-const PLACE_ALIAS = { tropical: 'lagoon', calm: 'ocean', deep: 'ocean', shallow: 'reef', storm: 'storm', pool: 'pool', lake: 'lake', lagoon: 'lagoon', ocean: 'ocean', cove: 'cove', reef: 'reef' };
+// The six places are the six numbered views: card n, key n and view n are one camera, in
+// this order. Each is somewhere worth going, and no two are the same kind of place.
+const PLACES = [
+  { title: 'Palm Beach', line: 'White sand, leaning palms and the wash running up the shore', swatch: 'linear-gradient(#bfe0ea, #37a9a0 48%, #efe3c4 52%)' },
+  { title: 'Cliff Overlook', line: 'High on the bluff, with the cove and its shallows below', swatch: 'linear-gradient(#c9d8e2, #4f9f9c 46%, #2f5a3c 78%)' },
+  { title: 'Island From Above', line: 'The whole island, ringed by reef and turquoise water', swatch: 'radial-gradient(circle at 50% 55%, #2f6b3a 0 22%, #e4d6ae 23% 30%, #46bfae 31% 56%, #1d6a94)' },
+  { title: 'Lagoon Shallows', line: 'Knee-deep in clear water, with palms along the lagoon shore', swatch: 'linear-gradient(#d3ecee, #58c6b6 50%, #cfe3c4)' },
+  { title: 'Offshore', line: 'Out on the swell, the island standing across the water', swatch: 'linear-gradient(#b7cbe4 40%, #2c7a50 41% 47%, #1d6f98 48%, #0f4a70)' },
+  { title: 'Coral Garden', line: 'Under the surface, beside a coral head and its school', swatch: 'linear-gradient(#2a8fa2, #1f6f86 55%, #e8b7b0)' }
+];
+// The water the island opens with and keeps.
+const WATER = { amp: 0.55, spd: 0.85, frq: 0.9, dir: 0.08, layers: 7, cx: 0.9, rough: 0.09, refl: 0.82, refr: 1.15, alpha: 1, depthK: 0.55, sun: 1.02, sky: 1.02, sunAng: -0.1, sim: 1, rip: 0.75, ripSpd: 0.95, disturb: 0.85, ripSize: 1.15, deep: [0.012, 0.08, 0.11], shal: [0.05, 0.26, 0.24], mood: [0.55, 0, 0.12, 0.65] };
 const WP_KEYS = ['amp', 'spd', 'frq', 'dir', 'layers', 'cx', 'rough', 'refl', 'refr', 'alpha', 'depthK', 'sun', 'sky', 'sunAng', 'sim', 'rip', 'ripSpd', 'disturb', 'ripSize'];
 const wp = {
   amp: 1, spd: 1, frq: 1, dir: 0, layers: 8, cx: 1, rough: 0, refl: 1, refr: 1, alpha: 1, depthK: 1,
@@ -1405,39 +1440,23 @@ function ease01(t) {
   const x = Math.max(0, Math.min(1, t));
   return x * x * (3 - 2 * x);
 }
-function copyWp() {
-  const o = { deep: wp.deep.slice(), shal: wp.shal.slice(), mood: wp.mood.slice() };
-  WP_KEYS.forEach((k) => { o[k] = wp[k]; });
-  return o;
-}
-function mixWp(a, b, u) {
-  WP_KEYS.forEach((k) => {
-    wp[k] = (k === 'dir' || k === 'sunAng') ? lerpAng(a[k], b[k], u) : a[k] + (b[k] - a[k]) * u;
-  });
-  for (let i = 0; i < 3; i++) {
-    wp.deep[i] = a.deep[i] + (b.deep[i] - a.deep[i]) * u;
-    wp.shal[i] = a.shal[i] + (b.shal[i] - a.shal[i]) * u;
-  }
-  for (let i = 0; i < 4; i++) wp.mood[i] = a.mood[i] + (b.mood[i] - a.mood[i]) * u;
-}
 function putPlace(p) {
   WP_KEYS.forEach((k) => { wp[k] = p[k]; });
   wp.deep[0] = p.deep[0]; wp.deep[1] = p.deep[1]; wp.deep[2] = p.deep[2];
   wp.shal[0] = p.shal[0]; wp.shal[1] = p.shal[1]; wp.shal[2] = p.shal[2];
   wp.mood[0] = p.mood[0]; wp.mood[1] = p.mood[1]; wp.mood[2] = p.mood[2]; wp.mood[3] = p.mood[3];
 }
-function destOf(p) {
-  let tx, tz, yaw;
-  if (p.tx != null) {
-    tx = p.tx; tz = p.tz; yaw = p.yaw;
-  } else {
-    const s = spots[p.spot] || spots[0];
-    const fx = Math.sin(s.yaw), fz = -Math.cos(s.yaw);
-    tx = s ? s.x + fx * 14 : 0;
-    tz = s ? s.z + fz * 14 : 0;
-    yaw = s ? s.yaw + Math.PI : 0;
-  }
-  return { yaw: yaw, pitch: p.pitch, dist: p.dist, tx: tx, tz: tz };
+// The view the island opens on: a slow look round the lagoon from a little above it.
+function openOrbit() {
+  const s = spots[3] || spots[0];
+  putPlace(WATER);
+  trip = null;
+  orbit = true;
+  targetX = s.x + Math.sin(s.yaw) * 14;
+  targetZ = s.z - Math.cos(s.yaw) * 14;
+  orbitYaw = s.yaw + Math.PI; orbitPitch = 0.36; orbitDist = 22;
+  applyOrbitPose();
+  markPlace(-1);
 }
 function applyOrbitPose() {
   const op = -orbitPitch;
@@ -1463,56 +1482,48 @@ function showCaption(p) {
   el.classList.add('show');
   capTimer = 3.6;
 }
-function markPlace(id) {
-  document.querySelectorAll('#places button').forEach((b) => b.classList.toggle('on', b.dataset.place === id));
+function markPlace(i) {
+  document.querySelectorAll('#places button').forEach((b, n) => b.classList.toggle('on', n === i));
 }
-function settlePlace(id) {
-  const p = PLACES[id];
-  if (!p) return;
-  putPlace(p);
-  const d = destOf(p);
-  orbitYaw = d.yaw; orbitPitch = d.pitch; orbitDist = d.dist;
-  targetX = d.tx; targetZ = d.tz;
-  applyOrbitPose();
-  markPlace(id);
-  showCaption(p);
-}
-function startTrip(id) {
-  const p = PLACES[id];
-  if (!p) return;
-  const d = destOf(p);
-  trip = {
-    t: 0, dur: 2.8, id: id,
-    from: { yaw: orbitYaw, pitch: orbitPitch, dist: orbitDist, tx: targetX, tz: targetZ, wp: copyWp() },
-    to: d, wp: null
-  };
-  const snap = { deep: p.deep.slice(), shal: p.shal.slice(), mood: p.mood.slice() };
-  WP_KEYS.forEach((k) => { snap[k] = p[k]; });
-  trip.wp = snap;
-  markPlace(id);
-  showCaption(p);
+// Go to place i, which is view i + 1. Flown there, the camera leaves from wherever it is,
+// rises over what lies between, and comes down onto the view exactly.
+function goPlace(i, animate) {
+  const s = spots[i];
+  if (!s || !PLACES[i]) return;
+  markPlace(i);
+  showCaption(PLACES[i]);
+  if (!animate) { trip = null; goSpot(i); return; }
+  orbit = false;
+  mode = 2;
+  setFlyMode(true);
+  const apart = Math.hypot(s.x - camX, s.y - camY, s.z - camZ);
+  // One smooth arc, as high as it has to be to pass over the ground and the trees between.
+  const clear = Math.min(22, apart * 0.25);
+  let lift = Math.min(72, apart * 0.28);
+  for (let k = 1; k < 48 && apart > 2; k++) {
+    const u = ease01(k / 48), arc = Math.sin(Math.PI * u);
+    const g = fieldSample(world, camX + (s.x - camX) * u, camZ + (s.z - camZ) * u);
+    // Close to either end only the ground matters: one end may be under water.
+    const need = arc > 0.2 ? Math.max(g, 0) + clear * Math.min(1, arc * 1.2) : g + 0.4;
+    lift = Math.max(lift, Math.min(150, (need - camY - (s.y - camY) * u) / arc));
+  }
+  trip = { t: 0, dur: Math.min(7, 2 + (apart + lift) / 80), i: i, x: camX, y: camY, z: camZ, yaw: yaw, pitch: pitch, lift: lift, far: apart > 2 };
 }
 function advanceTrip(dt) {
+  const s = spots[trip.i];
   trip.t += dt;
   const u = ease01(trip.t / trip.dur);
-  mixWp(trip.from.wp, trip.wp, u);
-  orbitYaw = lerpAng(trip.from.yaw, trip.to.yaw, u);
-  orbitPitch = trip.from.pitch + (trip.to.pitch - trip.from.pitch) * u;
-  orbitDist = trip.from.dist + (trip.to.dist - trip.from.dist) * u;
-  targetX = trip.from.tx + (trip.to.tx - trip.from.tx) * u;
-  targetZ = trip.from.tz + (trip.to.tz - trip.from.tz) * u;
-  applyOrbitPose();
-  const apart = Math.hypot(trip.to.tx - trip.from.tx, trip.to.tz - trip.from.tz);
-  camY += Math.sin(Math.PI * u) * Math.min(72, apart * 0.28);
-  if (camY > 320) camY = 320;
-  if (u >= 1) trip = null;
-}
-function enterPlace(name, animate) {
-  const id = PLACE_ALIAS[name] || name;
-  if (!PLACES[id]) return;
-  orbit = true;
-  if (animate) startTrip(id);
-  else { trip = null; settlePlace(id); }
+  if (u >= 1) { const i = trip.i; trip = null; goSpot(i); return; }
+  const arc = Math.sin(Math.PI * u);
+  camX = trip.x + (s.x - trip.x) * u;
+  camZ = trip.z + (s.z - trip.z) * u;
+  camY = trip.y + (s.y - trip.y) * u + arc * trip.lift;
+  // Never through the ground, whatever the arc missed. Both ends are exact: one is under water.
+  const d = Math.min(2, fieldSample(world, camX, camZ) + 0.5 - camY);
+  if (d > -2 && trip.far) camY += (d + 2) * (d + 2) / 8 * Math.min(1, arc * 8);
+  yaw = lerpAng(trip.yaw, s.yaw, u);
+  // Looking a little down at the island while high over it.
+  pitch = trip.pitch + (s.pitch - trip.pitch) * u - arc * Math.min(0.3, trip.lift / 150);
 }
 function dropRipple(cx, cy) {
   const canvas = $('c');
@@ -1543,14 +1554,13 @@ function dropRipple(cx, cy) {
 function bindStudio() {
   const nav = $('places');
   if (!nav) return;
-  Object.keys(PLACES).forEach((id) => {
-    const p = PLACES[id];
+  PLACES.forEach((p, id) => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.dataset.place = id;
     b.className = 'card';
     const sw = document.createElement('i');
     sw.style.background = p.swatch;
+    sw.textContent = id + 1;
     const name = document.createElement('b');
     name.textContent = p.title;
     const line = document.createElement('span');
@@ -1558,7 +1568,7 @@ function bindStudio() {
     b.append(sw, name, line);
     b.addEventListener('click', () => {
       document.body.classList.remove('places-open');
-      enterPlace(id, mode === 2);
+      goPlace(id, mode === 2);
     });
     nav.append(b);
   });
@@ -2228,7 +2238,7 @@ function bootKeys() {
     if (e.code === 'KeyC' && mode === 2) $('watchbtn').click();
     if (e.code === 'KeyT' && mode > 0) stepHour(e.shiftKey);
     if (e.code === 'KeyR' && mode > 0) stepWeather(e.shiftKey);
-    if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goSpot(e.code.charCodeAt(5) - 49);
+    if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goPlace(e.code.charCodeAt(5) - 49, true);
   });
   addEventListener('keyup', (e) => { if (K[e.code] != null) K[e.code] = 0; });
   const canvas = $('c');
@@ -2551,11 +2561,12 @@ async function main() {
       eye = beach.h + 1.55;
       pitchBeach = -0.2;
     }
+    const wade = findShallows(world, lagoon, sdx, sdz) || { x: lagoon.x, z: lagoon.z, h: lagoon.h, yaw: downhillYaw(world, lagoon.x, lagoon.z) };
     spots = [
       { x: standX, y: eye, z: standZ, yaw: byaw, pitch: pitchBeach, fly: false, dive: 0 },
       { x: cliff.x, y: cliff.h + 1.7, z: cliff.z, yaw: downhillYaw(world, cliff.x, cliff.z), pitch: -0.28, fly: false, dive: 0 },
       { x: 30, y: 168, z: 150, yaw: 0, pitch: -0.7, fly: true, dive: 0 },
-      { x: lagoon.x, y: lagoon.h + 1.6, z: lagoon.z, yaw: downhillYaw(world, lagoon.x, lagoon.z), pitch: -0.16, fly: false, dive: 0 },
+      { x: wade.x, y: wade.h + 1.65, z: wade.z, yaw: wade.yaw, pitch: -0.1, fly: false, dive: 0 },
       { x: beach.x + sdx * 38, y: 2.6, z: beach.z + sdz * 38, yaw: face + Math.PI, pitch: -0.05, fly: true, dive: 0 },
       { x: (lagoon.x + 150) * 0.5, y: -1.1, z: lagoon.z, yaw: face, pitch: 0.45, fly: false, dive: 2.2 }
     ];
@@ -3316,9 +3327,10 @@ async function main() {
         pitch = introFrom.pitch + (introTo.pitch - introFrom.pitch) * t;
         if (Math.abs(lookX) + Math.abs(lookY) > 12) introT = 1;
         if (introT >= 1) { mode = 2; setFlyMode(false); dive = 0; showModeHint(false); }
+      } else if (mode === 2 && trip) {
+        advanceTrip(dt);
       } else if (mode === 2 && orbit) {
-        if (trip) { advanceTrip(dt); }
-        else {
+        {
         const ofx = Math.sin(orbitYaw), ofz = -Math.cos(orbitYaw);
         const orx = Math.cos(orbitYaw), orz = Math.sin(orbitYaw);
         const osp = (K.ShiftLeft || K.ShiftRight) ? 22 : 9;
@@ -3846,11 +3858,10 @@ async function main() {
     goEl.addEventListener('click', () => {
       if (!audio) { audio = makeAudio(); if (audio) audio.ac.resume(); }
       document.body.classList.add('playing', 'studio');
-      orbit = true;
       mode = 2;
-      enterPlace('lagoon', false);
+      openOrbit();
       showHint = 7;
-      $('hint').textContent = 'Walk: click to look · Places: drag to orbit';
+      $('hint').textContent = 'Drag to look round · Places or keys 1 – 6 to travel';
       paintMoveMode();
     });
     menuBtn.addEventListener('click', () => {
@@ -3927,8 +3938,7 @@ async function main() {
       statusEl.textContent = '';
     } else if (qstr.has('studio')) {
       document.body.classList.add('playing', 'studio');
-      orbit = true;
-      enterPlace(qstr.get('preset') || 'lagoon', false);
+      openOrbit();
       mode = 2;
       barEl.parentElement.hidden = true;
       statusEl.textContent = '';

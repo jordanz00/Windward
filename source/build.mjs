@@ -172,10 +172,10 @@ const html = `<!DOCTYPE html>
 <b>Look</b><span>In Walk or Fly, click the view to lock the mouse. Esc releases.</span>
 <b>Walk</b><span>WASD to move. Shift to run. Q to dive. Space rises.</span>
 <b>Fly</b><span>F or Fly. WASD, Space up, Ctrl down, Shift faster.</span>
-<b>Places</b><span>Orbit a place: drag to look, scroll to zoom. Lagoon, ocean, cove, lake, storm, reef, pool</span>
+<b>Places</b><span>Six places worth the trip. Pick one, or press its number, and the camera flies you there.</span>
 <b>Watch</b><span>Hide the interface. C does the same.</span>
 <b>Day</b><span>T next hour, R weather. N music. X sound effects.</span>
-<b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
+<b>1 – 6</b><span>Palm beach, cliff overlook, from above, lagoon shallows, offshore, coral garden</span>
 <b>B / G</b><span>Timed bench path / scenic fly of the same route. Quality preset stays fixed</span>
 <b>Esc</b><span>Release look, then open this card</span>
 </div>
