@@ -47,6 +47,11 @@ Compact working notes. Update, do not grow.
 - The day opens at `ENV_OPEN` (17.65, golden hour) and holds there until the hour is first changed; captures with `shot=` and no `tod=` still open at `ENV_H0`, the framed afternoon.
 - Evening air: `airTau` adds a thin ground haze scaled by `F.day.w` (0 by day), which is what the low sun's shafts stand in.
 
+## Shafts under trees
+
+- `motes(p, fld)` in the air pass: sun-only in-scatter per metre, `0.0009*land + 0.016*wood`, falling off 16 m above the ground, with its own lobe `0.05 + 0.3*hg(mu, 0.5)`. No extinction and no sky light, so it adds shafts without fogging the shade. Far march counts it at half strength, fading over ~200 m. First try (0.0035/0.02, lobe 0.06+0.5*hg(0.6), no far fade) washed out near trunks and veiled the whole palm grove. Test views: `shot=1&wx=clear&at=-62,60,210,6&tod=17.2&sunview=1` (forest toward a low sun) and `shot=1&wx=clear&tod=16.5&sunview=0.7&shade` (palm grove).
+- Limit: forest crowns are solid hulls in the shadow map, so shafts come between crowns and through palm fronds, not through single forest leaves. Fixing that means cutting holes in the crown's shadow, not more air.
+
 ## Frame rate
 
 - Dynamic resolution (`dynScale` in `main`, applied at the end of `resize()`): one-second windows; under 40 fps the scale drops x0.85 (x0.7 under 24) to a floor of 0.5; over 55 fps for 8 windows it rises x1/0.85. A drop that gains under 5% is undone and locks further drops (not fill-bound). A rise taken back within 6 s sets a ceiling. Under 22 fps at the floor (or locked) for 4 windows: on the menu with a guessed preset (`autoQ`) it stores `ww-auto` in sessionStorage and reloads one preset down; in play it shows a hint once. Off for `?shot`, `?read`, `?dyn=0` and while `WW_BENCH.active()`. Thresholds are guesses: no real GPU was available. Reason: a Reddit visitor reported a slide show; desktop defaults to High.

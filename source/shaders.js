@@ -1950,6 +1950,16 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   d += F.wx.x * 0.0022 * smoothstep(0.3, 0.75, n2(p.xz * 0.0016 + F.windOff.xy * 1.6)) * step(p.y, 900.0) * seg;
   return d;
 }
+// Motes under trees: pollen, dust and insects' wings, which hang where leaves keep the wind
+// off. They are too few to dim anything or to hold the light of the sky, but each throws
+// the sun forward, so they are what a shaft through the leaves is seen by. Per metre, at a
+// point with the ground fld below it: thick under the forest, thin wherever else there is
+// ground, none out at sea, and thinning with height above the crowns.
+fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
+  let wood = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(p.xz));
+  let land = smoothstep(-0.3, 0.6, fld.x);
+  return (0.0009 * land + 0.016 * wood) * exp(-max(p.y - max(fld.x, 0.0), 0.0) / 16.0);
+}
 @fragment fn fsAir(in: SkyV) -> @location(0) vec4<f32> {
   let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
   let uv = vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
@@ -1981,11 +1991,13 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   }
   if (rd.y < -1e-4) { far = min(far, F.camPos.y / -rd.y); }
   // Each stretch of damp air sends on the sunlight that reaches it, past the fronds and past
-  // the clouds, and the light of the sky. Nothing is added to make a shaft: a shaft is the lit
-  // air beside the air in shadow. Droplets throw most of what they scatter forward, so the
+  // the clouds, and the light of the sky. A shaft is the lit air beside the air in shadow,
+  // and under trees the motes (above) are most of what is lit. Droplets throw most of what they scatter forward, so the
   // air is brightest toward the sun, by the same law as the haze in the sky behind it.
   let dayK = smoothstep(-0.02, 0.04, F.sunTrue.y);
   let ph = 0.07 + 0.18 * hg(mu, 0.75);
+  // The motes' own lobe: wider than a droplet's, so a shaft seen from the side still shows.
+  let phM = (0.05 + 0.3 * hg(mu, 0.5)) * dayK;
   let amb = skyDim(normalize(vec3<f32>(rd.x, abs(rd.y) + 0.6, rd.z))) * 0.75 + F.amb.rgb * 0.08;
   let samples = select(10, 14, F.cloudOct >= 2.5);
   let nearEnd = min(far, 56.0);
@@ -2000,7 +2012,7 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
     let litB = sunVis(p);
     let litC = sunVis(p + rd * (dn * 0.28));
     let lit = (litA + litB + litC) * 0.333 * cloudShade(p.xz, p.y);
-    L += T * a * (F.sunCol * (lit * ph * dayK) + amb);
+    L += T * (a * (F.sunCol * (lit * ph * dayK) + amb) + F.sunCol * (lit * phM * motes(p, fld) * dn));
     T *= 1.0 - a;
   }
   if (far > 56.0) {
@@ -2011,9 +2023,12 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
       let t0 = 56.0 + span * f32(i * i) / 81.0;
       let t1 = 56.0 + span * f32((i + 1) * (i + 1)) / 81.0;
       let p = F.camPos + rd * mix(t0, t1, jit);
-      let a = 1.0 - exp(-airTau(p, sampleField(p.xz), F.camPos.y + rd.y * t0, F.camPos.y + rd.y * t1, t1 - t0));
+      let fld = sampleField(p.xz);
+      let a = 1.0 - exp(-airTau(p, fld, F.camPos.y + rd.y * t0, F.camPos.y + rd.y * t1, t1 - t0));
       let lit = sunVis(p) * cloudShade(p.xz, p.y);
-      L += T * a * (F.sunCol * (lit * ph * dayK) + amb);
+      // Far off a shaft is narrower than a step and the motes are a veil, not a shaft: they
+      // are counted at half strength and let go over the next couple of hundred metres.
+      L += T * (a * (F.sunCol * (lit * ph * dayK) + amb) + F.sunCol * (lit * phM * motes(p, fld) * (t1 - t0) * 0.5 * exp(-(t0 - 56.0) / 90.0)));
       T *= 1.0 - a;
     }
   }
