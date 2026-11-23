@@ -2414,7 +2414,9 @@ async function main() {
     // The scene and its mirror are drawn with four samples to the pixel. A palm's leaflets
     // and a tree's leaves are a pixel wide or less from a few metres off, and with one sample
     // each was there or not as it swayed, so every crown flashed in the wind.
-    const MS = qstr.get('msaa') === '0' ? 1 : 4;
+    // It is asked for, not the default: on a Mac it drew trees and coral in stray colours, a
+    // fault the software renderer it was written against does not show.
+    const MS = qstr.get('msaa') === '4' ? 4 : 1;
     const code = shaderCode(q.hres, q.span, q.water, MS);
     const mod = device.createShaderModule({ code: code });
     const simMod = device.createShaderModule({ code: SIM_WGSL });

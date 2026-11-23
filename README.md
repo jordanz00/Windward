@@ -98,7 +98,7 @@ Under the surf and the birds, an original score called Beneath the Blue unfolds 
 - **Cloud shadow and shafts.** The same clouds are marched once toward the sun into a shadow map. The land, the sea, the air pass and the animals read it, so a shadow on the sand belongs to a cloud that is in the sky. In the panorama the air's own light is taken away along each stretch of a view ray that lies in cloud shadow, which leaves the lit air between as shafts, in space and not on the screen.
 - **Sand.** Dry sand is shaded from a height: pits with raised rims, wind ripples in patches, and grain. Each scale is left out once it is smaller than a pixel. Below a ragged line the sand is damp, darker and smooth, and the last high wash has left a wrack line.
 - **Startup.** Pipelines compile in parallel while the height field, the planting, the wave spectra and the surf grid are made, with the sea's shader started first because it takes longest. The first picture waits only for the sky, the land, the plants, their shadows and the sea. The wash on the sand, the shafts in the air, the grass, the birds, fish, insects and rain are drawn from the frame their pipeline arrives, a fraction of a second later. `window.__perf` holds the time of each startup step in milliseconds, and `?perf` in the address logs it.
-- **Antialiasing.** The scene and its mirror are drawn with four samples to the pixel, so a leaflet thinner than a pixel fades instead of flickering as it sways. Levels of detail cross-fade through the same samples, a leaf at a time. `?msaa=0` turns it off.
+- **Antialiasing (experimental, off by default).** `?msaa=4` draws the scene and its mirror with four samples to the pixel, so a leaflet thinner than a pixel fades instead of flickering as it sways, and levels of detail cross-fade through the same samples, a leaf at a time. It is off by default because it drew trees and coral in stray colours on a Mac; the cause is not yet found.
 - **One of each.** Trunks, limbs, stems, coral branches and insect legs are swept by one `tube` function. Plants, rocks, boats, coral, fish and insects share one 32-byte vertex (position as floats, normal, colour and texture coordinate as half floats) and 16-bit indices. The sea shader and the surf solver read the wave tiles through the same lookup, the two sun glints on water are one GGX lobe, and the gust at a point is one function that the leaves, the birds, the insects and the sound all ask.
 
 ### Under the water
@@ -147,7 +147,7 @@ Kilobytes are 1024 bytes. `node source/build.mjs` prints these.
 | of which shaders (WGSL) | 180.1 KB |
 | `index.html` | 349.6 KB |
 | `index.html`, gzipped | 122.0 KB |
-| `index.html`, brotli | 103.6 KB |
+| `index.html`, brotli | 103.5 KB |
 
 The build strips comments and spare whitespace and nothing else; names are not mangled. The page fetches nothing after it loads: no images, models, audio, fonts or scripts.
 
@@ -163,14 +163,15 @@ To compare two builds, run `B` on each and compare GPU milliseconds, not FPS.
 
 Three failure modes are guarded against in the renderer itself, not by thinning the scene:
 
-1. **Tree crowns.** Four samples to the pixel and a cross-fade between levels of detail that shares them; cutouts sampled in the rest pose so they do not swim with the wind; finer levels of detail kept longer from altitude.
+1. **Tree crowns.** Cutouts are sampled in the rest pose so they do not swim with the wind, and finer levels of detail are kept longer from altitude. With `?msaa=4`, four samples to the pixel and a cross-fade between levels of detail that shares them.
 2. **Ocean from any height.** Waves are filtered by pixel footprint and distance, which removes aliasing while the swell stays readable from the cliffs and from overhead.
 3. **Crossing the waterline.** The switch between above and below has hysteresis on the local wave height, and the mirror pass is skipped only while submerged, where it is not used.
 
 ## Known limits
 
 - It needs WebGPU. A browser without it gets a message, not the island.
-- High detail is meant for a desktop graphics card. If it is slow, pick Medium or Low on the card, or add `?msaa=0` to the address.
+- High detail is meant for a desktop graphics card. If it is slow, pick Medium or Low on the card.
+- Thin palm leaflets can shimmer as they sway, and a tree changes level of detail in one step as you approach. `?msaa=4` fixes both where it works, but it is known to break on at least one Mac.
 - Automated checks ran on a software rasterizer, which shows what is drawn but cannot time a GPU. Frame rate has been seen on few machines. If it runs badly on yours, an issue with the `H` readout and your GPU is welcome.
 - Phones run it at Low detail; expect a low frame rate on a weak one.
 
