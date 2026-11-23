@@ -721,6 +721,11 @@ struct MeshV {
   @location(4) uv: vec2<f32>,
   // Pre-wind plant space — foliage cutouts must not crawl when the crown sways.
   @location(5) rest: vec3<f32>,
+  // Between two levels of detail: how far the change has gone (see fsMesh).
+  @location(6) @interpolate(flat) fade: f32,
+  // A number of its own for each leaf: flat, so it is that of the leaf's first vertex,
+  // the stalk end, which both of a leaf's triangles start from.
+  @location(7) @interpolate(flat) leaf: f32,
 }
 struct MeshIn {
   @location(0) p: vec3<f32>,
@@ -733,6 +738,9 @@ struct MeshIn {
   @location(7) i1: vec4<f32>,
   @location(8) i2: vec4<f32>,
 }
+// i1.z holds how open the plant stands to the wind, under 2, and above that twice the
+// number that says how far it is between two levels of detail.
+fn windExpo(z: f32) -> f32 { return z - 2.0 * floor(z * 0.5); }
 fn spinY(v: vec3<f32>, a: f32) -> vec3<f32> {
   let s = sin(a); let c = cos(a);
   return vec3<f32>(v.x * c - v.z * s, v.y, v.x * s + v.z * c);
@@ -792,7 +800,7 @@ fn meshPlaceLean(in: MeshIn) -> vec3<f32> {
     w.y -= (abs(gust) + abs(gustZ)) * in.c.w * 0.15;
     return w;
   }
-  let L = plantLean(in.i0.xz, in.i1.x, in.i1.z, in.i1.w);
+  let L = plantLean(in.i0.xz, in.i1.x, windExpo(in.i1.z), in.i1.w);
   let k = i32(in.n.w + 0.5);
   var along = L.x;
   var across = L.y;
@@ -828,8 +836,9 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   let dist = length(in.i0.xyz - F.camPos);
   let nearW = 1.0 - smoothstep(35.0, 120.0, dist);
   // Far plants: mean wind only (gust noise averages out and costs 2 n2/vertex).
-  var windV = F.wind.z * in.i1.z;
-  if (nearW > 0.08) { windV = windAt(in.i0.xz) * in.i1.z; }
+  let expo = windExpo(in.i1.z);
+  var windV = F.wind.z * expo;
+  if (nearW > 0.08) { windV = windAt(in.i0.xz) * expo; }
   let L = plantLeanFromV(in.i0.xz, in.i1.x, in.i1.w, windV);
   let v = L.z;
   let id = L.w;
@@ -885,6 +894,8 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   o.col = in.c.rgb * mix(tint, vec3<f32>(dot(tint, vec3<f32>(0.333))), select(0.0, 0.8, in.n.w > 8.5));
   o.kind = in.n.w;
   o.uv = in.uv;
+  o.fade = floor(in.i1.z * 0.5);
+  o.leaf = hash31(in.p * 733.0);
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
   return o;
 }
@@ -923,6 +934,23 @@ fn leafCells(q: vec2<f32>) -> vec4<f32> {
 }
 @fragment fn fsMesh(in: MeshV) -> @location(0) vec4<f32> {
   if (F.clipBelow > 0.5 && in.world.y < -0.2) { discard; }
+  // A plant between two levels of detail is drawn at both, and fade says how much of it is
+  // still the finer one: 1..63 of 64, with 64 added on the coarser copy. Each pixel has a
+  // fixed number from 0 to 1. Solid parts trade pixels: the finer level keeps those under
+  // its share and the coarser keeps the rest, so the two fill the plant between them
+  // exactly. A tree's leaves (128 added) do not, since two different sprays of leaves
+  // mixed pixel by pixel are grain. Each leaf comes or goes whole instead, at a point of
+  // its own in the change and over a quarter of it: the crown thins and fills leaf by leaf.
+  if (in.fade > 0.5) {
+    let leafy = in.fade > 128.5;
+    let code = in.fade - select(0.0, 128.0, leafy);
+    let coarse = code > 64.5;
+    let share = (code - select(0.0, 64.0, coarse)) / 64.0;
+    let d = fract(52.9829189 * fract(dot(floor(in.clip.xy), vec2<f32>(0.06711056, 0.00583715))));
+    if (leafy && in.kind > 1.5 && in.kind < 2.5) {
+      if (d >= (select(share, 1.0 - share, coarse) - in.leaf * 0.75) * 4.0) { discard; }
+    } else if ((d < share) == coarse) { discard; }
+  }
   var n = normalize(in.nrm);
   var alb = in.col;
   let Vv = normalize(F.camPos - in.world);

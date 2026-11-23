@@ -1074,8 +1074,11 @@ const ISTRIDE = 12;
 const SC_OX = -560, SC_OZ = -560, SC_CW = 35, SC_N = 32, SC_CELLS = SC_N * SC_N;
 function Scatter() { this.protos = []; this.data = []; this.kind = []; }
 // lods: meshes from finest to coarsest. cuts: the distance where each one hands over.
-Scatter.prototype.proto = function (lods, radius, cuts) {
-  this.protos.push({ lods: lods, r: radius, cuts: cuts || [] });
+// far: the same for the mirror and the shadow maps, which start a level down; they are
+// given only where the view's cuts are further out than those passes have any use for.
+// leafy: the plant's leaves are single blades that can come and go one at a time (fsMesh).
+Scatter.prototype.proto = function (lods, radius, cuts, far, leafy) {
+  this.protos.push({ lods: lods, r: radius, cuts: cuts || [], far: far || cuts || [], leafy: leafy ? 128 : 0 });
   return this.protos.length - 1;
 };
 // soft: wind stiffness (i1.w); bias: leaf age/hue bias packed in tint.w (i2.w).
@@ -1092,6 +1095,7 @@ Scatter.prototype.finish = function () {
   this.n = this.kind.length;
   this.data = new Float32Array(this.data);
   this.slotOf = new Int16Array(this.n);
+  this.fadeQ = new Uint8Array(this.n);
   this.counts = new Int32Array(meshes.length);
   this.starts = new Int32Array(meshes.length);
   this.cursor = new Int32Array(meshes.length);
@@ -1129,7 +1133,7 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
   const d = this.data, counts = this.counts, starts = this.starts, slotOf = this.slotOf;
   const order = this.cellOrder, cellStart = this.cellStart, seenGen = this.seenGen;
   const cap = (out.length / ISTRIDE) | 0;
-  const hys = vp && !coarser ? (this.lodWas || (this.lodWas = new Uint8Array(this.kind.length).fill(255))) : null;
+  const fadeQ = this.fadeQ;
   counts.fill(0);
   // Generation stamp avoids clearing the whole slot array each collect (AG-style).
   let epoch = this.epoch + 1;
@@ -1156,7 +1160,7 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
         const dx = x - ex, dz = z - ez;
         const reachI = reach + Math.min(220, r * 12);
         const distXZ = Math.hypot(dx, dz);
-        let slot = -1;
+        let slot = -1, q = 0;
         if (distXZ - r < reachI) {
           const dy = y - ey;
           const dist = Math.hypot(distXZ, dy);
@@ -1177,25 +1181,27 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
             }
             if (ok) {
               let lod = coarser;
-              const bias = Math.min(28, r * 1.8);
-              // From altitude, keep finer crowns a little longer — LOD pops read as broken tops.
+              const bias = Math.min(28, r * 1.8), last = p.lods.length - 1, cuts = coarser ? p.far : p.cuts;
+              // From altitude, keep finer crowns a little longer.
               const airBias = ey > 35 ? Math.min(55, (ey - 35) * 0.45) : 0;
-              while (lod < p.cuts.length && dist > p.cuts[lod] + bias + airBias) lod++;
-              // A plant near a cut keeps the level it had: an eye hovering at the boundary
-              // does not flip it back and forth.
-              if (hys) {
-                const was = hys[i];
-                if (was !== 255 && was !== lod) {
-                  const c = p.cuts[Math.min(lod, was)] + bias + airBias;
-                  if (Math.abs(dist - c) < c * 0.06 && was < p.lods.length) lod = was;
-                }
-                hys[i] = lod;
+              while (lod < cuts.length && lod < last) {
+                const c = cuts[lod] + bias + airBias;
+                if (dist <= c) break;
+                // In a view, a level does not switch at its cut. Over the next 14 m (less for
+                // a cut close by) the plant is drawn at both levels, and the finer one's share
+                // of it falls from all to none. The share follows distance alone, so there is
+                // no moment of change and nothing to flip back and forth at a boundary.
+                const t = (dist - c) / Math.min(c * 0.3, 14);
+                if (vp && t < 1) { q = Math.max(1, Math.min(63, Math.round((1 - t) * 64))) + p.leafy; break; }
+                lod++;
               }
-              slot = this.slot0[this.kind[i]] + Math.min(lod, p.lods.length - 1);
+              slot = this.slot0[this.kind[i]] + Math.min(lod, last);
               counts[slot]++;
+              if (q) counts[slot + 1]++;
             }
           }
         }
+        fadeQ[i] = q;
         slotOf[i] = slot;
         seenGen[i] = epoch;
       }
@@ -1223,13 +1229,19 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
         if (seenGen[i] !== epoch) continue;
         const s = slotOf[i];
         if (s < 0) continue;
-        const dst = cursor[s];
-        if (dst >= starts[s] + counts[s]) continue;
-        cursor[s] = dst + 1;
-        const o = i * ISTRIDE, t = dst * ISTRIDE;
-        out[t] = d[o]; out[t + 1] = d[o + 1]; out[t + 2] = d[o + 2]; out[t + 3] = d[o + 3];
-        out[t + 4] = d[o + 4]; out[t + 5] = d[o + 5]; out[t + 6] = d[o + 6]; out[t + 7] = d[o + 7];
-        out[t + 8] = d[o + 8]; out[t + 9] = d[o + 9]; out[t + 10] = d[o + 10]; out[t + 11] = d[o + 11];
+        // A plant between two levels goes into both, with the finer one's share packed above
+        // the wind exposure (which is under 2): 1..63 on the finer copy, 64 more on the
+        // coarser, and 128 more on both for a leafy plant.
+        const q = fadeQ[i], o = i * ISTRIDE;
+        for (let b = q ? 1 : 0; b >= 0; b--) {
+          const dst = cursor[s + b];
+          if (dst >= starts[s + b] + counts[s + b]) continue;
+          cursor[s + b] = dst + 1;
+          const t = dst * ISTRIDE;
+          out[t] = d[o]; out[t + 1] = d[o + 1]; out[t + 2] = d[o + 2]; out[t + 3] = d[o + 3];
+          out[t + 4] = d[o + 4]; out[t + 5] = d[o + 5]; out[t + 6] = d[o + 6] + (q ? 2 * (q + b * 64) : 0); out[t + 7] = d[o + 7];
+          out[t + 8] = d[o + 8]; out[t + 9] = d[o + 9]; out[t + 10] = d[o + 10]; out[t + 11] = d[o + 11];
+        }
       }
     }
   }
@@ -2529,19 +2541,19 @@ async function main() {
     walkHits = [];
     const pick = (ids, x, z) => ids[Math.abs(Math.floor(x * 7.3 + z * 3.1)) % ids.length];
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
-    const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [40]));
+    const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [70]));
     // Close palms keep every leaflet; coarser crowns carry the silhouette far past the beach.
     // Softer LOD handoffs — abrupt mid/far crown swaps read as tree-top flicker.
-    const palmIds = [3, 8, 21, 34, 47, 55].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 10.5, [55, 185]));
+    const palmIds = [3, 8, 21, 34, 47, 55].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 10.5, [70, 200], [55, 185]));
     // A palm leans the way the ground falls, toward the open light over the water.
     const leanYaw = (x, z) => {
       const gx = fieldSample(world, x + 3, z) - fieldSample(world, x - 3, z), gz = fieldSample(world, x, z + 3) - fieldSample(world, x, z - 3);
       return Math.atan2(-gz, -gx) + (rnd() - 0.5) * 1.4;
     };
     const shrubIds = protoSet([5, 9, 14, 22, 27], makeShrub, 1.2);
-    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd, 0), makeCanopy(sd, 1)], 2.4, [0]));
+    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd, 0), makeCanopy(sd, 1)], 2.4, [35]));
     const fernIds = protoSet([7, 12, 19, 24, 30, 33], makeFern, 1.6);
-    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd, 0), makeBroad(sd, 1)], 2.8, [0]));
+    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd, 0), makeBroad(sd, 1)], 2.8, [35]));
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
     const palmSites = [];
     const fernBudget = Math.max(14, (q.broad * 0.7) | 0);
@@ -2612,7 +2624,7 @@ async function main() {
     // Flowering shrubs, in the open where the sun reaches: behind the beach, by the lagoon,
     // and along the edge of the forest. Every blossom is somewhere a bee or a butterfly can go.
     const blooms = [], perch = [];
-    const flowerIds = [0, 1, 2, 3, 4, 5].map((sd) => { const f = makeFlowerShrub(sd + 1, 0); return { id: scatter.proto([f.mesh, makeFlowerShrub(sd + 1, 1).mesh], 1.8, [28]), blooms: f.blooms }; });
+    const flowerIds = [0, 1, 2, 3, 4, 5].map((sd) => { const f = makeFlowerShrub(sd + 1, 0); return { id: scatter.proto([f.mesh, makeFlowerShrub(sd + 1, 1).mesh], 1.8, [55]), blooms: f.blooms }; });
     const plantFlower = (x, z) => {
       const h = fieldSample(world, x, z);
       if (h < 0.7 || h > 9 || fieldSlope(world, x, z) > 0.35) return false;
@@ -2633,7 +2645,7 @@ async function main() {
     }
     // Interior forest: pick form by habitat — slender near coast, emergent inland, rounded in dense cover.
     // Bounding radius must match canopy size or distant trees fail the pixel/frustum tests and pop.
-    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [0, 50]));
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [16, 82], [0, 50], true));
     let trees = 0;
     for (let i = 0; i < q.forest * 32 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
@@ -2847,8 +2859,9 @@ async function main() {
     const shoreIB = upload(shoreMesh.idx, GPUBufferUsage.INDEX);
     const meshVB = upload(packed.vert, GPUBufferUsage.VERTEX);
     const meshIB = upload(packed.idx, GPUBufferUsage.INDEX);
-    // Main + mirror + near-shadow instance lists share one buffer (≤3× plants; keep 4× headroom).
-    const instCap = Math.max(1, scatter.n) * 4;
+    // Main + mirror + near-shadow instance lists share one buffer. A plant between two levels
+    // of detail is listed twice in the view and in the mirror, so five times at the very most.
+    const instCap = Math.max(1, scatter.n) * 6;
     const instArr = new Float32Array(instCap * ISTRIDE);
     const instB = device.createBuffer({ size: instArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     // Island-wide shadow: coarsest LOD, culled to a practical reach so tiny understory is skipped.
