@@ -1991,9 +1991,10 @@ function paintMusic() {
 }
 
 const K = Object.create(null);
+const ARROWS = { ArrowUp: 'KeyW', ArrowDown: 'KeyS', ArrowLeft: 'KeyA', ArrowRight: 'KeyD' };
 ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight'].forEach((c) => { K[c] = 0; });
 let lookX = 0, lookY = 0, dragging = false, touchN = 0;
-let velX = 0, velY = 0, velZ = 0;
+let velX = 0, velY = 0, velZ = 0, hop = 0, hopV = 0;
 // What a walker cannot pass through: trunks, boulders and the skiff as upright columns,
 // coral and sea stacks as domes. Each is a circle on the plan at the eye's height.
 let walkHits = []; // x, z, radius of each column, as it is planted
@@ -2029,8 +2030,8 @@ function setFlyMode(on) {
 }
 function showModeHint(flying) {
   hintEl.textContent = flying
-    ? 'WASD · Space up · Ctrl down · Shift fast · Esc release look'
-    : 'Click to look · WASD move · Shift run · Q dive · F fly · Esc release';
+    ? 'Mouse look · W flies where you look · Space up · Q down · Shift fast · F walk'
+    : 'Mouse look · WASD or arrows move · Shift run · Space jump · Q dive · F fly';
   showHint = 6;
   hintEl.classList.add('show');
 }
@@ -2204,13 +2205,22 @@ function walkStep(dt, time) {
   // resting on it, where a wall at the lower height would have pushed the swimmer off.
   const top = walkTop(camX, camZ);
   const eye = walkEye = Math.max(gh + 1.65 - 1.2 * Math.min(1, dive / 0.7), wh + 0.42 - dive, top);
-  camY += (eye - camY) * (qstr.has('shot') ? 1 : 1 - Math.exp(-dt * 18));
+  // Space on dry ground is a hop. It lifts the eye and nothing else: what the walker meets
+  // is still met at standing height, so a hop carries nobody over a rock or into one.
+  if (hop > 0 || hopV > 0) { hopV -= 13 * dt; hop = Math.max(0, hop + hopV * dt); if (hop === 0) hopV = 0; }
+  else if (K.Space && gh >= wh - 0.25) hopV = 4.3;
+  camY += (eye + hop - camY) * (qstr.has('shot') ? 1 : 1 - Math.exp(-dt * 18));
   // The easing is for comfort; it is never allowed to leave the eye in the ground or the coral.
   camY = Math.max(camY, gh + 0.3, top);
 }
 function bootKeys() {
   addEventListener('keydown', (e) => {
-    if (K[e.code] != null) { K[e.code] = 1; e.preventDefault(); }
+    const kc = ARROWS[e.code] || e.code;
+    if (K[kc] != null) {
+      K[kc] = 1; e.preventDefault();
+      // A move key in the orbit view takes it over in first person (the frame does the rest).
+      if (orbit && mode === 2 && kc.length === 4 && 'WASD'.includes(kc[3])) tryLockPointer();
+    }
     if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
       musicVol = Math.min(1, Math.max(0.15, musicVol + (e.code === 'BracketRight' ? 0.08 : -0.08)));
     }
@@ -2245,12 +2255,16 @@ function bootKeys() {
     if (e.code === 'KeyR' && mode > 0) stepWeather(e.shiftKey);
     if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goPlace(e.code.charCodeAt(5) - 49, true);
   });
-  addEventListener('keyup', (e) => { if (K[e.code] != null) K[e.code] = 0; });
+  addEventListener('keyup', (e) => { const kc = ARROWS[e.code] || e.code; if (K[kc] != null) K[kc] = 0; });
+  // A key held when the window loses focus never sends its keyup, and the walker would run on.
+  addEventListener('blur', () => { for (const c in K) K[c] = 0; });
   const canvas = $('c');
   canvas.addEventListener('mousedown', (e) => {
     if (mode !== 2 || e.button !== 0) return;
     dragging = true;
     if (orbit) { downX = e.clientX; downY = e.clientY; moved = 0; return; }
+    // With the mouse already looking, a click touches the water where the eye is aimed.
+    if (document.pointerLockElement === canvas) { dropRipple(innerWidth / 2, innerHeight / 2); return; }
     tryLockPointer();
   });
   canvas.addEventListener('wheel', (e) => {
@@ -2274,7 +2288,8 @@ function bootKeys() {
       return;
     }
     // FPS look only while pointer-locked. Mouse look never moves the player.
-    if (document.pointerLockElement === canvas) { lookX += e.movementX; lookY += e.movementY; }
+    // Dragging looks too, for a browser that will not lock the mouse.
+    if (document.pointerLockElement === canvas || dragging) { lookX += e.movementX; lookY += e.movementY; }
   });
   canvas.addEventListener('touchstart', (e) => {
     touchN = e.touches.length;
@@ -3373,13 +3388,13 @@ async function main() {
         advanceTrip(dt);
       } else if (mode === 2 && orbit) {
         {
-        const ofx = Math.sin(orbitYaw), ofz = -Math.cos(orbitYaw);
-        const orx = Math.cos(orbitYaw), orz = Math.sin(orbitYaw);
-        const osp = (K.ShiftLeft || K.ShiftRight) ? 22 : 9;
-        if (K.KeyW) { targetX += ofx * osp * dt; targetZ += ofz * osp * dt; }
-        if (K.KeyS) { targetX -= ofx * osp * dt; targetZ -= ofz * osp * dt; }
-        if (K.KeyD) { targetX += orx * osp * dt; targetZ += orz * osp * dt; }
-        if (K.KeyA) { targetX -= orx * osp * dt; targetZ -= orz * osp * dt; }
+        if (K.KeyW || K.KeyS || K.KeyA || K.KeyD) {
+          // A move key takes the view over in first person where the camera is: on foot if
+          // it is near the ground or the water, flying if it is up in the air.
+          orbit = false;
+          setFlyMode(camY > Math.max(fieldSample(world, camX, camZ), waveY(world, camX, camZ, time)) + 4);
+          showModeHint(fly);
+        }
         if (K.KeyE || K.Space) orbitDist = Math.max(4, orbitDist - 16 * dt);
         if (K.KeyQ) orbitDist = Math.min(160, orbitDist + 16 * dt);
         applyOrbitPose();
@@ -3405,7 +3420,14 @@ async function main() {
         const hLen = Math.hypot(wishX, wishZ);
         if (hLen > 1e-6) { wishX /= hLen; wishZ /= hLen; }
         if (fly) {
-          // Horizontal WASD; Space / Ctrl for vertical. No terrain lock.
+          // W and S go along the line of sight, as in any first-person fly-through; A and D
+          // stay level. Space and Q still rise and sink.
+          const along = forward - back, cp = Math.cos(pitch);
+          wishX = fx * cp * along + rx * ((K.KeyD ? 1 : 0) - (K.KeyA ? 1 : 0));
+          wishZ = fz * cp * along + rz * ((K.KeyD ? 1 : 0) - (K.KeyA ? 1 : 0));
+          wishY = Math.sin(pitch) * along;
+          const wl3 = Math.hypot(wishX, wishY, wishZ);
+          if (wl3 > 1) { wishX /= wl3; wishY /= wl3; wishZ /= wl3; }
           if (K.Space || K.KeyE) wishY += 1;
           if (K.ControlLeft || K.ControlRight || K.KeyQ) wishY -= 1;
           const spm = sprint ? 48 : 14;
@@ -3909,10 +3931,20 @@ async function main() {
     goEl.addEventListener('click', () => {
       if (!audio) { audio = makeAudio(); if (audio) audio.ac.resume(); }
       document.body.classList.add('playing', 'studio');
+      // In on foot, on the beach, with the mouse already looking: what anyone who has played
+      // a first-person game expects of WASD. The click is the gesture the lock needs.
       mode = 2;
-      openOrbit();
-      showHint = 7;
-      $('hint').textContent = 'Drag to look round · Places or keys 1 – 6 to travel';
+      if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) {
+        // A phone has no keys and no mouse to give up: it keeps the view it is turned by a finger.
+        openOrbit();
+        showHint = 7;
+        $('hint').textContent = 'Drag to look round · Places to travel · Walk to go on foot';
+      } else {
+        putPlace(WATER);
+        goPlace(0, false);
+        showModeHint(false);
+        tryLockPointer();
+      }
       paintMoveMode();
     });
     menuBtn.addEventListener('click', () => {

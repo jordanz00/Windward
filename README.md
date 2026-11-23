@@ -16,16 +16,16 @@ Open the [live page](https://jordanz00.github.io/Windward/), or clone the reposi
 python3 -m http.server 4177
 ```
 
-Wait for the coast to finish generating, then press **Enter**. You arrive over the lagoon. **Walk** uses FPS mouse-look (click the view to lock). **Places** orbits a body of water — drag to look, scroll to zoom, click the water. **Fly** (`F`) leaves the ground. **Watch**, or `C`, hides the interface.
+Wait for the coast to finish generating, then press **Enter**. You are standing on the beach in first person: the mouse looks, `W` `A` `S` `D` or the arrow keys move. If the mouse is not looking, click the view. **Places** flies you to one of six spots. **Fly** (`F`) leaves the ground, and `W` goes where you look. **Watch**, or `C`, hides the interface.
 
 | | |
 |---|---|
-| Look (Walk / Fly) | Click to lock the mouse. Esc releases |
-| Look (Places) | Drag. Scroll zooms |
-| Move | `W` `A` `S` `D` · Shift run / boost |
-| Ripple | Click or tap the water |
+| Look | Move the mouse (click the view if it is not looking). Esc releases |
+| Move | `W` `A` `S` `D` or arrow keys · Shift run / boost |
+| Jump | Space, on dry ground |
+| Ripple | Click while looking at the water (tap it on a phone) |
 | Travel | Places · `1`–`6` |
-| Fly | `F` · Space up · Ctrl down |
+| Fly | `F` · `W` flies where you look · Space up · `Q` down |
 | Dive / rise | `Q` dive · Space rise while walking |
 | Just watch | Watch, or `C`. Esc brings the controls back |
 | Time of day | Hour, or `T` (Shift goes back) |
@@ -36,7 +36,7 @@ Wait for the coast to finish generating, then press **Enter**. You arrive over t
 | Benchmark | `B` — timed fly-through with FPS / 1% low / CPU / cull / GPU / draws / passes; `G` flies the same path. `?bench=1` starts it after Enter |
 | Menu | `Esc` |
 
-On a phone, drag to look while walking and tap the water. A second finger is Shift. **Menu** brings the card back.
+A phone opens on a view you turn with a finger; tap the water to ripple it. **Walk** puts you on foot: a finger down walks forward, dragging looks, a second finger runs. **Menu** brings the card back.
 
 Low, Medium, and High are the same island with less or more in it. The choice is remembered. If a load dies, the next one steps down a level.
 
@@ -145,9 +145,9 @@ Kilobytes are 1024 bytes. `node source/build.mjs` prints these.
 |---|---|
 | Source that goes into the page, with its comments | 549.9 KB |
 | of which shaders (WGSL) | 180.1 KB |
-| `index.html` | 349.6 KB |
-| `index.html`, gzipped | 122.0 KB |
-| `index.html`, brotli | 103.5 KB |
+| `index.html` | 350.3 KB |
+| `index.html`, gzipped | 122.3 KB |
+| `index.html`, brotli | 103.7 KB |
 
 The build strips comments and spare whitespace and nothing else; names are not mangled. The page fetches nothing after it loads: no images, models, audio, fonts or scripts.
 

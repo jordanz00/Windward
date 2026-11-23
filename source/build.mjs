@@ -175,9 +175,9 @@ const html = `<!DOCTYPE html>
 <button type="button" data-q="high">High</button>
 </div>
 <div class="keys">
-<b>Look</b><span>In Walk or Fly, click the view to lock the mouse. Esc releases.</span>
-<b>Walk</b><span>WASD to move. Shift to run. Q to dive. Space rises.</span>
-<b>Fly</b><span>F or Fly. WASD, Space up, Ctrl down, Shift faster.</span>
+<b>Look</b><span>Move the mouse. If it is not looking, click the view. Esc releases.</span>
+<b>Walk</b><span>WASD or arrow keys. Shift runs. Space jumps. In water, Q dives and Space rises.</span>
+<b>Fly</b><span>F or Fly. W flies where you look. Space up, Q down, Shift faster.</span>
 <b>Places</b><span>Six places worth the trip. Pick one, or press its number, and the camera flies you there.</span>
 <b>Watch</b><span>Hide the interface. C does the same.</span>
 <b>Day</b><span>T next hour, R weather. N music. X sound effects.</span>

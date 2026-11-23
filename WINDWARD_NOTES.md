@@ -49,6 +49,8 @@ Compact working notes. Update, do not grow.
 
 ## Camera
 
+- Controls are first person from Enter: `goPlace(0)` on the beach, walking, pointer lock requested by the Enter click. The orbit view (`openOrbit`) is now only `?studio`; a move key there hands over to walk or fly. Arrows alias WASD (`ARROWS`), `blur` clears held keys, Space hops on dry ground (`hop` lifts the eye only; collision stays at standing height), flying W/S follow pitch, dragging looks when the lock is refused. Ctrl still sinks in Fly but is not advertised: Ctrl+W closes the tab and cannot be prevented. A click with the mouse locked ripples the water at the centre of the view. A device with only a coarse pointer still opens in the orbit view, as before. None of this was driven by hand in a browser.
+
 - After every mode but walking, the eye is held 0.45 m above the highest ground within 0.9 m (one clamp before `lookX = 0`). Places (orbit) had only `camY >= 0.35`, so an orbit swung over a hill put the eye inside the island, where the sea is drawn. Not captured: no parameter puts the camera under ground.
 
 ## Grass, bark, sea floor
