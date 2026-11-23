@@ -1183,7 +1183,7 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
   col += alb * sun * max(-nl, 0.0) * through * 1.4;
   let H = normalize(V + F.sunDir);
   let ndv = max(dot(n, V), 0.0);
-  let fr = pow(1.0 - ndv, 3.0);
+  let fr = pow(sat(1.0 - ndv), 3.0);
   // Silver flanks mirror the water around them, which is what hides the fish in open water.
   let R = reflect(-V, n);
   let env = mix(vec3<f32>(0.012, 0.085, 0.11), vec3<f32>(0.20, 0.50, 0.55), sat(R.y * 0.65 + 0.45)) * absorb * (0.5 + 0.5 * lit);

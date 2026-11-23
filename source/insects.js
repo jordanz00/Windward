@@ -807,7 +807,7 @@ fn bugTurn(in: BugIn, v0: vec3<f32>, place: f32) -> vec3<f32> {
   let light = F.sunCol * max(nl, 0.0) * sh * 1.2 + F.amb.rgb * (0.3 + 0.5 * hemi) + vec3<f32>(0.26, 0.19, 0.11) * F.amb.w * (1.0 - hemi) * 0.4;
   let H = normalize(V + F.sunDir);
   let nh = max(dot(n, H), 0.0);
-  let fr = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+  let fr = pow(sat(1.0 - dot(n, V)), 3.0);
   var col = in.col * light;
   var a = in.glow.y;
   if (k == 5) {

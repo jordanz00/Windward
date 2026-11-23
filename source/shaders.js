@@ -118,6 +118,9 @@ const PI: f32 = 3.14159265;
 const G: f32 = 9.81;
 
 fn sat(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
+// x to the fifth, for Fresnel. x is one less a cosine, and a cosine of two unit vectors can
+// round to a hair over one: pow() of a negative base is not a number on some GPUs.
+fn pow5(x: f32) -> f32 { let c = sat(x); let c2 = c * c; return c2 * c2 * c; }
 
 fn hash21(p: vec2<f32>) -> f32 {
   var p3 = fract(vec3<f32>(p.xyx) * 0.1031);
@@ -424,7 +427,7 @@ fn microSpec(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, rough: f32, F0: vec3<f32>
   let k = (rough + 1.0) * (rough + 1.0) * 0.125;
   let G = (ndv / (ndv * (1.0 - k) + k)) * (ndl / (ndl * (1.0 - k) + k));
   let hv = max(dot(H, V), 0.0);
-  let Fr = F0 + (1.0 - F0) * pow(1.0 - hv, 5.0);
+  let Fr = F0 + (1.0 - F0) * pow5(1.0 - hv);
   return Fr * (D * G * ndl) / max(4.0 * ndv, 1e-4);
 }
 
@@ -469,7 +472,7 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // angle: its facets face every way, so its edge-on reflectance stops well short of one.
   let nv = dot(n, V);
   let ndv = mix(max(nv, 0.0), abs(nv), sat(leaf));
-  let Fs = F0 + (max(vec3<f32>(1.0 - rough), F0) - F0) * 0.6 * pow(1.0 - ndv, 5.0);
+  let Fs = F0 + (max(vec3<f32>(1.0 - rough), F0) - F0) * 0.6 * pow5(1.0 - ndv);
   var col = alb * (1.0 - Fs) * light;
   // The sun's highlight, and the sky mirrored in whatever is smooth enough to mirror it.
   col += F.sunCol * microSpec(n, V, L, rough, F0) * sh * 2.2;
@@ -693,7 +696,7 @@ struct GeoV {
   let gloss = max(smoothstep(0.26, 0.02, in.world.y) * smoothstep(-0.9, -0.35, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
   if (gloss > 0.01 && F.under < 0.5) {
     let nw = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.8));
-    let fr = 0.02 + 0.98 * pow(1.0 - max(dot(nw, Vt), 0.0), 5.0);
+    let fr = 0.02 + 0.98 * pow5(1.0 - dot(nw, Vt));
     col = mix(col, applyFog(skyReflect(reflect(-Vt, nw)), in.world), sat(fr * gloss * 0.9));
   }
   if (washWet > 0.04 || washFoam > 0.02) {
@@ -1377,7 +1380,7 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
     + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.05 * (1.0 - calm * 0.45));
   N = normalize(vec3<f32>(N.x * (1.0 - band.z * 0.55), mix(N.y, 1.0, band.z * 0.28), N.z * (1.0 - band.z * 0.55)));
   let ndv = max(dot(N, V), 0.02);
-  let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+  let fres = 0.02 + 0.98 * pow5(1.0 - ndv);
   var reflCol = skyColor(reflect(-V, N));
   let Rd = reflect(-V, N);
   if (Rd.y < 0.02) {
@@ -1669,7 +1672,7 @@ const DROP_SPRAY: u32 = 60000u;
     pos = w + vd * c.y * 0.26 + side * c.x * wid;
     let cell = smoothstep(0.25, 0.7, n2(w.xz * 0.0016 + F.windOff.xy * 1.6));
     a = 0.8 * (0.003 / wid) * (0.35 + 0.65 * cell) * step(max(sampleField(w.xz).x, 0.0), w.y) * smoothstep(0.5, 1.6, d);
-    light = F.amb.rgb * 1.3 + F.sunCol * (0.3 + 1.5 * pow(0.5 + 0.5 * dot(normalize(w - F.camPos), F.sunDir), 6.0));
+    light = F.amb.rgb * 1.3 + F.sunCol * (0.3 + 1.5 * pow(sat(0.5 + 0.5 * dot(normalize(w - F.camPos), F.sunDir)), 6.0));
     o.form = 0.0;
     o.dist = d;
   } else if (ii < DROP_MOTE) {
@@ -1698,7 +1701,7 @@ const DROP_SPRAY: u32 = 60000u;
     // A mote is a point of forward-scattered sunlight or nothing.
     let mu = dot(normalize(w - F.camPos), F.sunDir);
     let lit = sunVis(w) * cloudShade(w.xz, w.y) * step(max(sampleField(w.xz).x, 0.0), w.y);
-    light = F.sunCol * lit * (0.2 + 5.5 * pow(0.5 + 0.5 * mu, 8.0));
+    light = F.sunCol * lit * (0.2 + 5.5 * pow(sat(0.5 + 0.5 * mu), 8.0));
     a = min(1.0, (r * r) / (rad * rad)) * (0.7 + 0.45 * sat(F.wx.w))
       * smoothstep(0.02, 0.2, dot(light, vec3<f32>(0.33)));
     o.form = 1.0;
@@ -1836,7 +1839,7 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
     let end = min(far, 15.0);
     let sr = normalize(vec3<f32>(F.sunDir.x * 0.75, sqrt(1.0 - 0.5625 * (1.0 - F.sunDir.y * F.sunDir.y)), F.sunDir.z * 0.75));
     let lit = cloudShade(F.camPos.xz, 0.0);
-    let ph = 0.25 + 1.5 * pow(0.5 + 0.5 * dot(rd, sr), 4.0);
+    let ph = 0.25 + 1.5 * pow(sat(0.5 + 0.5 * dot(rd, sr)), 4.0);
     for (var i = 0; i < 12; i++) {
       let t = end * (f32(i) + jit) / 12.0;
       let p = F.camPos + rd * t;
@@ -2004,7 +2007,7 @@ struct BlitOut {
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
   // Schlick, F0 for water against air (IOR 1.333).
-  let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+  let fres = 0.02 + 0.98 * pow5(1.0 - ndv);
   let reflK = sat(F.mat.y);
   // Roughness rises with distance / footprint so distant specular stays soft, not sparkly.
   let rough = clamp(0.012 + sat(F.mat.x) * 0.06 + 0.01 * scale + band.w * 0.055, 0.01, 0.14);
@@ -2070,7 +2073,7 @@ struct BlitOut {
     let win = smoothstep(0.0, 0.22, kWin);
     let rr = refract(I, -N, 1.333);
     let sd = max(dot(normalize(rr + vec3<f32>(1e-5)), F.sunDir), 0.0);
-    let fr = pow(1.0 - sqrt(max(kWin, 0.0)), 5.0);
+    let fr = pow5(1.0 - sqrt(max(kWin, 0.0)));
     let sky = skyColor(normalize(rr)) * vec3<f32>(0.85, 0.95, 1.05)
       * (0.85 + 0.35 * lit0)
       + F.sunCol * (pow(sd, 48.0) * 0.9 + pow(sd, 280.0) * 6.0) * (1.0 - fr) * lit0;
@@ -2212,7 +2215,7 @@ struct BlitOut {
   // On the sheet the wash is whitewater, not a mirror. The open sea keeps its Fresnel.
   let sheetK = smoothstep(0.5, 1.0, in.sheet);
   // Soft Fresnel on thin film — wet sand gleams at grazing angles without a hard plate.
-  let filmFres = mix(0.35, 0.85, sat(pow(1.0 - ndv, 3.2))) * (0.4 + 0.6 * sheetFilm);
+  let filmFres = mix(0.35, 0.85, pow(sat(1.0 - ndv), 3.2)) * (0.4 + 0.6 * sheetFilm);
   var fresK = fres * reflK * (1.0 - foam * mix(0.45, 0.88, onSheet)) * film;
   fresK = mix(fresK, max(fresK * 0.45, filmFres * reflK * 0.55), sheetK);
   var col = mix(base, reflCol, fresK);
