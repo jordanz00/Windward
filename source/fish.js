@@ -1173,7 +1173,7 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
   if (F.under > 0.5) { tint = vec3<f32>(0.8, 0.92, 0.94); }
   let sun = F.sunCol * lit * absorb * tint;
   let nl = dot(n, F.sunDir);
-  let ripple = caustic(in.world.xz) * 2.2 * smoothstep(-0.3, 0.5, n.y);
+  let ripple = caustic(in.world, length(F.camPos - in.world) * 0.0012).y * 2.2 * smoothstep(-0.3, 0.5, n.y);
   let hemi = n.y * 0.5 + 0.5;
   let above = in.world.y - sampleField(in.world.xz).x;
   let amb = (F.amb.rgb * 0.7 * mix(0.3, 1.0, hemi)

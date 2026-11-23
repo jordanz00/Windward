@@ -32,7 +32,8 @@ Compact working notes. Update, do not grow.
 - Forest tree: trunk + limbs, per lobe a solid hull (kind CROWN, never alpha-tested) and leaf sprays (kind LEAF, 4 verts / 2 tris each). LOD0 hull 0.78 + all sprays, LOD1 hull 0.92 + 1 spray in 4 (bigger leaves), LOD2 hull only.
 - Crown hull shading (`fsMesh` kind 3): leaf-cell tone and tilt at three scales chosen by pixel footprint; far = boughs. No discard, no dither.
 - Broad/canopy plants: LOD0 arched multi-segment blades (`addLeaflet` segs), LOD1 flat 3-tri blades.
-- LOD cross-fade (view and mirror; shadow maps switch): past a cut a plant is drawn at both levels for up to 14 m, the finer level's share falling 1 -> 0; solid parts trade pixels by a fixed screen-door pattern, tree leaves drop out one at a time. Share rides in instance `i1.z` with the wind exposure; `windExpo()` strips it. No hysteresis (nothing switches). View cuts are further out than before (tree 44-57 m and 110-124 m, rock 72-86 m); mirror and shadows keep the old cuts (`far`).
+- Antialiasing: the scene and the mirror are 4x MSAA (`MS` in `main`, `?msaa=0` off). Colour resolves into `sceneTex`; `sceneDepth` stays multisampled (`texture_depth_multisampled_2d`, layout letter `m`) and later passes read sample 0, except `fsWater`, which covers a pixel by the share of samples the scene leaves open and takes the furthest as its bed. Any pipeline with a fragment stage and `depth32float` gets the samples. `MeshV`/`GrassV` varyings are centroid: read at the pixel centre a sub-pixel leaflet extrapolated to colours no leaf has. Without MSAA sub-pixel leaflets were on or off per pixel as they swayed: the flashing in palms and trees.
+- LOD cross-fade (view and mirror; shadow maps switch): past a cut a plant is drawn at both levels for up to 14 m, the finer level's share falling 1 -> 0. No screen-door: wood shares the pixel's four samples between the two copies by `@builtin(sample_mask)` (complementary sets, 2x2 ordered rounding = 16 steps); each leaf comes and goes whole by its own number, which rides in the fraction of the vertex kind (`Mesh.leaf()`, under 0.4; everything reading the kind rounds). Share rides in instance `i1.z` with the wind exposure; `windExpo()` strips it. No fade without MSAA (`scatter.fade`). View cuts scale with canvas pixel size (`near` in `collect`, 1 at ~1400 px high, 0.4 at least); mirror and shadows keep `far`.
 - Wind (`plantLean`, `boughAt`): lean saturates with wind speed; boughs rock on top of the plant's own rocking, phased by where they stand on the plan; leaf flutter phased per leaf. Tree sway weights are in metres (x14). `meshPlace` and `meshPlaceLean` share one call, so both LOD copies, the shadow and perched insects move together. Open: crown foliage moves up to ~0.4 m against its limbs in gusts.
 - `Scatter.collect`: view culls plants under 1.5 px; mirror culls small far plants; near shadow culls small casters past 0.42 of reach.
 - `?perf` logs CPU ms/frame and plant triangles (view / mirror / near shadow). Cliff view was 2100k / 1411k / 2023k before the cross-fade moved the view's cuts out; `trees` scene view went 1409k -> 3101k with it (mirror, shadow unchanged). Cost on a real GPU not measured.
@@ -45,6 +46,11 @@ Compact working notes. Update, do not grow.
 
 - The day opens at `ENV_OPEN` (17.65, golden hour) and holds there until the hour is first changed; captures with `shot=` and no `tod=` still open at `ENV_H0`, the framed afternoon.
 - Evening air: `airTau` adds a thin ground haze scaled by `F.day.w` (0 by day), which is what the low sun's shafts stand in.
+
+## Grass, bark, sea floor
+- Grass tuft: 9 blades of two segments (`grassGeom`). Sizes: every tuft cut by its own factor and two smaller ones sown at its foot from `seeded(40507)`, after the main `rnd()` loop, so nothing else replants. `vsGrass`: bend is a share of the blade's own height (tip furthest, dips), gusts roll downwind as a wave, blades within 1.3 m of the eye lean away and lie down (eye under 3.2 m above that ground; seaweed too).
+- Trunks: palm 18 sides / 48 rings, forest trunk 16 sides, limbs 10; bark shaders add cross cracks, scar lips, deeper furrows.
+- Sea floor: `caustic(p, foot)` is a colour: two layers of the interference field (the second rotated), domain-warped by noise, combined with `min` into a net of threads, three taps with red and blue displaced, projected up the refracted sun (`sunUnder`, never under 41 deg). Cells are 0.5 m at every depth (sized by depth, the net drew contour bands on slopes). It is normalised so its mean equals the flat light it replaced, and fades to that mean where a pixel covers more than a cell (`foot`), so shallows seen from the shore keep their brightness. The function before it was saturated over 90% of the bed and showed no net. With the eye under water (`F.under`) the bed's sun term and absorption path use the refracted sun and the surface's Fresnel loss.
 
 ## Shadows
 - Near cascade (2048^2, 20 m) is drawn every frame, texel-snapped. Baking only on eye movement froze swaying casters and made shadows jump.
@@ -66,7 +72,7 @@ Compact working notes. Update, do not grow.
 ## Test (no GPU here: SwiftShader, software)
 - Harness in /tmp/harness (not in repo): `scenes.sh <out> <html> [names]` captures, `places.mjs` trips, `walk.mjs` collision runs, `evalpage.mjs` one expression in the page.
 - Capture params: `?shot=N&q=high&wx=..&tod=..&read[&rf=frame]`, plus `dyaw dpitch sunview shade up fwd side`, `at=x,z,yawDeg,pitchDeg,height`, `no=water,shore,drops,air`, `perf`.
-- Not verified here: real-GPU frame times, motion stability (no MSAA/TAA: thin geometry still aliases under motion), anything by ear (the audio context stays suspended headless).
+- Not verified here: real-GPU frame times (MSAA cost included), anything by ear (the audio context stays suspended headless).
 - App capture 1-4 min each at 800x500.
 
 ## Measured (SwiftShader, 4 cores, 800x500, High; s/frame, before -> after)

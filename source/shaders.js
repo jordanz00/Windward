@@ -352,22 +352,45 @@ fn causWave(uv: vec2<f32>, t: f32) -> f32 {
   c = 1.17 - pow(c / 5.0, 1.4);
   return pow(abs(c), 8.0);
 }
-fn caustic(xz: vec2<f32>) -> f32 {
-  let depth = max(-sampleField(xz).x, 0.12);
-  if (depth < 0.02 || F.sunDir.y < 0.04) { return 0.0; }
-  let sy = max(F.sunDir.y, 0.18);
-  // Project seabed point up the sun ray to the surface, then sample the interference field.
-  let surf = xz - F.sunDir.xz * (depth / sy);
-  let t = F.time * (0.35 + 0.25 * max(F.mood.w, 0.35));
-  let dir = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
-  let uv = vec2<f32>(dot(surf, dir), dot(surf, vec2<f32>(-dir.y, dir.x))) * mix(0.055, 0.028, sat(depth / 8.0));
-  let a = causWave(uv, t + 23.0);
-  let b = causWave(uv.yx * 0.72 + vec2<f32>(0.37, 0.11), t * 0.85 + 5.0);
-  let net = pow(a, 2.2) * (0.45 + 1.2 * b);
-  let lit = cloudShade(xz, 0.0);
+// The sun as it stands for anything under water. The surface bends its light toward the
+// vertical, so down there it is never lower than 41 degrees, however low it is in the air.
+fn sunUnder() -> vec3<f32> {
+  let h = F.sunDir.xz * 0.75;
+  return vec3<f32>(h.x, sqrt(1.0 - dot(h, h)), h.y);
+}
+// The net of light the waves focus on whatever lies under them, at a point's own depth:
+// bright threads round dimmer cells half a metre across, fine in the shallows and soft in
+// deep water, and on average the plain light it replaces. The cells keep one size: sized
+// by depth, the net slid along every slope and drew its contours. Two fields are laid across each
+// other and bent by a slow noise, so the net never repeats. It is a colour: the surface
+// bends red, green and blue a little differently, so a thread has a warm edge and a cold
+// one. foot is the size of a pixel on the bed, in metres: where a cell is smaller than
+// that the net is left as its average, since drawn it would crawl.
+fn caustic(p: vec3<f32>, foot: f32) -> vec3<f32> {
+  let depth = max(-p.y, 0.12);
+  if (F.sunDir.y < 0.04) { return vec3<f32>(0.0); }
+  let cell = 0.5;
+  let seen = sat(1.6 - foot / (0.3 * cell));
+  var net = vec3<f32>(1.0);
+  if (seen > 0.0) {
+    // Up the bent sun ray to the surface, then the interference field there.
+    let L = sunUnder();
+    let surf = p.xz - L.xz * (depth / L.y);
+    let t = F.time * (0.35 + 0.25 * max(F.mood.w, 0.35));
+    let dir = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
+    let q = vec2<f32>(dot(surf, dir), dot(surf, vec2<f32>(-dir.y, dir.x)));
+    let uv = (q + (vec2<f32>(n2(q * 0.31), n2(q * 0.31 + vec2<f32>(7.3, 2.1))) - 0.5) * (1.6 * cell)) / (5.0 * cell);
+    let uv2 = vec2<f32>(uv.x * 0.8 + uv.y * 0.6, uv.y * 0.8 - uv.x * 0.6) * 0.71 + vec2<f32>(0.37, 0.11);
+    let split = vec2<f32>(0.008, 0.005);
+    let a = vec3<f32>(causWave(uv + split, t + 23.0), causWave(uv, t + 23.0), causWave(uv - split, t + 23.0));
+    let b = causWave(uv2, t * 0.85 + 5.0);
+    let thread = pow(min(a, vec3<f32>(b)) * 0.935, vec3<f32>(mix(1.7, 1.2, sat(depth / 9.0))));
+    net = mix(net, min(thread, vec3<f32>(3.4)) * 1.7, seen);
+  }
+  let lit = cloudShade(p.xz, 0.0);
   let day = smoothstep(0.02, 0.12, F.sunTrue.y);
   let shallow = smoothstep(0.02, 0.4, depth) * exp(-depth * 0.22);
-  return sat(net * 4.5) * shallow * lit * day * 0.72;
+  return net * (shallow * lit * day * 0.72);
 }
 
 fn shadowAt(p: vec3<f32>) -> f32 {
@@ -452,7 +475,11 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let toCam = F.camPos - world;
   let V = toCam / max(length(toCam), 1e-4);
   let L = F.sunDir;
-  let nl = dot(n, L);
+  // Seen from under water, the bed is lit by the sun where the surface has bent it to, less
+  // what the surface turned back: steeper and through less water than the sun in the air.
+  let dived = F.under > 0.5 && world.y < -0.04;
+  let Lw = select(L, sunUnder(), dived);
+  let nl = dot(n, Lw);
   let cs = cloudShade(world.xz, world.y);
   let sh = sunShadow(world) * cs;
   // How much of the sky a point under the forest can see: little at the floor, all of it above the crowns.
@@ -471,11 +498,13 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
     + F.sunCol * vec3<f32>(0.3, 0.42, 0.13) * (0.11 * roof * max(L.y, 0.0) * cs);
   if (world.y < 0.05) {
     let depth = max(-world.y, 0.0);
-    let absorb = exp(W_KD * (-depth) / max(F.sunDir.y, 0.12));
+    let absorb = exp(W_KD * (-depth) / max(Lw.y, 0.12))
+      * select(1.0, 1.0 - 0.98 * pow(1.0 - sat(F.sunDir.y), 5.0), dived);
     light *= absorb * (0.55 + 0.45 * sat(depth / 8.0 + 0.2));
     if (world.y < -0.04) {
       let k = smoothstep(0.04, 0.3, depth) * exp(-depth * 0.3);
-      light += F.sunCol * max(nl, 0.0) * sh * (caustic(world.xz) * 2.6 - 0.1 * k) * absorb;
+      let foot = length(toCam) * 2.0 * F.tanHalf / F.res.y / max(abs(V.y), 0.12);
+      light += F.sunCol * max(nl, 0.0) * sh * (caustic(world, foot) * 2.6 - 0.1 * k) * absorb;
     }
   }
   if (F.under > 0.5) { light = light * vec3<f32>(0.8, 0.92, 0.94) + waterFill(max(-world.y, 0.0)) * (0.7 + 0.3 * (n.y * 0.5 + 0.5)); }
@@ -1065,10 +1094,13 @@ struct MeshOut {
       let groove = smoothstep(0.0, 0.14, ring) * smoothstep(1.0, 0.86, ring);
       let fibre = n2(vec2<f32>(in.uv.x * 110.0, in.uv.y * 5.0));
       let blotch = n2(vec2<f32>(in.uv.x * 5.0 + 3.0, in.uv.y * 0.9));
-      alb *= (0.5 + 0.5 * groove) * (0.78 + 0.34 * fibre) * (0.75 + 0.5 * blotch);
+      // Close to, the fibre is cracked across and the lip of each scar stands proud.
+      let crack = n2(vec2<f32>(in.uv.x * 46.0, in.uv.y * 31.0));
+      let lip = smoothstep(0.7, 0.95, ring);
+      alb *= (0.5 + 0.5 * groove) * (0.78 + 0.34 * fibre) * (0.75 + 0.5 * blotch) * (0.82 + 0.36 * crack) * (1.0 + 0.22 * lip);
       alb = mix(alb, vec3<f32>(0.40, 0.42, 0.33), smoothstep(0.58, 0.85, blotch) * 0.35);
       alb *= mix(0.62, 1.0, smoothstep(0.0, 1.4, in.uv.y));
-      n = normalize(n + vec3<f32>(0.0, (ring - 0.5) * 0.7 * groove, 0.0) + (fibre - 0.5) * 0.25 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
+      n = normalize(n + vec3<f32>(0.0, (ring - 0.5) * 1.1 * groove + (crack - 0.5) * 0.3, 0.0) + ((fibre - 0.5) * 0.4 + (crack - 0.5) * 0.25) * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
     }
     if (kind == 9) {
       // Bark of a forest tree: furrows running up the trunk, plates between them, lichen in patches.
@@ -1076,9 +1108,11 @@ struct MeshOut {
       let fur = n2(vec2<f32>(in.uv.x * 44.0 + n2(vec2<f32>(in.uv.x * 9.0, wy * 0.5)) * 2.0, wy));
       let plate = n2(vec2<f32>(in.uv.x * 13.0, wy * 3.1));
       let blotch = n2(vec2<f32>(in.uv.x * 5.0 + 3.0, wy * 1.1)) * 0.7 + n2(vec2<f32>(in.uv.x * 17.0, wy * 3.7)) * 0.3;
-      alb *= (0.42 + 0.58 * smoothstep(0.28, 0.5, fur)) * (0.7 + 0.6 * plate);
+      // Fine cracks across the plates, and the furrows cut deep enough to hold shadow.
+      let fine = n2(vec2<f32>(in.uv.x * 130.0, wy * 9.0));
+      alb *= (0.34 + 0.66 * smoothstep(0.26, 0.5, fur)) * (0.7 + 0.6 * plate) * (0.8 + 0.4 * fine);
       alb = mix(alb, vec3<f32>(0.27, 0.28, 0.24), smoothstep(0.6, 0.8, blotch) * 0.4);
-      n = normalize(n + (fur - 0.5) * 0.9 * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
+      n = normalize(n + ((fur - 0.5) * 1.4 + (fine - 0.5) * 0.35) * cross(n, vec3<f32>(0.0, 1.0, 0.0)) + vec3<f32>(0.0, (plate - 0.5) * 0.35, 0.0));
     }
     if (kind == 8) {
       // Coral. uv.x says which: 0 branches, 1 a boulder with a maze of grooves, 2 a table, 3 soft tissue.
@@ -1160,22 +1194,38 @@ struct GrassV {
   let z = lp.x * s + lp.z * c;
   let ground = sampleField(vec2<f32>(inst.x, inst.y)).x;
   var w = vec3<f32>(inst.x + x, ground + lp.y, inst.y + z);
-  // Tip sway grows with height^1.25 (Abyssal leaf sway), plus shared wind for land grass.
-  let sway = pow(max(uv.y, 0.0), 1.25) * (0.28 + weed * 0.5);
+  // Seaweed drifts as it did, by metres. Grass bends by its own height: the tip of a blade
+  // goes furthest and dips as it goes, so a short tuft is not thrown about like a tall one.
   var ph = sin(F.time * 0.5 + inst.x * 0.031 + inst.y * 0.017) * 0.7
     + 0.35 * sin(F.time * 1.3 + inst.x * 0.09 + inst.y * 0.07);
   var dir = vec2<f32>(1.0, 0.35);
+  var bend = ph * pow(max(uv.y, 0.0), 1.25) * 0.78;
   if (weed < 0.5) {
     let v = windAt(inst.xy);
     let id = fract(inst.x * 0.731 + inst.y * 0.417);
-    // Tip-weighted gust + secondary flutter — blades do not rock as one board.
-    ph = v * v * 0.024 * (0.75 + 0.55 * sin(F.time * (2.1 + 1.6 * id) + id * 30.0))
-      + sin(F.time * (5.2 + 3.2 * id) + id * 50.0) * 0.04 * v * uv.y
+    // A gust crosses a meadow as a wave running downwind, each tuft a little early or late,
+    // and every blade shivers on top of it.
+    let roll = sin(dot(inst.xy, F.wind.xy) * 0.8 - F.time * (1.4 + 0.3 * v) + id * 1.2);
+    ph = v * v * 0.02 * (0.85 + 0.5 * roll + 0.25 * sin(F.time * (2.1 + 1.6 * id) + id * 30.0))
+      + sin(F.time * (5.2 + 3.2 * id) + id * 50.0) * 0.035 * v * uv.y
       + sin(F.time * (9.5 + 4.0 * id) + id * 17.0) * 0.012 * v * uv.y * uv.y;
-    dir = F.wind.xy;
+    ph = ph / (1.0 + 0.6 * abs(ph));
+    dir = normalize(F.wind.xy + vec2<f32>(-F.wind.y, F.wind.x) * (id - 0.5) * 0.5);
+    bend = ph * sqrt(max(uv.y, 0.0)) * lp.y;
+    w.y -= bend * bend * 0.5 / max(lp.y, 0.02);
   }
-  w.x += ph * sway * dir.x;
-  w.z += ph * sway * dir.y;
+  w.x += bend * dir.x;
+  w.z += bend * dir.y;
+  // Someone wading through: the blades lean away from the legs, and those underfoot lie down.
+  let off = inst.xy - F.camPos.xz;
+  let reach = length(off);
+  let tread = smoothstep(1.3, 0.2, reach) * smoothstep(3.2, 2.2, F.camPos.y - ground);
+  if (tread > 0.0) {
+    let push = off / max(reach, 0.05) * (tread * 0.8 * sqrt(max(uv.y, 0.0)) * lp.y);
+    w.x += push.x;
+    w.z += push.y;
+    w.y -= tread * 0.5 * lp.y;
+  }
   var o: GrassV;
   o.world = w;
   o.nrm = normalize(vec3<f32>(ph * 0.3, 1.0, 0.1));

@@ -351,7 +351,7 @@ function makePalm(seed, lod) {
     : 0.05 + coastal * 0.35 + rnd() * 0.15;
   const topSway = 0.07 + (1 - age) * 0.045 + (family === 2 ? 0.02 : 0);
   const trunkFat = (family === 0 ? 0.08 : family === 3 ? 0.12 : 0.095) + age * 0.04 + rnd() * 0.028;
-  const sides = [12, 7, 4][lod], rings = [36, 12, 5][lod];
+  const sides = [18, 8, 4][lod], rings = [48, 14, 5][lod];
   // Trunk: out of the ground at an angle, then curving back up toward the light.
   let P = [0, -0.2, 0];
   let last = null;
@@ -790,7 +790,7 @@ function makeTree(seed, lod) {
     const pts = [];
     for (let i = 0; i <= rings; i++) pts.push(at(Math.pow(i / rings, 1.55), L));
     if (lod === 2) pts.push([L || lean, th + 0.2, 0]);
-    addLimb(m, pts, fat, fat * 0.55, [9, 6, 4][lod], bark, 0, 0.012, lod < 2 ? flareK : 0);
+    addLimb(m, pts, fat, fat * 0.55, [16, 8, 4][lod], bark, 0, 0.012, lod < 2 ? flareK : 0);
     return pts;
   };
   const flare = (form === 1 ? 1.0 : 0.55) + rnd() * 0.85;
@@ -807,7 +807,7 @@ function makeTree(seed, lod) {
         const p = at(t, L2);
         pts.push([p[0] + Math.cos(a) * off * (1 - t), p[1] * (0.85 + rnd() * 0.1), p[2] + Math.sin(a) * off * (1 - t)]);
       }
-      addLimb(m, pts, r0 * 0.7, r0 * 0.4, [7, 5, 3][lod], bark, 0, 0.014, lod < 2 ? flare * 0.6 : 0);
+      addLimb(m, pts, r0 * 0.7, r0 * 0.4, [10, 6, 3][lod], bark, 0, 0.014, lod < 2 ? flare * 0.6 : 0);
     }
   }
   const lobes = form === 2 ? 7 + (Math.abs(sd) % 3)
@@ -983,31 +983,28 @@ function makeSkiff() {
 // radial starburst of identical quads.
 function grassGeom() {
   const pos = [], uv = [], idx = [];
-  let base = 0;
-  const blades = 7;
-  for (let a = 0; a < blades; a++) {
+  // A tuft: nine narrow blades of unequal height standing round a small foot, each of two
+  // lengths so that it curves over as it rises and bends, not tilts, in the wind.
+  for (let a = 0; a < 9; a++) {
     const ang = a * 2.399 + (a * 0.17) % 1.1;
     const c = Math.cos(ang), s = Math.sin(ang);
-    const lean = 0.08 + (a % 5) * 0.06 + (a === 2 ? 0.12 : 0);
-    const h = 0.55 + (a % 4) * 0.14 + ((a * 3) % 5) * 0.05;
-    const w0 = 0.09 + (a % 3) * 0.035;
-    const w1 = 0.012 + (a % 2) * 0.01;
-    const bend = ((a % 3) - 1) * 0.04;
-    const corn = [
-      [-w0, 0, 0, 0], [w0, 0, 1, 0],
-      [w1 + bend, h, 1, 1], [-w1 + bend, h, 0, 1]
-    ];
-    for (let i = 0; i < 4; i++) {
-      const px = corn[i][0], py = corn[i][1];
-      pos.push(px * c + lean * py * s, py, px * s - lean * py * c);
-      uv.push(corn[i][2], corn[i][3]);
+    const lean = 0.1 + (a % 5) * 0.07 + (a === 2 ? 0.14 : 0);
+    const h = 0.42 + (a % 4) * 0.16 + ((a * 3) % 5) * 0.06;
+    const w0 = 0.028 + (a % 3) * 0.012;
+    const foot = 0.03 + (a % 4) * 0.035;
+    const base = pos.length / 3;
+    for (const [t, wk] of [[0, 1], [0.5, 0.72], [1, 0.12]]) {
+      const off = foot + lean * h * t * t;
+      for (const side of [-1, 1]) {
+        const px = side * w0 * wk;
+        pos.push(px * c + off * s, h * t, px * s - off * c);
+        uv.push(side > 0 ? 1 : 0, t);
+      }
     }
-    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-    base += 4;
+    idx.push(base, base + 1, base + 3, base, base + 3, base + 2, base + 2, base + 3, base + 5, base + 2, base + 5, base + 4);
   }
   return { pos: new Float32Array(pos), uv: new Float32Array(uv), idx: new Uint16Array(idx) };
 }
-
 function birdGeom() {
   const pos = [], wing = [], idx = [];
   const add = (x, y, z, w) => { pos.push(x, y, z); wing.push(w); return pos.length / 3 - 1; };
@@ -2833,6 +2830,22 @@ async function main() {
         weedList.push(x, z, rnd() * 6.28, -(0.55 + rnd() * 0.95));
       }
     }
+    // Grass is short and of every size, and it grows thick: each tuft sown above is cut down
+    // by a factor of its own, and two smaller ones stand at its foot. They are sown from
+    // their own numbers, so nothing planted after them moves.
+    {
+      const gr = seeded(40507), sown = grassList.length;
+      for (let i = 0; i < sown; i += 4) {
+        const big = grassList[i + 3] > 0.5;
+        grassList[i + 3] *= (big ? 0.34 : 0.75) + gr() * (big ? 0.42 : 0.45);
+        for (let k = 0; k < 2; k++) {
+          const a = gr() * 6.28, d = 0.2 + gr() * 1.3, u = gr();
+          const x = grassList[i] + Math.cos(a) * d, z = grassList[i + 1] + Math.sin(a) * d;
+          const h = fieldSample(world, x, z);
+          if (h > 0.25 && h < 28 && fieldSlope(world, x, z) < 0.5) grassList.push(x, z, gr() * 6.28, grassList[i + 3] * (0.35 + 0.75 * u * u));
+        }
+      }
+    }
     const grassInst = new Float32Array(grassList.length + weedList.length);
     grassInst.set(grassList, 0);
     grassInst.set(weedList, grassList.length);
@@ -3792,7 +3805,7 @@ async function main() {
             console.error('READ timeout');
             requestAnimationFrame(frame);
           }
-        }, 45000);
+        }, 240000);
         device.queue.onSubmittedWorkDone().then(() => buf.mapAsync(GPUMapMode.READ)).then(() => {
           clearTimeout(readWatch);
           const data = new Uint8Array(buf.getMappedRange());
