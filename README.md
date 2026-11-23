@@ -145,9 +145,9 @@ Kilobytes are 1024 bytes. `node source/build.mjs` prints these.
 |---|---|
 | Source that goes into the page, with its comments | 549.9 KB |
 | of which shaders (WGSL) | 180.1 KB |
-| `index.html` | 349.3 KB |
-| `index.html`, gzipped | 121.9 KB |
-| `index.html`, brotli | 103.4 KB |
+| `index.html` | 349.6 KB |
+| `index.html`, gzipped | 122.0 KB |
+| `index.html`, brotli | 103.6 KB |
 
 The build strips comments and spare whitespace and nothing else; names are not mangled. The page fetches nothing after it loads: no images, models, audio, fonts or scripts.
 

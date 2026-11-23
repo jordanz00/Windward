@@ -3436,6 +3436,14 @@ async function main() {
         if (camY > 320) camY = 320;
         if (camY < -8) camY = -8;
       }
+      // Nothing puts the eye under the land or the seabed: not an orbit swung over a hill, not
+      // a flight between places. The highest ground within a stride counts, so the view does
+      // not cut a cliff face open either. Walking keeps to the ground by its own rule.
+      if (mode !== 2 || fly) {
+        let g = fieldSample(world, camX, camZ);
+        for (let k = 0; k < 4; k++) g = Math.max(g, fieldSample(world, camX + (k === 0 ? 0.9 : k === 1 ? -0.9 : 0), camZ + (k === 2 ? 0.9 : k === 3 ? -0.9 : 0)));
+        if (camY < g + 0.45) { camY = g + 0.45; if (velY < 0) velY = 0; }
+      }
       lookX = 0; lookY = 0;
 
       // Fish only matter near/under the surface — skip sim when flying high over land.

@@ -47,6 +47,10 @@ Compact working notes. Update, do not grow.
 - The day opens at `ENV_OPEN` (17.65, golden hour) and holds there until the hour is first changed; captures with `shot=` and no `tod=` still open at `ENV_H0`, the framed afternoon.
 - Evening air: `airTau` adds a thin ground haze scaled by `F.day.w` (0 by day), which is what the low sun's shafts stand in.
 
+## Camera
+
+- After every mode but walking, the eye is held 0.45 m above the highest ground within 0.9 m (one clamp before `lookX = 0`). Places (orbit) had only `camY >= 0.35`, so an orbit swung over a hill put the eye inside the island, where the sea is drawn. Not captured: no parameter puts the camera under ground.
+
 ## Grass, bark, sea floor
 
 - `cylinder()` (tree-fern, understory and shrub stems) is WOOD with a seam and uv, like `addLimb`. As SOLID these stems were flat brown from close to.
