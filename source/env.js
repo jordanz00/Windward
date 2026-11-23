@@ -4,6 +4,8 @@
 
 // The hour the place opens at. The sun then stands where the views were framed for.
 const ENV_H0 = 15.8;
+// The hour the day opens at, and holds until the hour is first changed: the sun a hand above the sea.
+const ENV_OPEN = 17.65;
 // name, cloud cover, rain, ground mist, humidity, wind in m/s, gustiness, and then the sky:
 // how much of the air holds cumulus, the stratocumulus deck, how unstable the air is (which is
 // how deep cumulus grows and how many towers stand), and cirrus.
@@ -23,7 +25,7 @@ const WX_NEXT = {
   overcast: ['drizzle', 'clouds', 'shower'], drizzle: ['shower', 'overcast', 'after'], shower: ['after', 'drizzle'],
   after: ['clouds', 'clear', 'mist'], mist: ['clear', 'clouds']
 };
-const DAY_STOPS = [[6.2, 'First light'], [8, 'Morning'], [12, 'Midday'], [ENV_H0, 'Afternoon'], [17.35, 'Golden hour'], [18.02, 'Sunset'], [18.55, 'Blue hour'], [22.5, 'Night']];
+const DAY_STOPS = [[6.2, 'First light'], [8, 'Morning'], [12, 'Midday'], [ENV_H0, 'Afternoon'], [ENV_OPEN, 'Golden hour'], [18.02, 'Sunset'], [18.55, 'Blue hour'], [22.5, 'Night']];
 const env = {
   hour: ENV_H0, rate: 1 / 240, run: true, goal: null,
   wx: 'clear', auto: true, hold: 200,
@@ -222,7 +224,7 @@ function envWindAt(x, z) {
 function envLabel() {
   const h = env.goal != null ? env.goal : env.hour;
   let name = 'Night';
-  for (const s of DAY_STOPS) if (h >= s[0] - 0.6) name = s[1];
+  for (const s of DAY_STOPS) if (h >= s[0] - 0.25) name = s[1];
   if (h < 5.6) name = 'Night';
   const m = Math.round(h * 60) % 1440;
   return { title: name + ' · ' + String((m / 60) | 0).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'), line: WEATHER[env.wx][0] };

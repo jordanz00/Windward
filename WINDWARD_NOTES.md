@@ -43,6 +43,9 @@ Compact working notes. Update, do not grow.
 - View 4 is found by `findShallows` on the height field (knee-deep, bank near one side, open sea on the other, sun behind). It and `findBeach` take no random numbers: keep every `rnd()`/`hunt` call in `main()` in order or the island replants.
 - Audio: sources -> `master` -> `sfx` gain -> `under` filter -> out; score joins at `under`. SFX button / X (`ww-sfx` in localStorage), Music N, mute-all M.
 
+- The day opens at `ENV_OPEN` (17.65, golden hour) and holds there until the hour is first changed; captures with `shot=` and no `tod=` still open at `ENV_H0`, the framed afternoon.
+- Evening air: `airTau` adds a thin ground haze scaled by `F.day.w` (0 by day), which is what the low sun's shafts stand in.
+
 ## Shadows
 - Near cascade (2048^2, 20 m) is drawn every frame, texel-snapped. Baking only on eye movement froze swaying casters and made shadows jump.
 

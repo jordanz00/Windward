@@ -1863,6 +1863,9 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   // Damp air near the ground, thickest under forest.
   let wood = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(p.xz));
   d += F.wx.w * F.wx.w * (0.0007 + 0.0032 * wood) * airLayer(24.0, ya, yb, seg);
+  // The air of a low sun: cooling, it holds a thin haze near the ground and the sea, and that
+  // is what the light stands in between the trunks and under the gaps in the cloud.
+  d += F.day.w * 0.0005 * airLayer(40.0, ya, yb, seg);
   // Low ocean mist over warm humid water — not a fog wall.
   let sea = smoothstep(-1.8, -0.05, fld.x) * smoothstep(0.9, -0.2, fld.x);
   d += sea * F.wx.w * 0.0011 * (0.45 + 0.55 * n) * airLayer(4.5, ya, yb, seg) * (1.0 - sat(F.sunTrue.w));

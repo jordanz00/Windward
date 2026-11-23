@@ -2003,7 +2003,7 @@ let walkEye = 1e9;
 
 // T moves the clock to the next part of the day. R changes the weather, which then stays
 // until R is pressed again past the end of the list, where the island takes it back.
-function stepHour(back) { envNextStop(back); showCaption(envLabel()); }
+function stepHour(back) { envNextStop(back); if (!qstr.has('shot')) env.run = true; showCaption(envLabel()); }
 function stepWeather(back) {
   const names = Object.keys(WEATHER), i = names.indexOf(env.wx) + (back ? -1 : 1);
   env.auto = i < 0 || i >= names.length;
@@ -3128,6 +3128,7 @@ async function main() {
     // Captures hold the hour and the weather still unless asked to let them run.
     if (qstr.has('shot') || qstr.has('studio')) { env.run = env.auto = qstr.has('flow'); }
     if (qstr.has('tod')) env.hour = parseFloat(qstr.get('tod')) || ENV_H0;
+    else if (!qstr.has('shot')) { env.hour = ENV_OPEN; env.run = false; }
     if (qstr.has('wx')) { envSet(qstr.get('wx'), true); env.auto = false; }
     let last = performance.now();
     const ft = new Float32Array(40);
