@@ -30,3 +30,13 @@ Compact working notes. Update, do not grow.
 - Harness in /tmp/harness (not in repo): `scenes.sh <out> <html> <port> [names]`, `dev.sh` sky-only page, `dbg.mjs` patched builds.
 - Capture params: `?shot=N&q=high&wx=..&tod=..&read[&rf=frame]`, plus `dyaw dpitch sunview shade up fwd side`.
 - App capture 1-4 min each at 800x500.
+
+## Measured (SwiftShader, 4 cores, 800x500, High; s/frame, before -> after)
+- beach up 10.0 -> 2.1, cliff panorama 8.0 -> 3.3, sunset 8.0 -> 2.0, golden side 10.0 -> 3.3, towers 8.0 -> 1.8.
+- Build: gzip 117.4 KB, brotli 99.4 KB (was 113.8 / 96.5).
+- Adjacent frames: sky diff ~0; 40 frames apart: cloud edges only (drift), no strip seams.
+
+## Open
+- Shore sheet has a straight vertical edge where it meets the sea mesh (pre-existing; seen at beach, left of frame).
+- Bird's-eye: straight boundary low in frame over the lagoon (pre-existing).
+- No real-GPU timings yet.
