@@ -109,7 +109,7 @@ function envLight(cover) {
   // and the lens closes for that, as it would: the land goes toward silhouette, the sky keeps its colour.
   const glare = Math.pow(Math.max(env.face || 0, 0), 3) * (1 - 0.85 * cover) * up;
   const Lc = envLum(env.keyCol) * (env.key[1] + 1.5 * glare) + envLum(amb);
-  env.expo = 0.88 * Math.min(4.8, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.55))
+  env.expo = 0.74 * Math.min(4.8, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.47))
     * Math.pow(Lc / Math.max(L, 1e-4), 0.22);
   env.disc = env.space;
   env.sun = sun; env.moon = moon; env.night = night; env.moonUp = moonUp;
