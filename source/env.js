@@ -31,7 +31,7 @@ const env = {
   ang: 0.36, angGoal: 0.36, wx0: 1, wz0: 0, speed: 4.5, gust: 0.35, cloud: [0, 0], gustOff: [0, 0],
   sun: [0, 1, 0], moon: [0, -1, 0], key: [0, 1, 0], keyCol: [1, 1, 1], amb: [0.34, 0.48, 0.7], disc: [1, 1, 1],
   gnd: 1, expo: 0.92, expoSmooth: null, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0,
-  day: [1, 1, 1], airMass: 1,
+  day: [1, 1, 1], airMass: 1, low: 0,
   // The sky. Heights in km. Each layer of air has carried its clouds its own distance.
   sky: { cum: 0.16, conv: 0.25, base: 1, top: 3, cirrus: 0.35, deck: 0, deckBase: 1.5, deckThick: 0.45, depth: 1.2, lean: [0, 0], evo: 0, rise: 0, high: [0, 0], deckOff: [0, 0], tower: [0, 0] }
 };
@@ -107,8 +107,15 @@ function envLight(cover) {
   // Exposure target: preserve deep shadows and bright shafts; adaptation is applied in envStep.
   // The meter reads what the camera faces. A sun in the frame brings its bright sky with it,
   // and the lens closes for that, as it would: the land goes toward silhouette, the sky keeps its colour.
-  const glare = Math.pow(Math.max(env.face || 0, 0), 3) * (1 - 0.85 * cover) * up;
-  const Lc = envLum(env.keyCol) * (env.key[1] + 1.5 * glare) + envLum(amb);
+  const glare = Math.pow(Math.max(env.face || 0, 0), 3) * (1 - 0.85 * cover);
+  // A low sun lights the ground at a glance and weakly, but the sky is lit by light that came
+  // in higher and lost less, and it stays bright after the ground has gone dim, brightest
+  // round the sun. The meter reads the frame, and half of a frame is that sky: the lens does
+  // not open for the dim ground as far as the ground alone would have it, and facing the sun
+  // it closes. Otherwise everything warm in an evening sky burns out to white.
+  env.low = smooth01(0.4, 0.08, sy) * smooth01(-0.12, -0.02, sy);
+  const glow = envLum(envSunT(Math.max(sy, -0.03) + 0.06, env.haze).map((t, i) => t * env.space[i])) * env.low;
+  const Lc = envLum(env.keyCol) * (env.key[1] + 1.5 * glare * up) + glow * (0.5 + 4 * glare) + envLum(amb);
   env.expo = 0.74 * Math.min(4.8, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.47))
     * Math.pow(Lc / Math.max(L, 1e-4), 0.22);
   env.disc = env.space;
@@ -242,6 +249,7 @@ function envWrite(arr, o, sunAng, sunK) {
   arr[o + 16] = env.cloud[0]; arr[o + 17] = env.cloud[1]; arr[o + 18] = env.gustOff[0]; arr[o + 19] = env.gustOff[1];
   arr[o + 20] = env.v[1]; arr[o + 21] = Math.max(env.wet, env.dew); arr[o + 22] = env.mist; arr[o + 23] = env.humid;
   arr[o + 24] = env.disc[0]; arr[o + 25] = env.disc[1]; arr[o + 26] = env.disc[2]; arr[o + 27] = env.airMass;
+  arr[o + 31] = env.low;
   for (let i = 0; i < 3; i++) { arr[o + 28 + i] = env.day[i]; arr[140 + i] *= env.day[i]; arr[144 + i] *= env.day[i]; }
   const k = env.sky;
   arr.set([k.cum, k.conv, k.base, k.top, k.cirrus, k.deck, k.deckBase, k.evo, k.high[0], k.high[1], k.deckOff[0], k.deckOff[1]], o + 32);

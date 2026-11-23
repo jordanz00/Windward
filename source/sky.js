@@ -226,8 +226,11 @@ fn atmosphere(rd: vec3<f32>, h0: f32) -> Air {
     let att = exp(-min(view + sun, vec3<f32>(60.0)));
     sR += att * dn.x;
     sM += att * dn.y;
-    // Light scattered more than once has come by many paths and lost less on the way.
-    sS += exp(-min(view + sun * 0.4, vec3<f32>(60.0))) * (BR * dn.x + bM * dn.y);
+    // Light scattered more than once has come by many paths and lost less on the way. But
+    // it began as sunlight, and where the sun's own path is long enough to have taken most
+    // of a colour, the paths round it are long too: the dome dims and loses its blue with
+    // a low sun, as it is measured to, and does not stay a midday blue over a red one.
+    sS += exp(-min(view + sun * 0.4 + max(sun - vec3<f32>(1.0), vec3<f32>(0.0)) * 0.6, vec3<f32>(60.0))) * (BR * dn.x + bM * dn.y);
     od += dn * 0.5;
   }
   let mu = dot(d, F.sunTrue.xyz);
@@ -441,7 +444,7 @@ struct SkyBake { @location(0) c: vec4<f32> }
   // Single scattering goes dark soon after the sun sets. The real sky does not: light that has
   // been scattered more than once keeps the whole dome a deep blue through twilight.
   // After dark what is left is airglow and whatever the moon puts into the air.
-  let dusk = smoothstep(0.12, -0.05, F.sunTrue.y);
+  let dusk = smoothstep(0.06, -0.08, F.sunTrue.y);
   let air = A.c + F.amb.rgb * vec3<f32>(0.5, 0.72, 1.1) * dusk * (0.5 + 0.5 * sat(rd.y))
     + vec3<f32>(0.0035, 0.0055, 0.011) * F.sunTrue.w * (0.35 + 0.65 * F.moon.w) * (1.0 + 0.8 * pow(1.0 - sat(rd.y), 4.0));
   var o: SkyBake;

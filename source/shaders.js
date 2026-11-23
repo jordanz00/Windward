@@ -41,7 +41,8 @@ function shaderCode(res, span, wgrid) {
   // the sun is even when it is down, w is night. moon: w is how much of it shows.
   // wind: direction, m/s, gustiness. windOff: how far it has carried the clouds (km) and
   // the gusts (m). wx: rain, wetness, mist, humidity. disc: the sun's own colour.
-  // day: all the light now falling on open ground, as a share of the framed afternoon's.
+  // day: all the light now falling on open ground, as a share of the framed afternoon's;
+  // w is how low the sun stands, from 0 above 24 degrees to 1 near the horizon.
   amb: vec4<f32>,
   sunTrue: vec4<f32>,
   moon: vec4<f32>,
@@ -257,13 +258,24 @@ fn sampleField(xz: vec2<f32>) -> vec2<f32> {
   return mix(ab, cd, f.y);
 }
 
+fn shoulder(x: vec3<f32>) -> vec3<f32> {
+  let a = x * (2.51 * x + 0.03);
+  let b = x * (2.43 * x + 0.59) + 0.14;
+  let s = a / b;
+  return s / (1.0 + max(s - 0.94, vec3<f32>(0.0)) * 0.55);
+}
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
   // Photographic response: soft shoulder, restrained midtone desat — no crushed blacks.
   let x = max(c, vec3<f32>(0.0)) * F.exposure;
-  let a = x * (2.51 * x + 0.03);
-  let b = x * (2.43 * x + 0.59) + 0.14;
-  var soft = a / b;
-  soft = soft / (1.0 + max(soft - 0.94, vec3<f32>(0.0)) * 0.55);
+  var soft = shoulder(x);
+  // Each channel bent by itself bleaches a bright orange to pale yellow: red is held at the
+  // top while green and blue catch up. The light of a low sun is the one bright thing in
+  // the day that is strongly coloured, so for it part of the answer is the colour as it
+  // came, bent as a whole by its brightest channel.
+  if (F.day.w > 0.0) {
+    let m = max(max(x.r, x.g), max(x.b, 1e-5));
+    soft = mix(soft, x * (shoulder(vec3<f32>(m)).x / m), 0.4 * F.day.w);
+  }
   let luma = dot(soft, vec3<f32>(0.2126, 0.7152, 0.0722));
   let mid = smoothstep(0.05, 0.2, luma) * (1.0 - smoothstep(0.55, 0.92, luma));
   let photo = mix(soft, vec3<f32>(luma), mid * 0.16);
@@ -1895,7 +1907,7 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   // the clouds, and the light of the sky. Nothing is added to make a shaft: a shaft is the lit
   // air beside the air in shadow. Droplets throw most of what they scatter forward, so the
   // air is brightest toward the sun, by the same law as the haze in the sky behind it.
-  let dayK = smoothstep(0.0, 0.1, F.sunTrue.y);
+  let dayK = smoothstep(-0.02, 0.04, F.sunTrue.y);
   let ph = 0.07 + 0.18 * hg(mu, 0.75);
   let amb = skyDim(normalize(vec3<f32>(rd.x, abs(rd.y) + 0.6, rd.z))) * 0.75 + F.amb.rgb * 0.08;
   let samples = select(10, 14, F.cloudOct >= 2.5);
