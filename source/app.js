@@ -29,12 +29,16 @@ const NO = {};
 const PERF = { t0: performance.now() };
 function mark(k) { PERF[k] = Math.round(performance.now() - PERF.t0); }
 window.__perf = PERF;
+let autoQ = false;
 function detectQuality() {
   const q = (qstr.get('q') || '').toLowerCase();
   if (PRESETS[q]) return q;
   let saved = null;
   try { saved = localStorage.getItem('ww-q'); } catch (e) {}
   if (PRESETS[saved]) return saved;
+  // From here on the level is a guess, and the frame rate may step it down (main).
+  autoQ = true;
+  try { const a = sessionStorage.getItem('ww-auto'); if (PRESETS[a]) return a; } catch (e) {}
   const mem = navigator.deviceMemory || 8;
   const cores = navigator.hardwareConcurrency || 8;
   const coarse = matchMedia('(pointer: coarse)').matches;
@@ -3091,6 +3095,8 @@ async function main() {
     let swapDepthView = null, readViews = null;
     const airPass = passOf(null, [0, 0, 0, 1]);
     function destroyTex(t) { if (t) t.destroy(); }
+    // The share of the preset's resolution being drawn. It follows the frame rate (frameBody).
+    let dynScale = 1;
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, q.dpr);
       let w = Math.max(2, Math.floor(innerWidth * dpr * q.scale));
@@ -3099,6 +3105,7 @@ async function main() {
         const k = Math.sqrt(q.maxPx / (w * h));
         w = Math.max(2, (w * k) | 0); h = Math.max(2, (h * k) | 0);
       }
+      w = Math.max(2, (w * dynScale) | 0); h = Math.max(2, (h * dynScale) | 0);
       canvas.width = w; canvas.height = h;
       context.configure({ device: device, format: format, alphaMode: 'opaque' });
       destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth); destroyTex(airTex);
@@ -3187,6 +3194,12 @@ async function main() {
     else if (!qstr.has('shot')) { env.hour = ENV_OPEN; env.run = false; }
     if (qstr.has('wx')) { envSet(qstr.get('wx'), true); env.auto = false; }
     let last = performance.now();
+    // Resolution follows the frame rate, so a machine the preset is too much for gets a
+    // softer picture and not a slide show. Captures and the benchmark are left alone, and
+    // ?dyn=0 turns it off.
+    const DYN = !READ && !qstr.has('shot') && qstr.get('dyn') !== '0';
+    let dynHold = 6, dynT = 0, dynN = 0, dynPrev = 0, dynUndo = 1, dynLock = false, dynCeil = 1, dynUpAt = -1e9, dynGood = 0, dynLow = 0, dynTold = false;
+    document.addEventListener('visibilitychange', () => { dynHold = 1; dynT = 0; dynN = 0; });
     const ft = new Float32Array(40);
     let ftI = 0, ftN = 0, frames = 0, ready = false;
     let showHint = 0;
@@ -3324,7 +3337,47 @@ async function main() {
     function frameBody(now) {
       // A capture steps the clock by a fixed amount, so two captures of one build are the same picture.
       const dt = READ ? 1 / 30 : Math.min(0.05, (now - last) / 1000);
+      const rawDt = (now - last) / 1000;
       last = now;
+      if (DYN && rawDt < 4 && !(typeof WW_BENCH !== 'undefined' && WW_BENCH.active())) {
+        if (dynHold > 0) dynHold -= rawDt;
+        else if ((dynT += rawDt, ++dynN, dynT >= 1)) {
+          const fps = dynN / dynT;
+          dynT = 0; dynN = 0;
+          if (dynPrev && fps < dynPrev * 1.05) {
+            // Fewer pixels bought nothing: the frame is waiting on the processor, the
+            // geometry or the display, not on the fill. They are put back and not taken again.
+            dynScale = dynUndo; dynLock = true; dynPrev = 0; dynGood = 0; resize(); dynHold = 1;
+          } else {
+            dynPrev = 0;
+            if (fps < 40 && dynScale > 0.5 && !dynLock) {
+              dynPrev = fps; dynUndo = dynScale;
+              dynScale = Math.max(0.5, dynScale * (fps < 24 ? 0.7 : 0.85));
+              // A step up that had to be taken straight back is not tried again.
+              if (now - dynUpAt < 6000) dynCeil = dynScale;
+              dynGood = 0; resize(); dynHold = 1;
+            } else if (fps > 55 && dynScale < dynCeil) {
+              if (++dynGood >= 8) { dynScale = Math.min(dynCeil, dynScale / 0.85); dynUpAt = now; dynGood = 0; resize(); dynHold = 1; }
+            } else dynGood = 0;
+          }
+          // Slow even so: the level of detail is too much for the machine. On the menu, a
+          // level nobody chose steps down by itself; in play the walker is told how.
+          if (fps < 22 && (dynScale <= 0.5 || dynLock) && q.name !== 'low') {
+            if (++dynLow >= 4) {
+              if (mode === 0 && autoQ) {
+                let kept = false;
+                try { sessionStorage.setItem('ww-auto', q.name === 'high' ? 'med' : 'low'); kept = true; } catch (e) {}
+                if (kept) { location.reload(); return; }
+              }
+              if (mode === 2 && !dynTold) {
+                dynTold = true;
+                hintEl.textContent = 'Slow frame rate · Esc, then choose ' + (q.name === 'high' ? 'Medium or Low' : 'Low');
+                showHint = 10; hintEl.classList.add('show');
+              }
+            }
+          } else dynLow = 0;
+        }
+      } else { dynT = 0; dynN = 0; }
       if (mode === 2) { if (!wp.paused) time += dt * wp.sim; }
       else time += dt;
       frames++;
@@ -3881,7 +3934,7 @@ async function main() {
         } else if (cpuFrameMs > 12 || sum / ftN > 0.02) {
           bound = cpuCullMs > 4 ? '  ·  CPU cull heavy' : '  ·  check GPU timing';
         }
-        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH + gpu + cpu + bound;
+        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH + (dynScale < 1 ? ' (' + Math.round(dynScale * 100) + '%)' : '') + gpu + cpu + bound;
       }
       if (score) score.setAudible(mode > 0 && musicOn && !muted, musicVol);
       if (audio && mode > 0) {

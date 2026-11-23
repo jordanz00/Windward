@@ -32,7 +32,7 @@ Wait for the coast to finish generating, then press **Enter**. You are standing 
 | Weather | Weather, or `R` (Shift goes back) |
 | Mute | `M` |
 | Music and effects | `N` music · `X` sound effects · `[` `]` music level |
-| Frame time | `H` — FPS, CPU ms, GPU ms (when supported), and whether the frame looks CPU- or GPU-bound. Never silently lowers quality |
+| Frame time | `H` — FPS, CPU ms, GPU ms (when supported), and whether the frame looks CPU- or GPU-bound. Shows the share of the preset's resolution being drawn when it is under 100% |
 | Benchmark | `B` — timed fly-through with FPS / 1% low / CPU / cull / GPU / draws / passes; `G` flies the same path. `?bench=1` starts it after Enter |
 | Menu | `Esc` |
 
@@ -145,15 +145,17 @@ Kilobytes are 1024 bytes. `node source/build.mjs` prints these.
 |---|---|
 | Source that goes into the page, with its comments | 549.9 KB |
 | of which shaders (WGSL) | 180.1 KB |
-| `index.html` | 350.3 KB |
-| `index.html`, gzipped | 122.3 KB |
-| `index.html`, brotli | 103.7 KB |
+| `index.html` | 351.9 KB |
+| `index.html`, gzipped | 122.9 KB |
+| `index.html`, brotli | 104.2 KB |
 
 The build strips comments and spare whitespace and nothing else; names are not mangled. The page fetches nothing after it loads: no images, models, audio, fonts or scripts.
 
 ## Performance
 
-Optimizations target wasted work only. Native resolution, plant density, plant reach, cloud march quality, shadow map size, reflections, and water detail stay at the chosen preset. The HUD (`H`) and the `B` benchmark report CPU ms, GPU ms (timestamp queries when available), and whether the frame looks CPU- or GPU-bound. They never lower quality to chase FPS.
+Resolution follows the frame rate. Under about 40 frames a second the page draws fewer pixels, down to half the preset's width and height, and it takes them back when there has been room for a while. If fewer pixels do not help, the frame is waiting on something else and they are put back. If the menu is still under about 22 frames a second and you did not choose the level yourself, the page reloads one level down; in play it tells you to. `?dyn=0` turns all of this off, and captures and the `B` benchmark never use it.
+
+Everything else stays at the chosen preset: plant density, plant reach, cloud march quality, shadow map size, reflections, and water detail. The HUD (`H`) and the `B` benchmark report CPU ms, GPU ms (timestamp queries when available), and whether the frame looks CPU- or GPU-bound.
 
 Pieces taken from Abyssal Garden's approach: cell-sorted plant cull, camera-gated instance rebuilds (wind stays on the GPU), async GPU timestamps, and a repeatable Catmull-Rom fly path (`B` / `G`). Cloud occlusion on land, sea and air is one fetch from the cloud shadow map. Far plant vertices use mean wind instead of gust noise. Capillary, chop and ripple normals run only where their weights are visible.
 
@@ -170,7 +172,7 @@ Three failure modes are guarded against in the renderer itself, not by thinning 
 ## Known limits
 
 - It needs WebGPU. A browser without it gets a message, not the island.
-- High detail is meant for a desktop graphics card. If it is slow, pick Medium or Low on the card.
+- High detail is meant for a desktop graphics card. The page lowers its resolution, and on the menu its level of detail, when the frame rate is poor; if it is still slow, pick Medium or Low on the card.
 - Thin palm leaflets can shimmer as they sway, and a tree changes level of detail in one step as you approach. `?msaa=4` fixes both where it works, but it is known to break on at least one Mac.
 - Automated checks ran on a software rasterizer, which shows what is drawn but cannot time a GPU. Frame rate has been seen on few machines. If it runs badly on yours, an issue with the `H` readout and your GPU is welcome.
 - Phones run it at Low detail; expect a low frame rate on a weak one.

@@ -47,6 +47,11 @@ Compact working notes. Update, do not grow.
 - The day opens at `ENV_OPEN` (17.65, golden hour) and holds there until the hour is first changed; captures with `shot=` and no `tod=` still open at `ENV_H0`, the framed afternoon.
 - Evening air: `airTau` adds a thin ground haze scaled by `F.day.w` (0 by day), which is what the low sun's shafts stand in.
 
+## Frame rate
+
+- Dynamic resolution (`dynScale` in `main`, applied at the end of `resize()`): one-second windows; under 40 fps the scale drops x0.85 (x0.7 under 24) to a floor of 0.5; over 55 fps for 8 windows it rises x1/0.85. A drop that gains under 5% is undone and locks further drops (not fill-bound). A rise taken back within 6 s sets a ceiling. Under 22 fps at the floor (or locked) for 4 windows: on the menu with a guessed preset (`autoQ`) it stores `ww-auto` in sessionStorage and reloads one preset down; in play it shows a hint once. Off for `?shot`, `?read`, `?dyn=0` and while `WW_BENCH.active()`. Thresholds are guesses: no real GPU was available. Reason: a Reddit visitor reported a slide show; desktop defaults to High.
+- Known cost not addressed: grass is ~0.9 M vertices at High with no culling (8x what it was before the grass rework).
+
 ## Camera
 
 - Controls are first person from Enter: `goPlace(0)` on the beach, walking, pointer lock requested by the Enter click. The orbit view (`openOrbit`) is now only `?studio`; a move key there hands over to walk or fly. Arrows alias WASD (`ARROWS`), `blur` clears held keys, Space hops on dry ground (`hop` lifts the eye only; collision stays at standing height), flying W/S follow pitch, dragging looks when the lock is refused. Ctrl still sinks in Fly but is not advertised: Ctrl+W closes the tab and cannot be prevented. A click with the mouse locked ripples the water at the centre of the view. A device with only a coarse pointer still opens in the orbit view, as before. None of this was driven by hand in a browser.
