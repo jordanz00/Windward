@@ -150,10 +150,10 @@ body.studio.playing #caption { display: block; }
   font-family: "Segoe UI", Helvetica, sans-serif;
   font-size: 13px; letter-spacing: 0.03em; color: var(--dim);
 }
+#musicbtn[aria-pressed="false"], #sfxbtn[aria-pressed="false"] { opacity: 0.55; }
 body.cinema #chrome,
 body.cinema #places,
 body.cinema #hint,
-#musicbtn[aria-pressed="false"] { opacity: 0.55; }
 body.cinema #menubtn,
 body.cinema #caption { opacity: 0; pointer-events: none; }
 body.cinema.cinema-peek #chrome { opacity: 1; pointer-events: auto; }

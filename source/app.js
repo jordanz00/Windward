@@ -1588,6 +1588,9 @@ function bindStudio() {
   });
   const musicBtn = $('musicbtn');
   if (musicBtn) musicBtn.addEventListener('click', () => { musicOn = !musicOn; paintMusic(); });
+  const sfxBtn = $('sfxbtn');
+  if (sfxBtn) sfxBtn.addEventListener('click', () => setSfx(!sfxOn));
+  paintSfx();
   $('watchbtn').addEventListener('click', () => {
     const on = !document.body.classList.contains('cinema');
     document.body.classList.toggle('cinema', on);
@@ -1650,6 +1653,10 @@ let audio = null;
 let score = null;
 let muted = false;
 let musicOn = true;
+// Everything the island makes by itself: surf, wind, rain, birds, insects, frogs, bubbles.
+// The music is not one of them and has its own switch.
+let sfxOn = true;
+try { sfxOn = localStorage.getItem('ww-sfx') !== '0'; } catch (e) {}
 let musicVol = 0.72;
 function makeAudio() {
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -1675,7 +1682,9 @@ function makeAudio() {
   master.gain.value = 0.85;
   const under = ac.createBiquadFilter();
   under.type = 'lowpass'; under.frequency.value = 16000; under.Q.value = 0.2;
-  master.connect(under); under.connect(ac.destination);
+  const sfx = ac.createGain();
+  sfx.gain.value = sfxOn ? 1 : 0;
+  master.connect(sfx); sfx.connect(under); under.connect(ac.destination);
   function bed(type, freq, q) {
     const src = ac.createBufferSource();
     src.buffer = buf; src.loop = true;
@@ -1724,7 +1733,7 @@ function makeAudio() {
   // Underwater rush (Abyssal): same noise bed, bandpass that opens with swim speed.
   const rush = bed('bandpass', 280, 0.55);
   const api = {
-    ac: ac, master: master, under: under,
+    ac: ac, master: master, under: under, sfx: sfx,
     surf: surf.gain, hiss: hiss.gain, wind: wind.gain, insects: insects.gain,
     airFar: airFar.gain, airCoast: airCoast.gain, airPalm: airPalm.gain,
     airCanopy: airCanopy.gain, airGrass: airGrass.gain,
@@ -1855,7 +1864,7 @@ function makeAudio() {
         g.gain.setValueAtTime(0.0001, a); g.gain.exponentialRampToValueAtTime(0.012 + Math.random() * 0.02, a + 0.01);
         g.gain.exponentialRampToValueAtTime(0.0001, a + len);
         p.pan.value = Math.random() * 1.6 - 0.8;
-        o.connect(g); g.connect(p); p.connect(under); o.start(a); o.stop(a + len + 0.02);
+        o.connect(g); g.connect(p); p.connect(sfx); o.start(a); o.stop(a + len + 0.02);
       }
     }
     setTimeout(bubble, 180 + Math.random() * 520 / Math.max(api.underAmt, 0.15));
@@ -1946,6 +1955,19 @@ function makeAudio() {
   return api;
 }
 
+function setSfx(on) {
+  sfxOn = on;
+  try { localStorage.setItem('ww-sfx', on ? '1' : '0'); } catch (e) {}
+  // A short ramp, so that the switch is not itself a click.
+  if (audio) audio.sfx.gain.setTargetAtTime(on ? 1 : 0, audio.ac.currentTime, 0.03);
+  paintSfx();
+}
+function paintSfx() {
+  const b = $('sfxbtn');
+  if (!b) return;
+  b.textContent = sfxOn ? 'SFX On' : 'SFX Off';
+  b.setAttribute('aria-pressed', sfxOn ? 'true' : 'false');
+}
 function paintMusic() {
   const b = $('musicbtn');
   if (!b) return;
@@ -2180,6 +2202,7 @@ function bootKeys() {
     if (e.repeat) return;
     if (e.code === 'KeyM') { muted = !muted; if (audio) audio.master.gain.value = muted ? 0 : 0.9; }
     if (e.code === 'KeyN') { musicOn = !musicOn; paintMusic(); }
+    if (e.code === 'KeyX') setSfx(!sfxOn);
     if (e.code === 'KeyH') statsEl.hidden = !statsEl.hidden;
     if (e.code === 'KeyF' && mode === 2 && !orbit) {
       setFlyMode(!fly);

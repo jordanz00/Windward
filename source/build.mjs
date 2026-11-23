@@ -174,7 +174,7 @@ const html = `<!DOCTYPE html>
 <b>Fly</b><span>F or Fly. WASD, Space up, Ctrl down, Shift faster.</span>
 <b>Places</b><span>Orbit a place: drag to look, scroll to zoom. Lagoon, ocean, cove, lake, storm, reef, pool</span>
 <b>Watch</b><span>Hide the interface. C does the same.</span>
-<b>Day</b><span>T next hour, R weather. N music.</span>
+<b>Day</b><span>T next hour, R weather. N music. X sound effects.</span>
 <b>1 – 6</b><span>Beach, cliff, above, bay, swell, under</span>
 <b>B / G</b><span>Timed bench path / scenic fly of the same route. Quality preset stays fixed</span>
 <b>Esc</b><span>Release look, then open this card</span>
@@ -190,6 +190,7 @@ const html = `<!DOCTYPE html>
 <button id="hourbtn" type="button">Hour</button>
 <button id="skybtn" type="button">Weather</button>
 <button id="musicbtn" type="button" aria-pressed="true">Music</button>
+<button id="sfxbtn" type="button" aria-pressed="true">SFX On</button>
 </div>
 <div id="caption"></div>
 <button id="menubtn" type="button">Menu</button>
