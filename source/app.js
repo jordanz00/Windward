@@ -912,6 +912,10 @@ function makeTree(seed, lod) {
       }
     }
   }
+  // How far each part gives to the wind was written as if the model were the tree. It is one
+  // unit tall and stands 6 to 19 m, and what the wind moves is metres: a trunk barely, a
+  // bough a hand's breadth in a breeze. As written, nothing moved that could be seen.
+  for (let i = 0; i < m.sway.length; i++) m.sway[i] *= 14;
   return m;
 }
 
@@ -2672,7 +2676,11 @@ async function main() {
         const deep = treeIds.filter((_, k) => seeds[k] % 6 === 1 || seeds[k] % 6 === 2 || seeds[k] % 6 === 3);
         if (deep.length) pickIds = deep;
       }
-      scatter.add(pickIds[(rnd() * pickIds.length) | 0], x, h - 0.15, z, rnd() * 6.28, tall, tint, sy, 0.7 + rnd() * 0.55, rnd());
+      // Each habit gives to the wind in its own way: the emergent stands stiff, the slender
+      // and the sparse bend, and of one habit the taller tree moves further.
+      const pid = pickIds[(rnd() * pickIds.length) | 0];
+      const flex = [0.75, 0.5, 0.6, 0.8, 0.9, 1][seeds[treeIds.indexOf(pid)] % 6] * (0.5 + 0.5 * tall / 19);
+      scatter.add(pid, x, h - 0.15, z, rnd() * 6.28, tall, tint, sy, flex * (0.85 + rnd() * 0.3), rnd());
       walkHits.push(x, z, 0.03 * tall);
       trees++;
     }

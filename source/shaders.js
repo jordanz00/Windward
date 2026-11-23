@@ -752,21 +752,30 @@ fn windAt(xz: vec2<f32>) -> f32 {
   let g = n2(p * 0.018) * 0.6 + n2(p * 0.07 + vec2<f32>(7.0, 3.0)) * 0.4;
   return F.wind.z * (1.0 + (g * g * 2.6 - 0.7) * F.wind.w);
 }
-// How a whole plant standing at a place gives to the wind, per unit of a vertex's sway:
-// downwind, across the wind, then the wind speed it feels and a number of its own. It has
-// mass: it leans with the pressure and rocks slowly at its own rate. Anything sitting on the
+// Where a part of a plant is in the rocking of its boughs, from how far it stands from the
+// foot of the plant on the plan. It turns about a radian in a metre and a half: neighbours
+// move nearly together, the two sides of a big crown do not, and nothing is pulled apart.
+fn boughAt(off: vec2<f32>) -> f32 { return dot(off, vec2<f32>(0.55, 0.38)); }
+// How a part of a plant standing at a place gives to the wind, per unit of a vertex's sway:
+// downwind, across the wind, then the wind speed it feels and a number of its own. The
+// plant has mass: it leans with the pressure and rocks slowly at its own rate, and its
+// boughs rock faster on top of that, each at its own moment (ph, from boughAt). The lean
+// stops growing in a gale, as a crown that has streamlined does. Anything sitting on the
 // plant asks the same question and so moves with it.
-fn plantLeanFromV(at: vec2<f32>, scale: f32, soft: f32, v: f32) -> vec4<f32> {
+fn plantLeanFromV(at: vec2<f32>, scale: f32, soft: f32, v: f32, ph: f32) -> vec4<f32> {
   let id = fract(at.x * 0.137 + at.y * 0.291);
   let stiff = mix(0.55, 1.35, sat(soft));
-  let push = v * v * 0.011 * stiff;
+  let push = v * v * 0.011 / (1.0 + v * v * 0.012) * stiff;
   // Big plants are slow. soft (i1.w) is species stiffness; scale is mass.
   let rate = (1.35 + 0.9 * id) / (sqrt(max(scale, 0.3)) * mix(0.75, 1.25, sat(soft)));
   let rock = sin(F.time * rate + id * 40.0) * 0.45 + sin(F.time * rate * 0.37 + id * 11.0) * 0.25;
-  return vec4<f32>(push * (0.75 + rock), push * 0.3 * sin(F.time * rate * 0.61 + id * 23.0), v, id);
+  let rb = rate * 2.6 + 0.5;
+  let bough = sin(F.time * rb + ph + id * 17.0) * 0.3 + sin(F.time * rb * 1.71 + ph * 1.9 + id * 29.0) * 0.16;
+  let side = sin(F.time * rb * 0.83 + ph * 1.4 + id * 7.0) * 0.26;
+  return vec4<f32>(push * (0.75 + rock + bough), push * (0.3 * sin(F.time * rate * 0.61 + id * 23.0) + side), v, id);
 }
-fn plantLean(at: vec2<f32>, scale: f32, expo: f32, soft: f32) -> vec4<f32> {
-  return plantLeanFromV(at, scale, soft, windAt(at) * expo);
+fn plantLean(at: vec2<f32>, scale: f32, expo: f32, soft: f32, ph: f32) -> vec4<f32> {
+  return plantLeanFromV(at, scale, soft, windAt(at) * expo, ph);
 }
 fn plantShift(L: vec2<f32>, sway: f32) -> vec3<f32> {
   let d = F.wind.xy * L.x + vec2<f32>(-F.wind.y, F.wind.x) * L.y;
@@ -800,7 +809,7 @@ fn meshPlaceLean(in: MeshIn) -> vec3<f32> {
     w.y -= (abs(gust) + abs(gustZ)) * in.c.w * 0.15;
     return w;
   }
-  let L = plantLean(in.i0.xz, in.i1.x, windExpo(in.i1.z), in.i1.w);
+  let L = plantLean(in.i0.xz, in.i1.x, windExpo(in.i1.z), in.i1.w, boughAt(w.xz - in.i0.xz));
   let k = i32(in.n.w + 0.5);
   var along = L.x;
   var across = L.y;
@@ -835,20 +844,22 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   // Fade high-frequency flutter with distance — cheaper + stops distant crown sparkle.
   let dist = length(in.i0.xyz - F.camPos);
   let nearW = 1.0 - smoothstep(35.0, 120.0, dist);
-  // Far plants: mean wind only (gust noise averages out and costs 2 n2/vertex).
-  let expo = windExpo(in.i1.z);
-  var windV = F.wind.z * expo;
-  if (nearW > 0.08) { windV = windAt(in.i0.xz) * expo; }
-  let L = plantLeanFromV(in.i0.xz, in.i1.x, in.i1.w, windV);
+  // The lean, the rocking and the gusts are the same at any distance, and the same as the
+  // shadow's: a forest seen from the air moves as it does from under it.
+  let off = w.xz - in.i0.xz;
+  let L = plantLean(in.i0.xz, in.i1.x, windExpo(in.i1.z), in.i1.w, boughAt(off));
   let v = L.z;
   let id = L.w;
   let k = i32(in.n.w + 0.5);
   var along = L.x;
   var across = L.y;
   if (k == 2 && nearW > 0.02) {
-    // CRITICAL: phase from leaflet uv + instance only — never vertex xyz (that stretched blades).
+    // The phase runs along the leaf by its uv, and from leaf to leaf by where the leaf is on
+    // the plant, gently enough (a radian in 40 cm) that one blade is not stretched by it.
+    // Without that every leaf of a plant fluttered in step.
     let tip = sat(in.uv.y);
-    let ph = F.time * (1.55 + 0.45 * v) + id * 19.0 + in.i2.w * 11.0 + in.uv.y * 2.4 + abs(in.uv.x) * 0.15;
+    let ph = F.time * (1.55 + 0.45 * v) + id * 19.0 + in.i2.w * 11.0 + in.uv.y * 2.4 + abs(in.uv.x) * 0.15
+      + dot(off, vec2<f32>(2.1, 1.6));
     let fl = (sin(ph) + 0.32 * sin(ph * 2.15 + 1.1))
       * (0.005 + 0.009 * v) * tip * tip * nearW * select(1.0, 0.12, in.uv.y < -0.5);
     along += fl;
