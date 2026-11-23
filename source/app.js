@@ -2721,10 +2721,9 @@ async function main() {
       stackList.push(x, h + sc * 0.3, z, sc * 0.9);
       stacks++;
     }
-    // Skiff and a buoy, so the beach and the bay have a scale.
+    // A skiff, so the beach has a scale.
     scatter.add(scatter.proto([makeSkiff()], 2), beach.x + 3.5, beach.h, beach.z + 1.2, byaw - 0.5 + Math.PI * 0.5, 1.15, null, 1);
     walkHits.push(beach.x + 3.5, beach.z + 1.2, 1.1);
-    scatter.add(scatter.proto([icosphere(1, 0.28, [0.75, 0.08, 0.06])], 0.4), lagoon.x + 16, 0.12, lagoon.z + 4, 0, 1, null, 1.15);
     const reef = plantReef(world, scatter, q);
     // How open each plant stands to the trade wind: full on the windward shore, less in the
     // lee of high ground, and less again for the small things under the forest.
