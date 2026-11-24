@@ -1910,23 +1910,31 @@ function makeAudio() {
     o.connect(g); g.connect(p); p.connect(master); o.start(t); o.stop(t + len + 0.05);
   };
   const R = (a, b) => a + Math.random() * (b - a);
-  // Tropical song only, all synthesised: warblers and high trills. No dove/owl coos, no gull.
-  const singers = [0, 0, 0, 0, 1, 1, 1, 1].map((kind) => {
+  // Tropical song only, all synthesised (no samples): warblers, trills, chirp cascades.
+  // No dove/owl coos, no gull — every phrase stays above ~2.4 kHz so nothing reads as a hoot.
+  const singers = [0, 0, 0, 1, 1, 1, 2, 2].map((kind) => {
     const ph = [];
     if (kind === 0) {
       // A warbler: a run of short slurred notes.
       for (let k = 0, t = 0, n = 4 + ((Math.random() * 4) | 0); k < n; k++) { const f = R(2600, 5600), len = R(0.05, 0.12); ph.push([t, f, f * R(0.75, 1.35), len, 0]); t += len + R(0.03, 0.08); }
-    } else {
+    } else if (kind === 1) {
       // A bright trill: two lead-ins then a held chatter — tropical, not a hoot.
       const f = R(3200, 4800);
       ph.push([0, f * 0.85, f * 0.95, 0.06, 0], [0.1, f * 0.95, f, 0.06, 0], [0.22, f, f * R(0.97, 1.03), R(0.45, 0.95), R(16, 26)]);
+    } else {
+      // A chirp cascade: quick descending ticks, like a small tropical passerine.
+      for (let k = 0, t = 0, f = R(3800, 6200), n = 5 + ((Math.random() * 4) | 0); k < n; k++) {
+        const len = R(0.035, 0.07);
+        ph.push([t, f, f * R(0.82, 0.94), len, 0]);
+        f *= R(0.88, 0.97); t += len + R(0.02, 0.05);
+      }
     }
     return { kind: kind, ph: ph, pan: R(-0.85, 0.85), far: R(0.35, 1) };
   });
   function sing(b, again) {
     if (!api.alive || muted) return;
     const t = ac.currentTime + 0.03, pace = R(0.92, 1.1), tune = R(0.985, 1.015);
-    const peak = [0.028, 0.02][b.kind] * b.far;
+    const peak = [0.028, 0.02, 0.022][b.kind] * b.far;
     for (const n of b.ph) note(t + n[0] * pace, n[1] * tune, n[2] * tune, n[3] * pace, peak, b.pan, 'sine', n[4]);
     if (b.far > 0.7) api.hush = 0.25;
     const end = (b.ph[b.ph.length - 1][0] + 0.6) * pace;

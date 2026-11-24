@@ -510,10 +510,11 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   // shiny. Gloss still opens the surface when asked (wet sand, coral).
   let leafK = sat(leaf);
   // Leaves stay matte: roughness up, F0 down — rain only lifts gloss a little.
-  let rough = clamp(mix(0.76, 0.42, sat(gloss)) * mix(1.0, 1.34, leafK) * mix(1.0, mix(0.58, 0.9, leafK), wet), 0.1, 0.96);
-  let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.028), leafK);
+  // Extra leaf roughness so crowns never read as wet plastic in dry sun.
+  let rough = clamp(mix(0.78, 0.44, sat(gloss)) * mix(1.0, 1.48, leafK) * mix(1.0, mix(0.6, 0.92, leafK), wet), 0.12, 0.97);
+  let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.022), leafK);
   // Thickness-aware wrap: thin tips (high leaf) catch more transmitted fill.
-  let wrap = mix(0.22, 0.48, leafK);
+  let wrap = mix(0.22, 0.52, leafK);
   let sunDiff = sat((nl + wrap) / (1.0 + wrap));
   var light = F.sunCol * sunDiff * sh
     + skyIrr(n) * skyVis
@@ -553,13 +554,14 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   var col = alb * (1.0 - Fs) * light;
   // The sun's highlight, and the sky mirrored in whatever is smooth enough to mirror it.
   // Leaves take a softer highlight than bark or wet sand, so a crown does not read as wax.
-  col += F.sunCol * microSpec(n, V, L, rough, F0) * sh * mix(2.0, 0.72, leafK);
-  col += skyDim(reflect(-V, n)) * Fs * skyVis * sat(n.y * 1.4 + 0.4) * mix(1.0, 0.42, leafK);
+  col += F.sunCol * microSpec(n, V, L, rough, F0) * sh * mix(1.85, 0.48, leafK);
+  col += skyDim(reflect(-V, n)) * Fs * skyVis * sat(n.y * 1.4 + 0.4) * mix(1.0, 0.28, leafK);
   // Transmission scales with leaf thickness proxy: thin tips glow more, thick bases less.
+  // Subtle — green light filters through; never glass-transparent.
   let edge = pow(1.0 - ndv, 2.0);
-  let thin = mix(0.55, 1.15, sat(leaf));
-  let trans = max(-nl, 0.0) * leaf * (0.7 + 0.6 * edge) * thin;
-  col += alb * vec3<f32>(0.88, 1.18, 0.36) * F.sunCol * trans * mix(0.1, 0.95, sh);
+  let thin = mix(0.5, 1.25, clamp(leaf * 0.55, 0.0, 1.0));
+  let trans = max(-nl, 0.0) * leaf * (0.55 + 0.75 * edge) * thin;
+  col += alb * vec3<f32>(0.82, 1.22, 0.32) * F.sunCol * trans * mix(0.12, 1.05, sh);
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let shoreWet = 1.0 - sat(world.y / 0.7);
     col += F.sunCol * microSpec(n, V, L, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.28;
@@ -1174,11 +1176,14 @@ struct MeshOut {
     let side = sign(in.uv.x + 1e-4);
     let vein = sin(in.uv.y * 48.0 + in.uv.x * 6.0) * 0.04 * (1.0 - rib);
     n = normalize(n + side * cross(n, vec3<f32>(0.0, 1.0, 0.0)) * (0.2 + 0.24 * (1.0 - rib) + vein) * select(-0.4, 1.0, upper));
-    // Thickness along the blade: tip (high uv.y) thinner → more transmission, less gloss.
-    let thick = mix(1.15, 0.55, sat(in.uv.y));
-    leaf = select(1.55, 0.48, upper) * (0.78 + 0.32 * in.uv.y) / thick;
-    gloss = select(0.003, 0.008 + 0.014 * rib, upper) * (1.0 + 1.2 * F.wx.y) * thick;
-    if (in.world.y < -0.1) { gloss *= 0.12; leaf *= 0.42; }
+    // Variable thickness: tip thinner than base, plus midrib thicker and a soft blotch map
+    // so neighbouring leaflets don't share one transmission look.
+    let tip = sat(in.uv.y);
+    let blotch = 0.72 + 0.55 * n2(in.rest.xz * 3.1 + in.uv * 2.4);
+    let thick = mix(1.28, 0.42, tip) * mix(1.18, 0.78, rib) * blotch;
+    leaf = select(1.7, 0.42, upper) * (0.7 + 0.45 * tip) / max(thick, 0.35);
+    gloss = select(0.002, 0.005 + 0.01 * rib, upper) * (1.0 + 1.0 * F.wx.y) * thick;
+    if (in.world.y < -0.1) { gloss *= 0.1; leaf *= 0.4; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
     if (kind == 1) {
@@ -1275,12 +1280,26 @@ struct MeshOut {
       }
     }
   }
-  // Crown hulls use a mild leaf response: transmission without the hard specular of a leaflet.
-  var col = shade(in.world, n, alb, select(leaf, 0.55, kind == 3), select(gloss, 0.008 * (1.0 + F.wx.y), kind == 3));
+  // Crown hulls: leaf response varies with the procedural leaf-cell field so light
+  // filters through thin edges of clumps and thick interiors stay denser.
+  var crownLeaf = leaf;
+  var crownGloss = gloss;
+  if (kind == 3) {
+    let anC = abs(n);
+    var pqC = in.rest.xz;
+    if (anC.x > anC.y && anC.x > anC.z) { pqC = in.rest.zy; } else if (anC.z > anC.y) { pqC = in.rest.xy; }
+    let cells = leafCells(pqC * 0.9 + 11.0);
+    // cells.x near 0 at leaf centres (thicker), higher toward gaps (thinner).
+    let thinEdge = smoothstep(0.25, 0.62, cells.x);
+    crownLeaf = mix(0.38, 0.95, thinEdge) * (0.75 + 0.35 * cells.w);
+    crownGloss = 0.004 * (1.0 + 0.9 * F.wx.y) * mix(1.15, 0.55, thinEdge);
+  }
+  var col = shade(in.world, n, alb, select(leaf, crownLeaf, kind == 3), select(gloss, crownGloss, kind == 3));
   if (kind == 3) {
     // Sun that has come down through the crown: the green light on its underside and its
     // shaded flank, which the shadow map alone would leave black.
-    col += alb * vec3<f32>(0.9, 1.2, 0.38) * F.sunCol * (0.28 * sat(0.6 - dot(n, F.sunDir) * 0.7) * sat(0.45 - n.y * 1.3) * cloudShade(in.world.xz, in.world.y));
+    let filter = 0.22 + 0.2 * crownLeaf;
+    col += alb * vec3<f32>(0.86, 1.24, 0.34) * F.sunCol * (filter * sat(0.65 - dot(n, F.sunDir) * 0.7) * sat(0.5 - n.y * 1.25) * cloudShade(in.world.xz, in.world.y));
   }
   // Where a trunk or a rock meets the ground, the ground hides the sky from it.
   let above = in.world.y - sampleField(in.world.xz).x;
