@@ -2047,7 +2047,7 @@ const DROP_SPRAY: u32 = 60000u;
     // coarser cells, fewer draws, weaker force/alpha/radius so mist does not veil the shore.
     let k = ii - DROP_SPRAY;
     // Only every 4th lattice slot draws; others collapse to zero alpha.
-    let active = select(0u, 1u, (k % 4u) == 0u);
+    let slotOn = select(0u, 1u, (k % 4u) == 0u);
     let cellc = floor(F.camPos.xz / 3.6) + vec2<f32>(f32(k % 32u), f32(k / 32u)) - 16.0;
     let hh = hash22(cellc);
     let home = (cellc + hh) * 3.6;
@@ -2055,7 +2055,7 @@ const DROP_SPRAY: u32 = 60000u;
     let deep = max(-fld.x, 0.2);
     var force = 0.0;
     var top = 0.0;
-    if (active > 0u && fld.x < 0.15 && fld.x > -2.2) {
+    if (slotOn > 0u && fld.x < 0.15 && fld.x > -2.2) {
       let S = seaAt(home, fld.y, deep);
       // seaAt only — spray/drops share the air pipeline (no FFT textures).
       let focus = sat((1.0 - S.jac) * 0.7) + sat(length(S.nrm.xz) * 1.0) * 0.22;
