@@ -16,7 +16,8 @@ const WEATHER = {
   overcast: ['Overcast', 0.8, 0, 0, 0.55, 5, 0.4, 0.35, 0.92, 0.3, 0.1],
   drizzle: ['Light rain', 0.86, 0.3, 0.06, 0.8, 4, 0.35, 0.3, 1, 0.35, 0],
   shower: ['Tropical shower', 0.95, 1, 0.05, 1, 9, 0.9, 0.55, 0.85, 1, 0.2],
-  storm: ['Thunderstorm', 1, 1, 0.06, 1, 12.5, 1, 0.6, 1, 1, 0],
+  // Thunderstorm: full deck, heavy rain, strong trades — sea amp boosts from speed + stormK.
+  storm: ['Thunderstorm', 1, 1, 0.04, 1, 15.5, 1, 0.7, 1, 1.15, 0],
   after: ['After the rain', 0.3, 0, 0.12, 0.8, 2.5, 0.25, 0.28, 0.1, 0.85, 0.45],
   mist: ['Mist', 0.08, 0, 1, 0.85, 1.2, 0.1, 0.1, 0.1, 0.1, 0.2]
 };
@@ -95,20 +96,20 @@ function envLight(cover) {
     dayK * (0.48 - 0.02 * low) * (1 + 0.05 * gold) + tw * 0.055 + nk * 0.006,
     dayK * (0.7 - 0.08 * low) * (1 + 0.32 * gold) + tw * 0.11 + nk * 0.012
   ];
-  // Under cloud the sky is a grey lamp. Storm / heavy rain goes darker still — not a bright
-  // overcast that exposure opens into midday sun.
+  // Under cloud the sky is a grey lamp. Storm / heavy rain goes darker still — charcoal
+  // decks by day, not a bright overcast that exposure opens into midday sun.
   const rain = env.v ? env.v[1] : 0;
   const clamp01 = (x) => x < 0 ? 0 : x > 1 ? 1 : x;
   const stormK = clamp01(cover) * (0.55 + 0.45 * clamp01(rain));
-  const g = envLum(amb) * mix(1.1, 0.55, stormK), oc = cover * mix(0.85, 0.98, stormK);
+  const g = envLum(amb) * mix(1.1, 0.38, stormK), oc = cover * mix(0.85, 0.99, stormK);
   env.amb = [
-    (amb[0] + (g * 0.92 - amb[0]) * oc) * mix(1, 0.62, stormK * dayK),
-    (amb[1] + (g - amb[1]) * oc) * mix(1, 0.64, stormK * dayK),
-    (amb[2] + (g * 1.02 - amb[2]) * oc) * mix(1, 0.68, stormK * dayK)
+    (amb[0] + (g * 0.88 - amb[0]) * oc) * mix(1, 0.48, stormK * dayK),
+    (amb[1] + (g - amb[1]) * oc) * mix(1, 0.5, stormK * dayK),
+    (amb[2] + (g * 1.02 - amb[2]) * oc) * mix(1, 0.55, stormK * dayK)
   ];
   // All the light reaching open ground, and the same thing as a colour for whatever has no
   // light of its own in the shaders: foam, and the glow of the water's own body.
-  const kd = env.key[1] * (1 - mix(0.85, 0.97, stormK) * cover);
+  const kd = env.key[1] * (1 - mix(0.85, 0.99, stormK) * cover);
   const D = [0, 1, 2].map((i) => env.keyCol[i] * kd + env.amb[i]);
   const L = envLum(D);
   if (!env.L0) { env.L0 = L; env.D0 = D; }
@@ -129,11 +130,11 @@ function envLight(cover) {
   const Lc = envLum(env.keyCol) * (env.key[1] + 1.5 * glare * up) + glow * (0.5 + 4 * glare) + envLum(env.amb);
   let expo = 0.74 * Math.min(4.8, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.47))
     * Math.pow(Lc / Math.max(L, 1e-4), 0.22);
-  // Do not fully open the iris for a daytime thunderstorm — keep the gloom.
-  expo *= mix(1, 0.52, stormK * dayK);
+  // Hold the iris nearly shut for a daytime thunderstorm — keep the gloom.
+  expo *= mix(1, 0.38, stormK * dayK);
   env.expo = expo;
-  // Dim the solar disc colour that lights the cloud bake, so decks read as dark storm cloud.
-  const discK = mix(1, 0.28, stormK * dayK);
+  // Dim the solar disc colour that lights the cloud bake — daytime storms go near-black.
+  const discK = mix(1, 0.12, stormK * dayK);
   env.disc = env.space.map((c) => c * discK);
   env.sun = sun; env.moon = moon; env.night = night; env.moonUp = moonUp;
 }
@@ -230,7 +231,9 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   const wxBoost = 0.55 + 0.45 * Math.min(seaAmp, 1.5) + 0.15 * v[1] + 0.1 * v[5];
   env.speed += (v[4] * wxBoost * nightCalm - env.speed) * (1 - Math.exp(-dt / 3.5));
   env.gust += (v[5] - env.gust) * (1 - Math.exp(-dt / 4));
-  env.sea = 0.72 + 0.28 * (env.speed / 4.5);
+  // Live sea scale: trades set the base; thunderstorms / heavy rain push swell + breakers up.
+  const stormSea = Math.min(1, env.cover * (0.35 + 0.65 * v[1]));
+  env.sea = (0.72 + 0.28 * (env.speed / 4.5)) * (1 + 0.75 * stormSea);
   // Cloud rides faster air than the ground feels. Gust cells travel slower than the wind in them.
   envSky(dt, placeCover);
   env.gustOff[0] += env.wx0 * env.speed * 0.6 * dt; env.gustOff[1] += env.wz0 * env.speed * 0.6 * dt;

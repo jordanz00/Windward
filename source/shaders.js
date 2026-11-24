@@ -2043,49 +2043,52 @@ const DROP_SPRAY: u32 = 60000u;
     o.form = 1.0;
     o.dist = d;
   } else {
-    // A lattice of places fixed to the sea, a window of it around the eye.
+    // Shore spray puff lattice (form≈2). Kept sparse until a better spray model exists —
+    // coarser cells, fewer draws, weaker force/alpha/radius so mist does not veil the shore.
     let k = ii - DROP_SPRAY;
-    let cellc = floor(F.camPos.xz / 2.4) + vec2<f32>(f32(k % 48u), f32(k / 48u)) - 24.0;
+    // Only every 4th lattice slot draws; others collapse to zero alpha.
+    let active = select(0u, 1u, (k % 4u) == 0u);
+    let cellc = floor(F.camPos.xz / 3.6) + vec2<f32>(f32(k % 32u), f32(k / 32u)) - 16.0;
     let hh = hash22(cellc);
-    let home = (cellc + hh) * 2.4;
+    let home = (cellc + hh) * 3.6;
     let fld = sampleField(home);
     let deep = max(-fld.x, 0.2);
     var force = 0.0;
     var top = 0.0;
-    if (fld.x < 0.25 && fld.x > -3.2) {
+    if (active > 0u && fld.x < 0.15 && fld.x > -2.2) {
       let S = seaAt(home, fld.y, deep);
       // seaAt only — spray/drops share the air pipeline (no FFT textures).
-      let focus = sat((1.0 - S.jac) * 0.9) + sat(length(S.nrm.xz) * 1.2) * 0.35;
-      force = sat(S.brk * 1.85 + focus * 0.45) * smoothstep(3.0, 0.35, deep);
+      let focus = sat((1.0 - S.jac) * 0.7) + sat(length(S.nrm.xz) * 1.0) * 0.22;
+      force = sat(S.brk * 1.15 + focus * 0.28) * smoothstep(2.2, 0.45, deep) * 0.42;
       top = S.disp.y;
       let sh = shoreFetch(home);
       if (sh.inside > 0.5) {
-        force = max(force, sat(sh.foam * 1.45) * smoothstep(0.35, 1.7, length(sh.vel)));
-        // Rock wrap splash: raised bed + foam.
-        force = max(force, smoothstep(-0.4, 0.2, sh.bed) * sat(sh.foam + length(sh.vel) * 0.15) * 0.7);
+        force = max(force, sat(sh.foam * 0.85) * smoothstep(0.55, 1.9, length(sh.vel)) * 0.35);
+        // Rock wrap splash: raised bed + foam — subdued.
+        force = max(force, smoothstep(-0.25, 0.25, sh.bed) * sat(sh.foam + length(sh.vel) * 0.1) * 0.28);
         top = max(top, sh.eta);
       }
     }
-    let life = fract(F.time * (0.48 + 0.35 * hh.x) + hh.y * 9.0);
+    let life = fract(F.time * (0.42 + 0.28 * hh.x) + hh.y * 9.0);
     let local = windAt(home);
-    let blow = clamp(local / 5.0, 0.25, 2.8);
+    let blow = clamp(local / 5.0, 0.2, 2.2);
     let humid = sat(F.wx.w);
     // Low throw: rises then falls while drifting on the shared trades — irregular height per puff.
-    let rise = (0.12 + 0.9 * pow(life, 0.5) * (0.7 + 0.5 * hh.y)) * (0.55 + 0.45 * blow) - 0.85 * life * life;
+    let rise = (0.08 + 0.55 * pow(life, 0.5) * (0.7 + 0.5 * hh.y)) * (0.5 + 0.4 * blow) - 0.7 * life * life;
     let w = vec3<f32>(home.x, max(top, 0.0) + rise, home.y)
-      + vec3<f32>(F.wind.x, 0.0, F.wind.y) * local * 0.55 * life * 1.6
-      + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * 0.04, 0.0);
-    let rad = (0.22 + 0.95 * life) * (0.65 + 0.7 * hh.x) * (0.85 + 0.25 * humid);
-    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.015, force);
+      + vec3<f32>(F.wind.x, 0.0, F.wind.y) * local * 0.4 * life * 1.4
+      + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * 0.025, 0.0);
+    let rad = (0.12 + 0.48 * life) * (0.55 + 0.55 * hh.x) * (0.75 + 0.2 * humid);
+    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.04, force);
     let mu = dot(normalize(w - F.camPos), F.sunDir);
     // Backlit spray glows; otherwise a soft grey veil.
     let back = pow(sat(mu), 4.0);
-    light = F.amb.rgb * 0.55
+    light = F.amb.rgb * 0.45
       + F.sunCol * sunVis(w) * cloudShade(w.xz, 0.0)
-        * (0.15 + 1.9 * back);
+        * (0.12 + 1.4 * back);
     o.dist = length(w - F.camPos);
-    a = force * sin(life * 3.14159) * (0.18 + 0.14 * humid) * blow
-      * smoothstep(1.2, 8.0, o.dist) * smoothstep(55.0, 12.0, o.dist);
+    a = force * sin(life * 3.14159) * (0.07 + 0.06 * humid) * blow
+      * smoothstep(2.0, 10.0, o.dist) * smoothstep(42.0, 14.0, o.dist);
     o.form = 2.0;
   }
   o.col = vec4<f32>(airMix(light, normalize(pos - F.camPos), o.dist), a * (1.0 - F.under));
@@ -2101,9 +2104,9 @@ const DROP_SPRAY: u32 = 60000u;
   } else if (in.form < 1.5) {
     a *= smoothstep(1.0, 0.25, r);
   } else {
-    // A puff is torn and uneven, and it does not cut a hard line where it meets the sea or a rock.
+    // A puff is torn and uneven; softer falloff so sparse spray does not read as a fog wall.
     let n = n2(in.uv * 1.7 + vec2<f32>(in.seed * 31.0, in.seed * 17.0)) * 0.6 + n2(in.uv * 4.3 + vec2<f32>(in.seed * 7.0, 3.0)) * 0.4;
-    a *= smoothstep(1.0, 0.15, r) * smoothstep(0.2, 0.75, n);
+    a *= smoothstep(1.0, 0.28, r) * smoothstep(0.28, 0.82, n) * 0.72;
     let dep = textureLoad(sceneDepth, vec2<i32>(in.clip.xy), 0);
     if (dep < 0.99999) { a *= sat((length(worldAt(in.clip.xy, dep) - F.camPos) - in.dist) / 0.8 + 0.3); }
   }
@@ -2158,12 +2161,12 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   // The air of a low sun: cooling, it holds a thin haze near the ground and the sea, and that
   // is what the light stands in between the trunks and under the gaps in the cloud.
   d += F.day.w * 0.0005 * airLayer(40.0, ya, yb, seg);
-  // Low ocean mist over warm humid water — not a fog wall.
+  // Low ocean mist — kept very thin until a realistic spray model replaces the puff cards.
   let sea = smoothstep(-1.8, -0.05, fld.x) * smoothstep(0.9, -0.2, fld.x);
-  d += sea * F.wx.w * 0.0011 * (0.45 + 0.55 * n) * airLayer(4.5, ya, yb, seg) * (1.0 - sat(F.sunTrue.w));
-  // Spray optical depth over energetic surf.
-  let surf = smoothstep(-2.6, -0.4, fld.x) * smoothstep(1.4, 0.1, fld.x) * fld.y;
-  d += surf * surf * 0.00055 * F.wind.z * (0.4 + n) * airLayer(3.8, ya, yb, seg);
+  d += sea * F.wx.w * 0.00028 * (0.45 + 0.55 * n) * airLayer(3.2, ya, yb, seg) * (1.0 - sat(F.sunTrue.w));
+  // Spray optical depth over energetic surf — sparse, low, only right at the break.
+  let surf = smoothstep(-1.6, -0.35, fld.x) * smoothstep(0.85, 0.05, fld.x) * fld.y;
+  d += surf * surf * 0.00012 * F.wind.z * (0.35 + n) * airLayer(2.2, ya, yb, seg);
   // Rain hangs in grey curtains under the heavier cells.
   d += F.wx.x * 0.0022 * smoothstep(0.3, 0.75, n2(p.xz * 0.0016 + F.windOff.xy * 1.6)) * step(p.y, 900.0) * seg;
   return d;

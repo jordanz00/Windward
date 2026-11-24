@@ -455,8 +455,9 @@ struct SkyBake { @location(0) c: vec4<f32> }
   // The sun lights the clouds until it is well under the horizon, the high ones last. Then the moon does.
   let byMoon = sy < -0.16;
   let ld = select(F.sunTrue.xyz, F.moon.xyz, byMoon);
-  // F.mood.y = cloud cover, F.wx.x = rain. Daytime storms keep dark decks, not white cumulus.
-  let stormDim = mix(1.0, 0.32, sat(F.mood.y) * (0.5 + 0.5 * sat(F.wx.x))) * mix(1.0, 0.7, sat(F.wx.x));
+  // F.mood.y = cloud cover, F.wx.x = rain. Daytime thunderstorms are charcoal decks, not grey cotton.
+  let stormK = sat(F.mood.y) * (0.45 + 0.55 * sat(F.wx.x));
+  let stormDim = mix(1.0, 0.14, stormK) * mix(1.0, 0.55, sat(F.wx.x));
   let lightC = select(F.disc.rgb * stormDim, vec3<f32>(0.02, 0.025, 0.035) * F.moon.w, byMoon);
   let mu = dot(rd, ld);
   // Cloud scatters mostly forward, which is the bright rim toward the sun, and a little back.
@@ -515,12 +516,13 @@ struct SkyBake { @location(0) c: vec4<f32> }
       sl *= 2.0;
     }
     tau *= C_SIG;
-    // Direct light dies quickly inside a cloud. Light scattered a few times goes deeper, and
-    // light scattered many times goes right through, which is why a deck is grey underneath, not black.
-    let E = p0 * exp(-tau) + 0.45 * p1 * exp(-0.3 * tau) + 0.36 / (1.0 + 0.2 * tau);
+    // Direct light dies quickly inside a cloud. Storm decks keep a deep multi-scatter floor
+    // so the underside reads as menacing charcoal, not pale overcast.
+    let E = p0 * exp(-tau) + 0.45 * p1 * exp(-0.3 * tau) + mix(0.36, 0.12, stormK) / (1.0 + mix(0.2, 0.55, stormK) * tau);
     let hr = sat((p.y - base) / 2.5);
-    let L = lightC * select(sunT(p.y, sy), vec3<f32>(1.0), byMoon) * E * 0.66 + F.amb.rgb * (0.3 + 0.7 * hr);
-    let al = 1.0 - exp(-d * C_SIG * ds);
+    let ambC = F.amb.rgb * mix(1.0, 0.42, stormK);
+    let L = lightC * select(sunT(p.y, sy), vec3<f32>(1.0), byMoon) * E * mix(0.66, 0.48, stormK) + ambC * (0.22 + 0.55 * hr);
+    let al = 1.0 - exp(-d * C_SIG * mix(1.0, 1.35, stormK) * ds);
     // The air between here and the cloud: it dims the cloud and adds its own light in front.
     let keep = pathKeep(t, h0, p.y);
     C += T * al * (L * keep + air * sat3((1.0 - keep) * span));
