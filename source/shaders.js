@@ -378,25 +378,19 @@ fn caustic(p: vec3<f32>, foot: f32) -> vec3<f32> {
     let L = sunUnder();
     let surf = p.xz - L.xz * (depth / max(L.y, 0.2));
     let fld = sampleField(surf);
-    let ocn = shapeField(surf);
-    // High/Med: full shared Gerstner+FFT focus. Low: FFT slopes only (same textures, cheaper).
-    var focus = sat(length(ocn.yz) * 2.2) * 0.85;
-    var Sdisp = vec3<f32>(0.0);
-    var Snrm = vec3<f32>(0.0, 1.0, 0.0);
-    if (F.cloudOct >= 1.5) {
-      let S = seaAt(surf, fld.y, max(-fld.x, 0.25));
-      let slopeLen = length(vec2<f32>(S.nrm.x + ocn.y * 0.55, S.nrm.z + ocn.z * 0.55));
-      focus = sat((1.0 - S.jac) * 1.35) * (0.45 + 0.9 * sat(slopeLen * 2.4)) + S.brk * 0.55;
-      Sdisp = S.disp; Snrm = S.nrm;
-    }
+    // Shared Gerstner seaAt only — no FFT shapeTex. Caustics run from terrain/mesh
+    // (group 0) as well as water; FFT tiles stay on the water bind group.
+    let S = seaAt(surf, fld.y, max(-fld.x, 0.25));
+    let slopeLen = length(S.nrm.xz);
+    let focus = sat((1.0 - S.jac) * 1.35) * (0.45 + 0.9 * sat(slopeLen * 2.4)) + S.brk * 0.55;
     let t = F.time * (0.32 + 0.28 * max(F.mood.w, 0.35));
     let dir = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
     // Domain warped by the live surface normal so cells dance with the waves.
-    let warp = vec2<f32>(Snrm.x + ocn.y * 0.4, Snrm.z + ocn.z * 0.4) * (1.8 + depth * 0.15);
+    let warp = S.nrm.xz * (1.8 + depth * 0.15);
     let q = vec2<f32>(dot(surf + warp, dir), dot(surf + warp, vec2<f32>(-dir.y, dir.x)));
     let uv = q / (5.2 * cell);
     let uv2 = vec2<f32>(uv.x * 0.78 + uv.y * 0.62, uv.y * 0.78 - uv.x * 0.62) * 0.7 + vec2<f32>(0.37, 0.11);
-    let uv3 = uv * 1.65 + vec2<f32>(Sdisp.x, Sdisp.z) * 0.08;
+    let uv3 = uv * 1.65 + S.disp.xz * 0.08;
     let split = vec2<f32>(0.007, 0.0045) * (1.0 + focus);
     let a = vec3<f32>(causWave(uv + split, t + 23.0), causWave(uv, t + 23.0), causWave(uv - split, t + 23.0));
     let b = causWave(uv2, t * 0.85 + 5.0);
@@ -1222,7 +1216,12 @@ struct MeshOut {
       let mott = n3(p * 8.0);
       let polyp = n3(p * 150.0);
       // Colony colour drift: dusty rose / olive / mauve — muted under water, not neon.
-      let drift = n3(p * 0.55 + vec3<f32>(2.1, 0.7, 5.3));
+      // n3 is scalar noise; three offsets give an independent RGB-like drift vector.
+      let drift = vec3<f32>(
+        n3(p * 0.55 + vec3<f32>(2.1, 0.7, 5.3)),
+        n3(p * 0.55 + vec3<f32>(5.3, 2.1, 0.7)),
+        n3(p * 0.55 + vec3<f32>(0.7, 5.3, 2.1))
+      );
       let rose = vec3<f32>(0.62, 0.36, 0.34);
       let olive = vec3<f32>(0.42, 0.44, 0.28);
       let mauve = vec3<f32>(0.46, 0.34, 0.46);
@@ -1584,12 +1583,12 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     // Crest pitches and crashes as the bottom shoals — not a static swell.
     if (i <= 1 && collapse > 0.05) {
       let crestS = sat(s * (1.2 + 0.35 * f32(1 - i)) - 0.05);
-      let pitch = collapse * crestS * fade * (i == 0 ? 1.0 : 0.55);
+      let pitch = collapse * crestS * fade * select(0.55, 1.0, i == 0);
       d.x += dirN.x * As * pitch * 1.85;
       d.z += dirN.y * As * pitch * 1.85;
       d.y -= As * pitch * 0.38;
       // Plunge: face steepens, then the lip folds.
-      let fold = collapse * sat(s * 1.7 - 0.35) * fade * (i == 0 ? 1.0 : 0.4);
+      let fold = collapse * sat(s * 1.7 - 0.35) * fade * select(0.4, 1.0, i == 0);
       d.y -= As * fold * 0.22;
       d.x += dirN.x * As * fold * 0.55;
       d.z += dirN.y * As * fold * 0.55;
@@ -1597,7 +1596,7 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
       n.z -= dirN.y * (pitch * 1.9 + fold * 1.2);
       n.y -= pitch * 0.55 + fold * 0.35;
       let churn = 0.4 + 0.6 * n2(xz * 0.065 + vec2<f32>(F.time * 0.06 + f32(i), 1.7));
-      brk += collapse * crestS * churn * (i == 0 ? 1.15 : 0.55);
+      brk += collapse * crestS * churn * select(0.55, 1.15, i == 0);
       brk += fold * 0.85 * churn;
     }
     jxx += Q * dirN.x * dirN.x * wa * s;
@@ -2023,8 +2022,8 @@ const DROP_SPRAY: u32 = 60000u;
     var top = 0.0;
     if (fld.x < 0.25 && fld.x > -3.2) {
       let S = seaAt(home, fld.y, deep);
-      let ocn = shapeField(home);
-      let focus = sat((1.0 - S.jac) * 0.9) + sat(length(ocn.yz) * 1.2) * 0.35;
+      // seaAt only — spray/drops share the air pipeline (no FFT textures).
+      let focus = sat((1.0 - S.jac) * 0.9) + sat(length(S.nrm.xz) * 1.2) * 0.35;
       force = sat(S.brk * 1.85 + focus * 0.45) * smoothstep(3.0, 0.35, deep);
       top = S.disp.y;
       let sh = shoreFetch(home);
@@ -2171,12 +2170,9 @@ fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
       let deep = max(-p.y, 0.0);
       let sxz = p.xz + sr.xz * (deep / max(sr.y, 0.2));
       let fldS = sampleField(sxz);
-      let ocnS = shapeField(sxz);
-      var focus = sat(length(ocnS.yz) * 2.0);
-      if (F.cloudOct >= 1.5) {
-        let SS = seaAt(sxz, fldS.y, max(-fldS.x, 0.25));
-        focus = sat((1.0 - SS.jac) * 1.2) + sat(length(vec2<f32>(SS.nrm.x + ocnS.y, SS.nrm.z + ocnS.z)) * 1.8) * 0.45 + SS.brk * 0.4;
-      }
+      // seaAt only (group 0) — fsAir has no FFT bind group.
+      let SS = seaAt(sxz, fldS.y, max(-fldS.x, 0.25));
+      let focus = sat((1.0 - SS.jac) * 1.2) + sat(length(SS.nrm.xz) * 1.8) * 0.45 + SS.brk * 0.4;
       // Fine particulate flicker rides the same focus — suspended scatter, not flat haze.
       let mote = 0.55 + 0.45 * n2(p.xz * 3.2 + vec2<f32>(F.time * 0.15, deep));
       let ray = smoothstep(0.25, 0.85, focus) * mote;
