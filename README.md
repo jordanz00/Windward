@@ -6,7 +6,7 @@ In the same spirit as [Abyssal Garden](https://github.com/Noniv/abyssal-garden):
 
 **[Try it in your browser](https://jordanz00.github.io/Windward/)** · Best in Chrome. Also runs in Edge, and on a phone at Low detail. Free, MIT license.
 
-![The lagoon seen from the shore under passing clouds](media/lagoon.jpg)
+![Lagoon shallows under passing clouds](media/lagoon.jpg)
 
 ## Try it
 
@@ -43,25 +43,23 @@ Step into the water to swim; hold `Q` to dive. `6` puts you beside a coral head.
 
 | | |
 |---|---|
-| ![Palm Beach at golden hour](media/beach.jpg) | ![Coral Garden, under the surface](media/coral.jpg) |
+| ![Palm Beach at golden hour](media/beach.jpg) | ![Coral garden under the surface](media/coral.jpg) |
 
-## Screenshots
+## Gallery
 
-Real frames from the running app (no AI art). Hero and place stills below are tip `998a15d`. Early visitor stills are kept under `media/before/` for comparison.
+Real frames from the running app — UI hidden, no AI art. Tip `998a15d`.
 
-![Nine places and skies from tip](media/nine-views.jpg)
+![Nine places and skies](media/nine-views.jpg)
 
-| Storm | Night | Sunset |
+| Thunderstorm | Night | Sunset |
 |---|---|---|
-| ![Thunderstorm on the beach](media/storm.jpg) | ![Moonlit island](media/night.jpg) | ![Offshore at sunset](media/sunset.jpg) |
+| ![Beach thunderstorm](media/storm.jpg) | ![Moonlit lagoon](media/night.jpg) | ![Offshore at sunset](media/sunset.jpg) |
 
-| Early still | Tip `998a15d` |
+| Cliff overlook | Forest light |
 |---|---|
-| ![Early Palm Beach](media/before/beach.jpg) | ![Tip Palm Beach](media/beach.jpg) |
-| ![Early lagoon](media/before/lagoon.jpg) | ![Tip lagoon](media/lagoon.jpg) |
-| ![Early coral garden](media/before/coral.jpg) | ![Tip coral garden](media/coral.jpg) |
+| ![Cliff overlook under clouds](media/cliff.jpg) | ![Shafts under the canopy](media/forest.jpg) |
 
-Individual tip views also live in `media/views/` (palm beach, cliff, aerial, lagoon, sunset, coral, forest shafts, thunderstorm, moonlit).
+Individual views also live in `media/views/`. Early visitor stills remain in `media/before/` for comparison.
 
 ## What is in the page
 
