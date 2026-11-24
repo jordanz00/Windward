@@ -1312,8 +1312,8 @@ struct MeshOut {
   if (kind == 3) {
     // Sun that has come down through the crown: the green light on its underside and its
     // shaded flank, which the shadow map alone would leave black.
-    let filter = 0.22 + 0.2 * crownLeaf;
-    col += alb * vec3<f32>(0.86, 1.24, 0.34) * F.sunCol * (filter * sat(0.65 - dot(n, F.sunDir) * 0.7) * sat(0.5 - n.y * 1.25) * cloudShade(in.world.xz, in.world.y));
+    let canopyTx = 0.22 + 0.2 * crownLeaf;
+    col += alb * vec3<f32>(0.86, 1.24, 0.34) * F.sunCol * (canopyTx * sat(0.65 - dot(n, F.sunDir) * 0.7) * sat(0.5 - n.y * 1.25) * cloudShade(in.world.xz, in.world.y));
   }
   // Where a trunk or a rock meets the ground, the ground hides the sky from it.
   let above = in.world.y - sampleField(in.world.xz).x;

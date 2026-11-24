@@ -2676,10 +2676,10 @@ async function main() {
     pipe('mesh', geoPL, 'vsMesh', 'fsMesh', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowTerrain', skyPL, 'vsShadowTerrain', null, { buffers: posBuf, cull: 'back', depth: shadowZ });
     pipe('shadowMesh', skyPL, 'vsShadowMesh', null, { buffers: meshBuffers, depth: shadowZ });
-    // Grass/flower casters must be ready with the first shadow bake — late compile left meadows
-    // unshadowed until a sun-move rebuild, and island maps never drew grass at all.
-    const shadowZGrass = { ...shadowZ, depthBias: 0, depthBiasSlopeScale: 0.55, depthBiasClamp: 0.001 };
-    pipe('shadowGrass', skyPL, 'vsShadowGrass', null, { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: shadowZGrass });
+    // HOTFIX: grass shadow pipeline needs geoLayout (htex @binding(1)); skyPL only has
+    // the uniform. Disabled to restore load — re-enable with geoPL + geo bind groups.
+    // const shadowZGrass = { ...shadowZ, depthBias: 0, depthBiasSlopeScale: 0.55, depthBiasClamp: 0.001 };
+    // pipe('shadowGrass', skyPL, 'vsShadowGrass', null, { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: shadowZGrass });
     // The finished scene goes to the screen through the water's own two groups.
     pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: noZ });
     const oceanLayout = layoutOf(device, GPUShaderStage.COMPUTE, 'rwuo');
@@ -4014,13 +4014,7 @@ async function main() {
         spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
         spass.drawIndexed(terrain.idx.length);
         drawMeshes(spass, pipes.shadowMesh, bgUB, meshVB, meshIB, instFarB, farDraws);
-        // Meadows + flower shrubs: island map is coarse, but dense grass still darkens sand.
-        if (pipes.shadowGrass && grassCount && !NO.grass) {
-          spass.setPipeline(pipes.shadowGrass); spass.setBindGroup(0, bgUB);
-          spass.setVertexBuffer(0, grassVB); spass.setVertexBuffer(1, grassInstB);
-          spass.setIndexBuffer(grassIB, 'uint16');
-          spass.drawIndexed(g.idx.length, grassCount);
-        }
+        // HOTFIX: grass island shadows off until shadowGrass uses geoPL (see pipe site).
         spass.end();
       }
       // Near cascade: redraw when the eye or sun moved enough; adopt candidate VP then bake.
@@ -4050,13 +4044,7 @@ async function main() {
           np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
           np.drawIndexed(nearRows[1], 1, nearRows[0]);
           if (!NO.near) drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
-          // Nearby grass and flower-shrub meshes (in nearDraws) both darken the ground.
-          if (pipes.shadowGrass && grassCount && !NO.grass) {
-            np.setPipeline(pipes.shadowGrass); np.setBindGroup(0, bgUBN);
-            np.setVertexBuffer(0, grassVB); np.setVertexBuffer(1, grassInstB);
-            np.setIndexBuffer(grassIB, 'uint16');
-            np.drawIndexed(g.idx.length, grassCount);
-          }
+          // HOTFIX: grass near-cascade shadows off until shadowGrass uses geoPL.
           if (under) drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
           else drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
           np.end();
