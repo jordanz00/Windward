@@ -1557,15 +1557,14 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     let shallowSpd = mix(1.0, 0.55 + 0.45 * sat(D / (len * 0.18)), collapse);
     var omega = sqrt(G * k) * spdK * shallowSpd;
     if (i == 1) { omega = wP * (k / kP) * spdK * shallowSpd; }
-    // Bend ray toward the shore-normal (approximated by depth gradient via collapse direction).
+    // Bend toward shallower water (uphill on the height field = inland) so trains run onshore.
     var dirN = dir;
     if (i < 3 && collapse > 0.08) {
       let gN = normalize(vec2<f32>(
         sampleField(xz + vec2<f32>(1.2, 0.0)).x - sampleField(xz - vec2<f32>(1.2, 0.0)).x,
         sampleField(xz + vec2<f32>(0.0, 1.2)).x - sampleField(xz - vec2<f32>(0.0, 1.2)).x
       ) + vec2<f32>(1e-4));
-      // Refract toward shallower water (uphill of bed = -gN in heightfield).
-      dirN = normalize(mix(dir, -gN, collapse * 0.35));
+      dirN = normalize(mix(dir, gN, collapse * 0.4));
     }
     // In open water a crest is not a ruled line. Its phase drifts over a few hundred
     // metres, so the lines bend and break. Near the beach they straighten, as they do.

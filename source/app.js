@@ -2921,8 +2921,15 @@ async function main() {
     let shoreRocks = 0;
     // shoreObstacles hoisted above; refill for this plant.
     shoreObstacles.length = 0;
-    const seaYaw = downhillYaw(world, beach.x, beach.z);
+    const seaYaw = shore
+      ? Math.atan2(shore.fx, -shore.fz)
+      : downhillYaw(world, beach.x, beach.z);
     const seaX = Math.sin(seaYaw), seaZ = -Math.cos(seaYaw);
+    // Dominant swell propagates onshore (toward the island), opposite the seaward beach normal.
+    // Phase is k·dir·x − ωt, so dir must point inland for crests to run onto the sand.
+    const onshoreAng = Math.atan2(-seaZ, -seaX);
+    wp.dir = onshoreAng;
+    WATER.dir = onshoreAng;
     const alongX = -seaZ, alongZ = seaX;
     const originX = shore ? shore.x : beach.x, originZ = shore ? shore.z : beach.z;
     for (let i = 0; i < shoreBudget * 90 && shoreRocks < shoreBudget; i++) {
@@ -3445,9 +3452,9 @@ async function main() {
       arr[72] = fwd[0]; arr[73] = fwd[1]; arr[74] = fwd[2]; arr[75] = qstr.has('noshadow') ? 0 : q.shadow;
       arr[79] = q.clouds;
       arr[84] = viewW; arr[85] = viewH; arr[86] = q.refl && !qstr.has('norefl') ? 1 : 0; arr[87] = 0;
-      // Gerstner + capillary heading: place swell blended toward the shared trades.
+      // Gerstner heading stays mostly onshore; trades only veer it a little (keeps multi-dir bands).
       arr[128] = wp.amp * env.sea; arr[129] = wp.spd; arr[130] = wp.frq;
-      arr[131] = lerpAng(wp.dir, env.ang, 0.35);
+      arr[131] = lerpAng(wp.dir, env.ang, 0.18);
       arr[132] = wp.rough; arr[133] = wp.refl; arr[134] = wp.refr; arr[135] = wp.alpha;
       arr[136] = wp.sun; arr[137] = wp.sky; arr[138] = wp.layers; arr[139] = wp.paused;
       arr[140] = wp.deep[0]; arr[141] = wp.deep[1]; arr[142] = wp.deep[2]; arr[143] = wp.depthK;
