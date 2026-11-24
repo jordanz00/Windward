@@ -100,7 +100,7 @@ body.playing #menubtn { opacity: 1; pointer-events: auto; }
   h1 { font-size: 64px; }
   .keys { grid-template-columns: auto 1fr; }
 }
-#chrome, #places, #caption { display: none; }
+#chrome, #places, #hourmenu, #weathermenu, #caption { display: none; }
 body.studio.playing #chrome {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start;
   position: fixed; z-index: 5;
@@ -167,6 +167,31 @@ body.places-open #places {
   overflow-x: auto; scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
 }
+body.hour-open #hourmenu,
+body.weather-open #weathermenu {
+  display: flex; flex-wrap: wrap; position: fixed; z-index: 5;
+  left: max(10px, env(safe-area-inset-left, 0px));
+  right: max(10px, env(safe-area-inset-right, 0px));
+  bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+  gap: 6px; padding: 8px 0 6px;
+  max-height: min(42vh, 280px); overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+#hourmenu button,
+#weathermenu button {
+  font-family: "Segoe UI", Helvetica, sans-serif;
+  background: rgba(8, 16, 20, 0.5);
+  border: 1px solid rgba(243, 239, 228, 0.28);
+  border-radius: 999px; padding: 8px 14px; font-size: 13px;
+  color: var(--ink); cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+#hourmenu button.on,
+#weathermenu button.on {
+  background: rgba(243, 239, 228, 0.88); color: #142026; border-color: transparent;
+}
+body.hour-open #hint,
+body.weather-open #hint { opacity: 0; }
 #places .card {
   flex: 0 0 168px; scroll-snap-align: start;
   display: flex; flex-direction: column;

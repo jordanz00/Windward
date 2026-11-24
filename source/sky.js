@@ -455,7 +455,9 @@ struct SkyBake { @location(0) c: vec4<f32> }
   // The sun lights the clouds until it is well under the horizon, the high ones last. Then the moon does.
   let byMoon = sy < -0.16;
   let ld = select(F.sunTrue.xyz, F.moon.xyz, byMoon);
-  let lightC = select(F.disc.rgb, vec3<f32>(0.02, 0.025, 0.035) * F.moon.w, byMoon);
+  // F.mood.y = cloud cover, F.wx.x = rain. Daytime storms keep dark decks, not white cumulus.
+  let stormDim = mix(1.0, 0.32, sat(F.mood.y) * (0.5 + 0.5 * sat(F.wx.x))) * mix(1.0, 0.7, sat(F.wx.x));
+  let lightC = select(F.disc.rgb * stormDim, vec3<f32>(0.02, 0.025, 0.035) * F.moon.w, byMoon);
   let mu = dot(rd, ld);
   // Cloud scatters mostly forward, which is the bright rim toward the sun, and a little back.
   let p0 = mix(hg(mu, -0.2), hg(mu, 0.72), 0.55);

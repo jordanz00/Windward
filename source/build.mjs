@@ -188,6 +188,8 @@ const html = `<!DOCTYPE html>
 <p class="fine">Best in Chrome. On a phone, drag to look while walking; tap the water. One HTML file, MIT licensed.</p>
 </div>
 <nav id="places" aria-label="Places"></nav>
+<nav id="hourmenu" aria-label="Time of day"></nav>
+<nav id="weathermenu" aria-label="Weather"></nav>
 <div id="chrome">
 <button id="placebtn" type="button">Places</button>
 <button id="walkbtn" type="button" aria-pressed="true">Walk</button>

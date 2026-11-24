@@ -1580,14 +1580,16 @@ function bindStudio() {
     line.textContent = p.line;
     b.append(sw, name, line);
     b.addEventListener('click', () => {
-      document.body.classList.remove('places-open');
-      goPlace(id, mode === 2);
+      document.body.classList.remove('places-open', 'hour-open', 'weather-open');
+      goPlace(id, false);
     });
     nav.append(b);
   });
-  $('placebtn').addEventListener('click', () => document.body.classList.toggle('places-open'));
-  $('hourbtn').addEventListener('click', () => stepHour(false));
-  $('skybtn').addEventListener('click', () => stepWeather(false));
+  $('placebtn').addEventListener('click', () => {
+    document.body.classList.remove('hour-open', 'weather-open');
+    document.body.classList.toggle('places-open');
+  });
+  bindPickMenus();
   $('walkbtn').addEventListener('click', () => {
     trip = null;
     orbit = false;
@@ -2055,15 +2057,101 @@ const walkOut = [0, 0];
 // The height the eye came to stand at on the last step, before any easing toward it.
 let walkEye = 1e9;
 
-// T moves the clock to the next part of the day. R changes the weather, which then stays
-// until R is pressed again past the end of the list, where the island takes it back.
-function stepHour(back) { envNextStop(back); if (!qstr.has('shot')) env.run = true; showCaption(envLabel()); }
+// T / Hour and R / Weather open pickers. Shift+T / Shift+R still step for capture workflows.
+function stepHour(back) { envNextStop(back); if (!qstr.has('shot')) env.run = true; showCaption(envLabel()); paintPickMenus(); }
 function stepWeather(back) {
   const names = Object.keys(WEATHER), i = names.indexOf(env.wx) + (back ? -1 : 1);
   env.auto = i < 0 || i >= names.length;
   envSet(names[(i + names.length) % names.length], false);
   env.hold = env.auto ? 240 : 1e9;
   showCaption(envLabel());
+  paintPickMenus();
+}
+function pickHour(stopH) {
+  env.goal = stopH;
+  if (!qstr.has('shot')) env.run = true;
+  document.body.classList.remove('hour-open', 'weather-open', 'places-open');
+  showCaption(envLabel());
+  paintPickMenus();
+}
+function pickWeather(wx) {
+  if (wx === 'auto') {
+    env.auto = true;
+    env.hold = 240;
+  } else {
+    env.auto = false;
+    envSet(wx, true);
+    env.hold = 1e9;
+  }
+  document.body.classList.remove('hour-open', 'weather-open', 'places-open');
+  showCaption(envLabel());
+  paintPickMenus();
+}
+function paintPickMenus() {
+  const hourMenu = $('hourmenu');
+  if (hourMenu) {
+    const from = env.goal != null ? env.goal : env.hour;
+    hourMenu.querySelectorAll('button[data-h]').forEach((b) => {
+      const h = +b.dataset.h;
+      b.classList.toggle('on', Math.abs(h - from) < 0.2);
+    });
+  }
+  const wxMenu = $('weathermenu');
+  if (wxMenu) {
+    wxMenu.querySelectorAll('button[data-wx]').forEach((b) => {
+      const id = b.dataset.wx;
+      b.classList.toggle('on', id === 'auto' ? env.auto : (!env.auto && id === env.wx));
+    });
+  }
+}
+function bindPickMenus() {
+  const hourMenu = $('hourmenu'), wxMenu = $('weathermenu');
+  if (hourMenu && !hourMenu.dataset.ready) {
+    hourMenu.dataset.ready = '1';
+    DAY_STOPS.forEach(([h, name]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.h = String(h);
+      b.textContent = name;
+      b.addEventListener('click', () => pickHour(h));
+      hourMenu.append(b);
+    });
+  }
+  if (wxMenu && !wxMenu.dataset.ready) {
+    wxMenu.dataset.ready = '1';
+    const auto = document.createElement('button');
+    auto.type = 'button';
+    auto.dataset.wx = 'auto';
+    auto.textContent = 'Auto weather';
+    auto.addEventListener('click', () => pickWeather('auto'));
+    wxMenu.append(auto);
+    Object.keys(WEATHER).forEach((id) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.wx = id;
+      b.textContent = WEATHER[id][0];
+      b.addEventListener('click', () => pickWeather(id));
+      wxMenu.append(b);
+    });
+  }
+  const hourBtn = $('hourbtn'), skyBtn = $('skybtn');
+  if (hourBtn) {
+    hourBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.body.classList.remove('places-open', 'weather-open');
+      document.body.classList.toggle('hour-open');
+      paintPickMenus();
+    });
+  }
+  if (skyBtn) {
+    skyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.body.classList.remove('places-open', 'hour-open');
+      document.body.classList.toggle('weather-open');
+      paintPickMenus();
+    });
+  }
+  paintPickMenus();
 }
 function paintMoveMode() {
   const w = $('walkbtn'), f = $('flybtn');
@@ -2287,8 +2375,10 @@ function bootKeys() {
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
         return;
       }
-      if (document.body.classList.contains('places-open')) {
-        document.body.classList.remove('places-open');
+      if (document.body.classList.contains('places-open')
+        || document.body.classList.contains('hour-open')
+        || document.body.classList.contains('weather-open')) {
+        document.body.classList.remove('places-open', 'hour-open', 'weather-open');
         return;
       }
       // First Esc releases look without resetting the camera; second opens the menu.
@@ -2299,9 +2389,23 @@ function bootKeys() {
       openMenu();
     }
     if (e.code === 'KeyC' && mode === 2) $('watchbtn').click();
-    if (e.code === 'KeyT' && mode > 0) stepHour(e.shiftKey);
-    if (e.code === 'KeyR' && mode > 0) stepWeather(e.shiftKey);
-    if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goPlace(e.code.charCodeAt(5) - 49, true);
+    if (e.code === 'KeyT' && mode > 0) {
+      if (e.shiftKey) stepHour(true);
+      else {
+        document.body.classList.remove('places-open', 'weather-open');
+        document.body.classList.toggle('hour-open');
+        paintPickMenus();
+      }
+    }
+    if (e.code === 'KeyR' && mode > 0) {
+      if (e.shiftKey) stepWeather(true);
+      else {
+        document.body.classList.remove('places-open', 'hour-open');
+        document.body.classList.toggle('weather-open');
+        paintPickMenus();
+      }
+    }
+    if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goPlace(e.code.charCodeAt(5) - 49, false);
   });
   addEventListener('keyup', (e) => { const kc = ARROWS[e.code] || e.code; if (K[kc] != null) K[kc] = 0; });
   // A key held when the window loses focus never sends its keyup, and the walker would run on.
