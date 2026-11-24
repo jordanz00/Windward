@@ -43,7 +43,25 @@ Step into the water to swim; hold `Q` to dive. `6` puts you beside a coral head.
 
 | | |
 |---|---|
-| ![Palm Beach](media/beach.jpg) | ![Coral Garden, under the surface](media/coral.jpg) |
+| ![Palm Beach at golden hour](media/beach.jpg) | ![Coral Garden, under the surface](media/coral.jpg) |
+
+## Screenshots
+
+Real frames from the running app (no AI art). Hero and place stills below are tip `998a15d`. Early visitor stills are kept under `media/before/` for comparison.
+
+![Nine places and skies from tip](media/nine-views.jpg)
+
+| Storm | Night | Sunset |
+|---|---|---|
+| ![Thunderstorm on the beach](media/storm.jpg) | ![Moonlit island](media/night.jpg) | ![Offshore at sunset](media/sunset.jpg) |
+
+| Early still | Tip `998a15d` |
+|---|---|
+| ![Early Palm Beach](media/before/beach.jpg) | ![Tip Palm Beach](media/beach.jpg) |
+| ![Early lagoon](media/before/lagoon.jpg) | ![Tip lagoon](media/lagoon.jpg) |
+| ![Early coral garden](media/before/coral.jpg) | ![Tip coral garden](media/coral.jpg) |
+
+Individual tip views also live in `media/views/` (palm beach, cliff, aerial, lagoon, sunset, coral, forest shafts, thunderstorm, moonlit).
 
 ## What is in the page
 
@@ -88,7 +106,7 @@ Kilobytes are 1024 bytes. `node source/build.mjs` prints current figures; roughl
 | gzipped | ~130 KB |
 | brotli | ~110 KB |
 
-The page fetches nothing after load: no images, models, audio, fonts, or external scripts.
+The page fetches nothing after load: no images, models, audio, fonts, or external scripts. README images under `media/` are for GitHub only.
 
 ## Performance
 
