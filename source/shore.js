@@ -53,10 +53,31 @@ fn steepOf(i: i32) -> f32 {
 fn cellPos(ix: u32, iz: u32) -> vec2<f32> {
   return U.origin + U.along * (f32(ix) + 0.5) * U.dx + U.sea * (f32(iz) + 0.5) * U.dx;
 }
-fn ocean(xz: vec2<f32>) -> vec3<f32> {
+// Depth-aware swell for the seaward coupling band. Same idea as seaAt's shoreK /
+// shoalAmp: hold frequency, shorten k, grow amplitude as group velocity falls.
+// The FFT tile stays deep-water; only these Gerstner drive terms feel the bed.
+fn coupleK(k: f32, depth: f32, band: f32) -> vec2<f32> {
+  let kh0 = k * depth;
+  let th0 = tanh(min(kh0, 8.0));
+  let bunch = smoothstep(1.85, 0.32, kh0) * (1.0 - smoothstep(3.5, 4.5, band));
+  let kHold = k / max(th0, 0.32);
+  let kUse = mix(k, min(kHold, k * 1.48), bunch);
+  let th = tanh(min(kUse * depth, 8.0));
+  return vec2<f32>(kUse, max(th, 0.045));
+}
+fn coupleAmp(kUse: f32, th: f32, depth: f32) -> f32 {
+  let kh = min(kUse * depth, 6.0);
+  let kh2 = min(kh * 2.0, 10.0);
+  let cgFrac = 0.5 * (1.0 + kh2 / max(sinh(kh2), 1e-3));
+  let cgRel = max(sqrt(th) * cgFrac, 0.08) / 0.5;
+  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.42);
+  return mix(1.0, grow, smoothstep(1.7, 0.22, kh));
+}
+fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
   var eta = oceanSample(xz);
   var vel = vec2<f32>(0.0);
   let frq = max(U.frq, 0.2);
+  let D = max(depth, 0.25);
   for (var i = 0; i < 4; i++) {
     let w = U.waves[i];
     let dir = rot2(w.xy);
@@ -67,10 +88,18 @@ fn ocean(xz: vec2<f32>) -> vec3<f32> {
     let Q = steepOf(i);
     let st = k * As * Q;
     if (st > 0.72) { As *= 0.72 / st; }
-    let omega = sqrt(9.81 * k) * U.spd;
-    let phase = k * dot(dir, xz) - omega * U.time;
+    let sk = coupleK(k, D, f32(i));
+    let kUse = sk.x;
+    let thK = sk.y;
+    let slow = sqrt(thK);
+    if (i < 3) { As *= coupleAmp(kUse, thK, D); }
+    let steepShore = kUse * As * Q;
+    if (steepShore > 0.72) { As *= 0.72 / steepShore; }
+    let omega = sqrt(9.81 * kUse) * U.spd * slow;
+    let phase = kUse * dot(dir, xz) - omega * U.time;
     let s = sin(phase);
     eta += As * s;
+    // Orbital velocity tracks the shortened phase speed so the bore matches the crest.
     vel += dir * Q * As * s * omega;
   }
   let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
@@ -241,8 +270,11 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let shallow = smoothstep(1.8, 0.2, max(-b, 0.0));
   var brk = smoothstep(0.04, 0.2, steep) * smoothstep(0.65, 1.25, Fr) * shallow;
   brk = max(brk, smoothstep(0.35, 1.4, -div) * shallow * smoothstep(0.02, 0.1, hN));
+  // On a steep foreshore, supercritical run-up collapses sooner (surge→collapse handoff).
+  let bedDrop = abs(bu - bd) * invDx * 0.5;
+  brk = max(brk, smoothstep(0.55, 1.35, Fr) * smoothstep(0.08, 0.45, bedDrop) * shallow * 0.55);
   // Dissipate supercritical momentum. The bore speed is the local wave speed, not a constant.
-  vel *= exp(-brk * 1.6 * dt);
+  vel *= exp(-brk * 1.65 * dt);
 
   let Cf = 0.01 + select(0.0, 0.028, b > -0.02);
   let sp2 = length(vel);
@@ -299,24 +331,36 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   var ground = wet0.z;
   // Residual foam left on sand after the sheet retreats — successive waves stack lace.
   if (hN < 0.035 && b > -0.08 && foamN > 0.025) {
-    ground = max(ground, foamN * (0.85 + 0.35 * peakGate));
+    ground = max(ground, foamN * (0.9 + 0.4 * peakGate));
     foamN *= 0.48;
   }
-  // Wet film linger: damp sand stays dark after water leaves.
-  if (hN < 0.02 && b > -0.05 && wet0.x > 0.4) {
-    ground = max(ground, 0.08 * wet0.x);
+  // Wet film linger: damp sand stays dark after water leaves. Backwash deposits a longer
+  // tongue than a still sheet, so activity (speed + retreat) fattens the residual.
+  let back = clamp(-dot(vel, S) / max(sp, 0.12), 0.0, 1.0);
+  if (hN < 0.028 && b > -0.08 && wet0.x > 0.35) {
+    ground = max(ground, (0.1 + 0.14 * back + 0.08 * clamp(sp * 0.15, 0.0, 1.0)) * wet0.x);
   }
-  ground *= exp(-dt * 0.042);
-  if (hN > 0.08) { ground *= exp(-dt * 0.32); }
+  // Slower dry-out so the wet strip remains readable between successive bores.
+  ground *= exp(-dt * 0.032);
+  if (hN > 0.08) { ground *= exp(-dt * 0.28); }
 
   // Coupling is a band of grid rows at the seaward side, not a contour of the bed.
+  // Depth for the drive uses the local bed so shoaled swell, not deep-water FFT phase,
+  // sets the mass and momentum that feed run-up and backwash.
   let off = f32(z) / max(U.nz - 1.0, 1.0);
   let w = smoothstep(0.5, 0.9, off);
   if (w > 0.001 && b < 1.0) {
-    let sea = ocean(cellPos(x, z));
+    let depthDrive = max(-b, 0.25);
+    let sea = ocean(cellPos(x, z), depthDrive);
     let hO = max(sea.x - b, 0.0);
     hN = mix(hN, hO, w);
     vel = mix(vel, sea.yz, w);
+    // Seed foam from steep coupled crest in shallow water — collapse product into the SWE,
+    // then advected with the volume flux (not a shoreline paint strip).
+    let coupleSteep = abs(sea.x) * length(sea.yz) / max(depthDrive, 0.3);
+    let coupleBrk = smoothstep(0.12, 0.55, coupleSteep) * smoothstep(1.8, 0.28, depthDrive)
+      * smoothstep(0.04, 0.22, abs(sea.x));
+    foamN = mix(foamN, max(foamN, coupleBrk * 0.55), w * 0.7);
     foamN *= mix(1.0, 0.9, w);
   }
   if (x < 6u || x + 6u >= NX) {

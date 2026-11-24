@@ -1,0 +1,44 @@
+---
+description: Mandatory Windward Technologies company governance and operating standards
+alwaysApply: true
+---
+
+# Windward Technologies
+
+This repository contains both the Windward product and the company's internal operating system.
+
+Treat `company/` as the authoritative company record.
+
+## Mandatory rules
+
+- Respect `company/APPROVAL_MATRIX.md`.
+- Follow `company/CHARTER.md`.
+- Follow engineering standards (`DEVELOPMENT_STANDARDS.md`).
+- Never fabricate company performance data.
+- Never claim a deployment occurred unless verified.
+- Never overwrite an existing founder decision.
+- Keep company records synchronized with approved decisions.
+- Maintain a clear separation between proposals and completed actions.
+
+## Engineering
+
+Before changing product code:
+
+1. Inspect the existing implementation.
+2. Identify affected modules.
+3. Assess regression risk.
+4. Establish acceptance criteria.
+5. Implement the smallest appropriate change.
+6. Run available tests / gates.
+7. Report test results accurately.
+
+## Safety
+
+Do not expose secrets.
+Do not bypass security checks.
+Do not deploy production changes without authorization.
+Do not modify company ownership or legal records.
+
+## Coexistence
+
+Studio lab docs (`STUDIO.md`, `OPERATIONS/`, `PROJECTS/`) remain valid for portfolio experiment workflow. They do not override company governance for spend, release, ownership, or commercial commitments. Company OS work must not break the Windward product runtime.

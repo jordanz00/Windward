@@ -1,0 +1,17 @@
+---
+description: Quality and release gate discipline
+globs:
+  - source/**
+  - company/engineering/**
+  - .githooks/**
+alwaysApply: false
+---
+
+# Quality gates
+
+- Static + WebGPU compile + smoke when shaders touched.
+- Showcase budget gate: page gzip ≤400 KB, brotli ≤350 KB, critical ≤200 KB (`node source/budget-gate.mjs`). AEI Continuous owns ceilings — agents must not raise.
+- Browser Enter with no pipeline errors for product ships.
+- Failed workflows must not report success.
+- Independent verification: re-run gates; implementer self-reports are not sufficient for “verified improvement.”
+- `/release-review` stops before publish.

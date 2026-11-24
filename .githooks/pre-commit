@@ -1,6 +1,7 @@
 #!/bin/sh
-# Windward: block commits that introduce WGSL reserved identifiers or ?: in shader templates.
+# Windward: WGSL static scan + showcase budget ceilings.
 # Enable: git config core.hooksPath .githooks
 set -e
 cd "$(git rev-parse --show-toplevel)"
 node source/wgsl-gate.mjs --static-only
+node source/budget-gate.mjs

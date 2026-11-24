@@ -1,5 +1,7 @@
 # Windward development standards
 
+Engineering governance: [AEI/CHARTER.md](AEI/CHARTER.md) (evidence, independent verification, model independence, versioned contracts). Size budgets and methodology: [AEI/BUDGETS.md](AEI/BUDGETS.md). This file is the **product load/WGSL hard gate** AEI verification must execute when product code changes.
+
 Hard rule: **application load + WebGPU shader/pipeline success are non-negotiable.** A JS build alone never marks work done. Ocean / underwater feature work stays frozen until a verified baseline and this gate are green.
 
 ## Before every WGSL (or shader-adjacent) ship
@@ -28,9 +30,10 @@ Disabling a feature (e.g. grass shadows) to restore Pages is allowed only as a h
 ## Commands
 
 ```bash
-node source/build.mjs          # pack index.html
+node source/build.mjs          # pack index.html (+ budget gate)
+node source/budget-gate.mjs    # gzip≤400 / brotli≤350 / critical≤200 (AEI Continuous ceilings)
 node source/wgsl-gate.mjs      # static + WebGPU compile + smoke load (required)
 node source/wgsl-gate.mjs --static-only   # reserved-id / ?: scan only
 ```
 
-Pre-commit: `.githooks/pre-commit` runs the static half of the gate; enable with `git config core.hooksPath .githooks`.
+Pre-commit: `.githooks/pre-commit` runs the static WGSL scan and the budget gate; enable with `git config core.hooksPath .githooks`.

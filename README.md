@@ -16,7 +16,7 @@ Open the [live page](https://jordanz00.github.io/Windward/), or clone the repo a
 python3 -m http.server 4177
 ```
 
-Wait for the coast to finish generating, then press **Enter**. First person on the beach: mouse looks, `W` `A` `S` `D` or arrows move. Click the view if look is not locked. **Places** flies to one of six spots. **Fly** (`F`) leaves the ground. **Watch** (`C`) hides the UI.
+Wait for the coast to finish generating, then press **Enter**. First person on the beach: mouse looks, `W` `A` `S` `D` or arrows move. Click the view if look is not locked. **Spaces** (`1`–`7`) eases the light through seven looks without moving you. **Places** jumps to one of six spots (`Shift`+`1`–`6`). **Fly** (`F`) leaves the ground. **Watch** (`C`) hides the UI.
 
 | | |
 |---|---|
@@ -24,7 +24,8 @@ Wait for the coast to finish generating, then press **Enter**. First person on t
 | Move | `W` `A` `S` `D` or arrows · Shift run / boost |
 | Jump | Space (on dry ground) |
 | Ripple | Click the water (or tap on a phone) |
-| Travel | Places · `1`–`6` |
+| Travel | Places · Shift+`1`–`6` |
+| Spaces | `1`–`7` or Spaces. The light eases over a few seconds. Shift-click a card to fly to that look's view |
 | Fly | `F` · `W` follows look · Space up · `Q` down |
 | Dive / rise | `Q` dive · Space rise while swimming |
 | Watch | `C` · Esc restores controls |
@@ -39,7 +40,7 @@ On a phone, drag to look; tap water to ripple. **Walk** puts you on foot; **Menu
 
 Low, Medium, and High are the same island with less or more detail. The choice is remembered; a failed load steps down one level.
 
-Step into the water to swim; hold `Q` to dive. `6` puts you beside a coral head. `F` frees the camera from the ground.
+Step into the water to swim; hold `Q` to dive. `Shift+6` puts you beside a coral head. `1`–`7` change the light in place. `F` frees the camera from the ground.
 
 | | |
 |---|---|
@@ -47,7 +48,7 @@ Step into the water to swim; hold `Q` to dive. `6` puts you beside a coral head.
 
 ## Gallery
 
-Real frames from the running app — UI hidden, no AI art. Tip `998a15d`.
+Real frames from the running app — UI hidden, no AI art.
 
 ![Nine places and skies](media/nine-views.jpg)
 
@@ -59,16 +60,29 @@ Real frames from the running app — UI hidden, no AI art. Tip `998a15d`.
 |---|---|
 | ![Cliff overlook under clouds](media/cliff.jpg) | ![Shafts under the canopy](media/forest.jpg) |
 
+| Breaking shore | Photoreal beach |
+|---|---|
+| ![Crest pitch and whitewater on the beach](media/breaking-wave.jpg) | ![Golden-hour shore with long palm shadows](media/photoreal-beach.jpg) |
+
+| Deep ocean | Sixgill wreck emerge |
+|---|---|
+| ![Abyssal basin under the surface](media/deep-ocean.jpg) | ![Bluntnose sixgill rising under the wreck](media/shark-wreck.jpg) |
+
+| Basin patrol | Wreck wildlife |
+|---|---|
+| ![Sixgill on the deep basin patrol](media/shark-basin.jpg) | ![Living deep water at the wreck](media/wildlife-wreck.jpg) |
+
 Individual views also live in `media/views/`. Early visitor stills remain in `media/before/` for comparison.
 
 ## What is in the page
 
-- **Island.** Fixed-seed coast with beach, cliffs, bay, and reef. Instanced palms, forest trees, grass, shrubs, and rocks; wind moves foliage.
-- **Ocean.** Spectral swell and chop, nearshore run-up and foam, depth-based colour, reflections, and clickable ripples. Underwater: reef, seagrass, schools of fish, caustics, and Beer's-law fog.
-- **Sky and weather.** Day cycle from dawn through night; weather states from clear to thunderstorm. Clouds cast shadows and shafts; rain, mist, and wind drive plants, sea, and sound.
-- **Life and sound.** Insects near flowers and canopy; birds, surf, wind, and weather ambience. An original score (*Beneath the Blue*) can be toggled with `N`. Everything is synthesised in the Web Audio API — no recordings.
+- **Island.** Fixed-seed coast with beach, cliffs, bay, and reef. Instanced palms, forest trees, grass, shrubs, and rocks; wind moves foliage. Contact shadows and depth maps so trunks, grass, and flowers shade sand and water.
+- **Ocean.** Spectral swell and chop, nearshore run-up and foam, crest pitch/collapse on the shore, depth-based colour, reflections, and clickable ripples. Underwater: reef, seagrass, schools of fish, caustics, and Beer's-law fog down into a living deep ocean.
+- **Deep sea and sharks.** Deferred deep cast — bluntnose sixgill (signature SE-basin patrol + rare wreck emerge), bigeye sixgill, Greenland, cookiecutter, Portuguese dogfish — with lanternfish and reef wildlife above. Capture helpers: `?shark=basin` / `?shark=wreck`.
+- **Sky and weather.** Day cycle from dawn through night; weather states from clear to thunderstorm. **Spaces** (`1`–`7`) ease seven looks — golden hour, morning, midday, cloud, sunset, storm, moonlight — over a few seconds, then hold. Fly climbs through a real cloud density, including the sea: fair weather carries more cumulus, a broken higher band, and cirrus near 12 km, with grey cores and a silver rim. Storm decks stay dark. Clouds cast shadows and shafts; rain, mist, and wind drive plants, sea, and sound.
+- **Life and sound.** Insects near flowers and canopy; birds; reef and deep wildlife; surf, wind, and weather ambience. An original score (*Beneath the Blue*) can be toggled with `N`. Everything is synthesised in the Web Audio API — no recordings.
 
-Capture helpers (`?tod=`, `?wx=`, `?shot=`, and related flags) are documented in [WINDWARD_NOTES.md](WINDWARD_NOTES.md).
+Capture helpers (`?tod=`, `?wx=`, `?shot=`, `?space=`, `?shark=`, and related flags) are documented in [WINDWARD_NOTES.md](WINDWARD_NOTES.md).
 
 ## How it is built
 
@@ -83,6 +97,9 @@ Capture helpers (`?tod=`, `?wx=`, `?shot=`, and related flags) are documented in
 | `source/ocean.js` | Spectral sea (FFT tiles) and shared wave lookup |
 | `source/shore.js` | Nearshore run-up, foam, wet sand |
 | `source/fish.js` | Reef, coral, seagrass, fish |
+| `source/deep-sea.js` | Deferred deep sharks / mesopelagic cast |
+| `source/birds.js` | Bird life |
+| `source/stream.js` | World streaming / LOD helpers |
 | `source/env.js` | Shared hour, sun/moon, weather, wind |
 | `source/insects.js` | Insects and flowering shrubs |
 | `source/app.js` | WebGPU app, camera, vegetation, audio |
@@ -90,7 +107,8 @@ Capture helpers (`?tod=`, `?wx=`, `?shot=`, and related flags) are documented in
 | `source/ui.css` | Overlay UI |
 | `source/build.mjs` | Packs the files above into `index.html` |
 
-Nothing is allocated per frame on purpose: uniforms, instance lists, and scratch matrices are reused. Plants and rocks are prototype meshes drawn as instances. Sunlight uses depth maps so trunks shade sand and water.
+Nothing is allocated per frame on purpose: uniforms, instance lists, and scratch matrices are reused. Plants and rocks are prototype meshes drawn as instances. Sunlight uses depth maps so trunks, grass, and flowers shade sand and water.
+
 
 ## Size
 
@@ -98,13 +116,14 @@ Kilobytes are 1024 bytes. `node source/build.mjs` prints current figures; roughl
 
 | | |
 |---|---|
-| Source (with comments) | ~595 KB |
-| of which shaders (WGSL) | ~198 KB |
-| `index.html` | ~375 KB |
-| gzipped | ~130 KB |
-| brotli | ~110 KB |
+| Source (with comments) | ~805 KB |
+| of which shaders (WGSL) | ~243 KB |
+| `index.html` | ~532 KB |
+| gzipped | ~200 KB (cap 400) |
+| brotli | ~173 KB (cap 350) |
+| critical gzip (css+js) | ~199 KB (cap 200) |
 
-The page fetches nothing after load: no images, models, audio, fonts, or external scripts. README images under `media/` are for GitHub only.
+Hard size ceilings are enforced by `node source/budget-gate.mjs`. Deep-sea/sharks load deferred inside the same HTML file. The page fetches nothing after load: no images, models, audio, fonts, or external scripts. README images under `media/` are for GitHub only.
 
 ## Performance
 

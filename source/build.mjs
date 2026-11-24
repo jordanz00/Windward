@@ -2,15 +2,23 @@ import { readFileSync, writeFileSync } from 'fs';
 import { gzipSync, brotliCompressSync, constants as zc } from 'zlib';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { spawnSync } from 'child_process';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
-const parts = ['gpu.js', 'island.js', 'sky.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'env.js', 'insects.js', 'bench.js', 'app.js'];
+// Critical path: first interactive frame (Enter / walk). Deferred stays out of critical gzip.
+const parts = ['gpu.js', 'island.js', 'sky.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'astro-data.js', 'astro.js', 'env.js', 'insects.js', 'birds.js', 'stream.js', 'app.js'];
+// Lazy chunks (AEI Continuous): deep-sea/sharks + bench stay off critical-load gzip.
+const deferred = [
+  { id: 'ww-deferred-deep-sea', files: ['deep-sea.js'] },
+  { id: 'ww-deferred-bench', files: ['bench.js'] },
+];
 // Source stays readable. The shipped page is compacted: comments and spare whitespace
 // are removed, but names and template-literal structure stay intact so errors still
 // map to written code. --dev keeps the source whole.
 const dev = process.argv.includes('--dev');
+const noGate = process.argv.includes('--no-gate');
 
 const isIdent = (c) => !!c && /[A-Za-z0-9_$]/.test(c);
 
@@ -144,6 +152,13 @@ function packCss(text) {
 const jsFull = parts.map(read).join('\n');
 const js = packCode(jsFull);
 const cssOut = packCss(css);
+const deferredBlocks = deferred.map((d) => {
+  const body = packCode(d.files.map(read).join('\n'));
+  return { id: d.id, body, raw: d.files.map(read).join('\n') };
+});
+const deferredHtml = deferredBlocks
+  .map((d) => `<script type="text/plain" id="${d.id}">${d.body}</script>`)
+  .join('\n');
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -178,21 +193,24 @@ const html = `<!DOCTYPE html>
 <b>Look</b><span>Move the mouse. If it is not looking, click the view. Esc releases.</span>
 <b>Walk</b><span>WASD or arrow keys. Shift runs. Space jumps. In water, Q dives and Space rises.</span>
 <b>Fly</b><span>F or Fly. W flies where you look. Space up, Q down, Shift faster.</span>
-<b>Places</b><span>Six places worth the trip. Pick one, or press its number, and the camera flies you there.</span>
+<b>Places</b><span>Six places worth the trip. Pick one, or Shift and its number, and the camera jumps there.</span>
+<b>Spaces</b><span>1–7, or Spaces. Seven looks for this island. The light eases over a few seconds and holds. 7 is tonight's real moon. Shift-click a card to fly to its view as well.</span>
 <b>Watch</b><span>Hide the interface. C does the same.</span>
 <b>Day</b><span>T next hour, R weather. N music. X sound effects.</span>
-<b>1 – 6</b><span>Palm beach, cliff overlook, from above, lagoon shallows, offshore, coral garden</span>
+<b>Shift 1 – 6</b><span>Palm beach, cliff overlook, from above, lagoon shallows, offshore, coral garden</span>
 <b>B / G</b><span>Timed bench path / scenic fly of the same route. Quality preset stays fixed</span>
 <b>Esc</b><span>Release look, then open this card</span>
 </div>
 <p class="fine">Best in Chrome. On a phone, drag to look while walking; tap the water. One HTML file, MIT licensed.</p>
 </div>
 <nav id="places" aria-label="Places"></nav>
+<nav id="spaces" aria-label="Spaces"></nav>
 <div id="chrome">
 <nav id="hourmenu" aria-label="Time of day"></nav>
 <nav id="weathermenu" aria-label="Weather"></nav>
 <div id="chromebar">
 <button id="placebtn" type="button">Places</button>
+<button id="spacebtn" type="button">Spaces</button>
 <button id="walkbtn" type="button" aria-pressed="true">Walk</button>
 <button id="flybtn" type="button" aria-pressed="false">Fly</button>
 <button id="watchbtn" type="button">Watch</button>
@@ -206,6 +224,7 @@ const html = `<!DOCTYPE html>
 <button id="menubtn" type="button">Menu</button>
 <div id="hint">Click to look</div>
 <div id="stats" hidden></div>
+${deferredHtml}
 <script>${js}</script>
 </body>
 </html>
@@ -215,6 +234,20 @@ const outPath = join(root, 'index.html');
 writeFileSync(outPath, html);
 const kb = (n) => (n / 1024).toFixed(1) + ' KB';
 const wgsl = (text) => (text.match(/`[^`]*`/g) || []).filter((t) => /(?:\bfn\b|@vertex|@fragment|@compute|struct\s+\w+)/.test(t)).reduce((n, t) => n + Buffer.byteLength(t), 0);
-const br = brotliCompressSync(Buffer.from(html), { params: { [zc.BROTLI_PARAM_QUALITY]: 11 } });
+const htmlBuf = Buffer.from(html);
+const gz = gzipSync(htmlBuf, { level: 9 });
+const br = brotliCompressSync(htmlBuf, { params: { [zc.BROTLI_PARAM_QUALITY]: 11 } });
+const criticalBuf = Buffer.from(cssOut + '\n' + js);
+const critGz = gzipSync(criticalBuf, { level: 9 });
+const defRaw = deferredBlocks.reduce((n, d) => n + Buffer.byteLength(d.body), 0);
 console.log('source     ' + kb(Buffer.byteLength(jsFull) + Buffer.byteLength(css)) + ', of which script ' + kb(Buffer.byteLength(jsFull)) + ' and in it shaders ' + kb(wgsl(jsFull)));
-console.log('index.html ' + kb(Buffer.byteLength(html)) + (dev ? ' (dev build)' : '') + ', gzip ' + kb(gzipSync(html, { level: 9 }).length) + ', brotli ' + kb(br.length) + ', of which script ' + kb(Buffer.byteLength(js)) + ' and in it shaders ' + kb(wgsl(js)));
+console.log('index.html ' + kb(htmlBuf.length) + (dev ? ' (dev build)' : '') + ', gzip ' + kb(gz.length) + ', brotli ' + kb(br.length) + ', of which script ' + kb(Buffer.byteLength(js)) + ' and in it shaders ' + kb(wgsl(js)));
+console.log('critical   gzip ' + kb(critGz.length) + ' (css+js); deferred raw ' + kb(defRaw) + ' (' + deferredBlocks.length + ' chunk' + (deferredBlocks.length === 1 ? '' : 's') + ')');
+
+if (!noGate && !dev) {
+  const r = spawnSync(process.execPath, [join(root, 'source', 'budget-gate.mjs'), '--skip-build'], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+  if (r.status !== 0) process.exit(r.status || 1);
+}

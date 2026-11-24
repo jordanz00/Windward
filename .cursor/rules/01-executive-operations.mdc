@@ -1,0 +1,16 @@
+---
+description: Executive operating cadence and delegation rules
+globs:
+  - company/**
+  - .windward/**
+  - .claude/agents/**
+alwaysApply: false
+---
+
+# Executive operations
+
+- Hierarchical orchestration: Founder → CEO → SVPs → VPs → tasks.
+- One accountable owner per task; reviewers independent.
+- Use the 8-field handoff in `AGENTS.md`.
+- Record decisions in `company/executives/decisions-log.md`.
+- Escalate Level-4 items; do not self-approve high-risk changes.

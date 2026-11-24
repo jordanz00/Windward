@@ -124,23 +124,73 @@ function coastHeight(x, z) {
   const ih = isletM * (2.5 + fbm(x * 0.02, z * 0.02, 3) * 5 + ridged(x * 0.015, z * 0.015) * 4);
   h = Math.max(h, ih);
 
-  // Seabed. Open water falls off; the lagoon stays knee-to-chest deep;
-  // a reef crest sits in the lagoon mouth, just under the surface.
+  // Living Deep Ocean bathymetry: reef garden → wall → mid shelf → slope → abyss,
+  // with trenches, seamounts, sand channels, shelf notches, and wreck hollows.
+  // Height-field only (no true caves/overhangs). Surface FFT / nearshore untouched.
   const dist = Math.hypot(x, z);
-  let bed = -4.2 - Math.max(0, dist - 150) * 0.055;
+  let bed = -4.2 - Math.max(0, dist - 140) * 0.072;
   bed += (fbm(x * 0.012 + 3, z * 0.012, 3) - 0.5) * 2.2;
+
+  // Continental slope belt east of the reef wall — smooth reef→abyss handoff.
+  const slope = ss(230, 310, x) * ss(420, 340, x) * (1 - ss(80, -40, Math.abs(z + 30)));
+  bed -= slope * (5.5 + fbm(x * 0.006, z * 0.006, 2) * 2.0);
+
+  // Broad abyssal basin south-east — dark blue, sparse life, biolum territory.
+  const basin = Math.exp(-((x - 310) * (x - 310)) / 28000 - ((z + 190) * (z + 190)) / 24000);
+  bed -= basin * (12.0 + fbm(x * 0.007, z * 0.007, 2) * 3.5);
+
+  // Narrow trench cutting offshore east — elongated deep channel into the abyss.
+  const trench = Math.exp(-((z + 48) * (z + 48)) / 1100) * ss(220, 380, x) * ss(450, 300, x);
+  bed -= trench * (11.5 + ridged(x * 0.01, z * 0.04) * 4.0);
+
+  // Secondary trench spur south — feeds the abyssal plain.
+  const trenchS = Math.exp(-((x - 300) * (x - 300)) / 1600) * ss(-40, -180, z) * ss(-220, -100, z);
+  bed -= trenchS * (7.5 + fbm(x * 0.015, z * 0.02, 2) * 2.2);
+
+  // Rocky ridges / seamounts west and north — kelp-capable shelf when shallow enough.
+  // Gate every Math.max raise on its weight; a zero-weight max to a constant floor
+  // was clamping the open sea and wiping basins/trenches (same class of bug as the bar).
+  const ridgeW = Math.exp(-((x + 120) * (x + 120)) / 4800 - ((z - 80) * (z - 80)) / 3600);
+  const ridgeN = Math.exp(-((x - 40) * (x - 40)) / 5200 - ((z - 170) * (z - 170)) / 2800);
+  if (ridgeW > 0.02) bed = Math.max(bed, -7.5 + ridgeW * (5.2 + ridged(x * 0.02, z * 0.02) * 1.8));
+  if (ridgeN > 0.02) bed = Math.max(bed, -8.0 + ridgeN * (4.8 + fbm(x * 0.018, z * 0.018, 3) * 1.6));
+
+  // Deep seamounts in the abyssal basin — soft-coral footholds, not dry land.
+  const mountA = Math.exp(-((x - 340) * (x - 340)) / 2200 - ((z + 210) * (z + 210)) / 1800);
+  const mountB = Math.exp(-((x - 290) * (x - 290)) / 1600 - ((z + 250) * (z + 250)) / 1400);
+  if (mountA > 0.02) bed = Math.max(bed, -18.0 + mountA * (9.5 + ridged(x * 0.03, z * 0.03) * 2.0));
+  if (mountB > 0.02) bed = Math.max(bed, -16.5 + mountB * (7.8 + fbm(x * 0.025, z * 0.025, 2) * 1.8));
+
+  // Sand channels: elongated shallow grooves through the lagoon floor.
+  const channel = Math.exp(-((z - 18) * (z - 18)) / 420) * ss(40, 170, x) * ss(190, 90, x);
+  bed -= channel * (0.85 + fbm(x * 0.04, z * 0.015, 2) * 0.35);
 
   const inLag = ss(0.35, -0.6, s.lag);
   const lagFloor = -2.15 + (fbm(x * 0.03, z * 0.03, 2) - 0.5) * 0.35;
   bed = ler(bed, Math.max(bed, lagFloor), inLag);
 
-  // Reef across the bay mouth, a couple of meters down so swell breaks on it.
+  // Reef crest across the bay mouth + steep seaward reef-wall drop-off.
   const reef = Math.exp(-((x - 196) * (x - 196)) / 520 - ((z + 2) * (z + 2)) / 3200);
-  bed = Math.max(bed, -2.6 + reef * 2.15);
+  if (reef > 0.02) bed = Math.max(bed, -2.6 + reef * 2.15);
+  const wall = Math.exp(-((x - 218) * (x - 218)) / 380 - ((z + 2) * (z + 2)) / 4200);
+  bed -= wall * (4.8 + ridged(x * 0.025, z * 0.012) * 1.8) * (1 - reef * 0.85);
 
   // A shoal toward the islet. It stays under the swell so it reads as pale water, not a wall.
   const bar = Math.exp(-((x + 150) * (x + 150)) / 4200 - ((z - 16) * (z - 16)) / 900);
-  bed = Math.max(bed, -1.7 + bar * 0.85);
+  if (bar > 0.02) bed = Math.max(bed, -1.7 + bar * 0.85);
+
+  // Shelf notches / overhang hints: local raised lips with a hollow just landward —
+  // reads as cave mouths in silhouette even though the field is single-valued.
+  const notch = Math.exp(-((x - 205) * (x - 205)) / 180 - ((z - 55) * (z - 55)) / 140);
+  const lip = Math.exp(-((x - 209) * (x - 209)) / 70 - ((z - 55) * (z - 55)) / 90);
+  if (lip > 0.02) bed = Math.max(bed, -3.4 + lip * 1.9);
+  bed -= notch * 1.4 * (1 - lip);
+
+  // 1800s wreck hollows — soft depressions on the mid shelf / upper slope (reachable swim band).
+  const wreckHollow = Math.exp(-((x - 232) * (x - 232)) / 700 - ((z + 45) * (z + 45)) / 550);
+  bed -= wreckHollow * 1.6;
+  const wreckHollow2 = Math.exp(-((x - 240) * (x - 240)) / 800 - ((z - 10) * (z - 10)) / 650);
+  bed -= wreckHollow2 * 1.9;
 
   const land = sat(mask + isletM);
   let H = ler(bed, h, land);

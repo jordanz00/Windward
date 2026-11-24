@@ -64,6 +64,8 @@ fn evolve(@builtin(global_invocation_id) id: vec3<u32>) {
   let h0n = h0s[nz * ON + nx];
   let k = vec2<f32>(k_of(x, U.size), k_of(z, U.size));
   let len = length(k);
+  // Deep water on purpose. Depth, shoaling and breaking are the Gerstner field
+  // (seaAt) plus the shore grid — these tiles are the open sea, not a SWE.
   let w = sqrt(GRAV * len);
   let ph = w * U.time;
   let e = vec2<f32>(cos(ph), sin(ph));

@@ -13,7 +13,7 @@ Feel of a real place that was never authored as assets: humid air, shoaling wate
 
 ## Tech
 
-- WebGPU + WGSL; procedural island, spectral ocean, shore sheet, sky/weather, fish, insects, synthesised audio  
+- WebGPU + WGSL; procedural island, spectral ocean, breaking shore, deep-sea sharks/wildlife, volumetric clouds, shadows, synthesised audio  
 - Readable modules in `source/` → `node source/build.mjs` → shipped `index.html`  
 - Live: [jordanz00.github.io/Windward](https://jordanz00.github.io/Windward/)  
 - Source of truth for the public mirror: [github.com/jordanz00/Windward](https://github.com/jordanz00/Windward)  
@@ -21,7 +21,7 @@ Feel of a real place that was never authored as assets: humid air, shoaling wate
 
 ## AI approach
 
-Founder (multimedia / video / animation; not an experienced software engineer) directed a free-time Cursor experiment — primarily Fable 5.2 and other models, Grok/Auto sparingly — aiming for a publishable demo in about a week. Studio docs manage the lab around the piece; **they do not rewrite the app** unless a separate brief is approved.
+Founder directed; AI implemented under approval gates. Goal: a finished demo in a short burst of days without the founder hand-writing app code. Studio docs manage the lab around the piece; **they do not rewrite the app** unless a separate brief is approved.
 
 ## Challenges
 
@@ -43,6 +43,8 @@ See also [OPERATIONS/LESSONS_LEARNED.md](../../OPERATIONS/LESSONS_LEARNED.md).
 | | |
 | --- | --- |
 | Showcase | [SHOWCASE.md](SHOWCASE.md) |
+| Excellence Sprint (draft) | [EXCELLENCE_SPRINT.md](EXCELLENCE_SPRINT.md) |
+| Quality checklist | [QUALITY_CHECKLIST.md](QUALITY_CHECKLIST.md) |
 | Live demo | https://jordanz00.github.io/Windward/ |
 | GitHub | https://github.com/jordanz00/Windward |
 | README | [../../README.md](../../README.md) |

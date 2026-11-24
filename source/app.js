@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, shore: 176, grass: 1600, weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, shore: 224, grass: 4800, weed: 520, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, shore: 288, grass: 9200, weed: 1000, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, shore: 176, grass: 1600, weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, vines: 90,  moss: 140, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, shore: 224, grass: 4800, weed: 520, palms: 100, broad: 80,  forest: 950,  rocks: 70, vines: 260, moss: 420, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, shore: 288, grass: 9200, weed: 1000, palms: 160, broad: 130, forest: 1700, rocks: 100, vines: 480, moss: 700, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -15,6 +15,9 @@ const WAVES = [
   [-0.38, 0.92, 0.09, 29, 0.16]
 ];
 
+// Metres. Above the cirrus sheet (10.5 km) and the tallest convective top, so fly
+// can enter the deck and come out above it. The old cap was 320 m, under the base.
+const FLY_TOP = 16500;
 const SUN = (function () {
   const v = [-0.74, 0.50, -0.42];
   const L = Math.hypot(v[0], v[1], v[2]);
@@ -406,9 +409,11 @@ function makePalm(seed, lod) {
     const age = dead ? 1.1 : (j + rnd() * 0.7) / nf;
     // Milder azimuth/elevation jitter — extreme random el0 created spiked / broken silhouettes.
     const az0 = j * 2.39996 + crownBias + (rnd() - 0.5) * 0.85 + Math.sin(j * 1.7 + seed) * 0.28;
+    // Oldest live fronds drop into a skirt so the palm's outline is a crown, not a fan.
+    const skirt = !dead && age > 0.8 ? (age - 0.8) * 1.55 : 0;
     const el0 = dead ? -1.2 - rnd() * 0.25
       : (family === 0 ? 1.1 : 0.98) - Math.pow(age, family === 3 ? 0.98 : 1.08) * (family === 3 ? 2.0 : 1.82)
-        + (rnd() - 0.5) * 0.28 + crownBias * 0.12;
+        - skirt + (rnd() - 0.5) * 0.28 + crownBias * 0.12;
     const L = dead ? 2.3 + rnd() * 0.8
       : frondLen0 + (family === 3 ? 2.1 : 1.85) * Math.sin(Math.min(1, age * 1.15 + 0.1) * Math.PI) + rnd() * 0.5;
     const droop = dead ? 0.12
@@ -698,6 +703,130 @@ function makeShrub(seed) {
   return m;
 }
 
+// Climbing vine: woody stem spiraling up a host, with dense irregular leaflets.
+function makeClimbingVine(seed) {
+  const rnd = seeded((seed | 0) * 19 + 3);
+  const m = new Mesh();
+  const H = 1.35 + rnd() * 1.6;
+  const turns = 1.4 + rnd() * 1.8;
+  const rad = 0.06 + rnd() * 0.1;
+  const pts = [];
+  const rings = 12;
+  for (let i = 0; i <= rings; i++) {
+    const t = i / rings;
+    const a = t * turns * 6.2832 + rnd() * 0.08;
+    pts.push([Math.cos(a) * rad * (0.55 + 0.55 * t), H * t, Math.sin(a) * rad * (0.55 + 0.55 * t)]);
+  }
+  const bark = [0.2 + rnd() * 0.08, 0.14 + rnd() * 0.05, 0.08 + rnd() * 0.04];
+  tube(m, pts, 5, false, (t, ang, len) => [
+    0.016 * (1 - t * 0.4), bark[0], bark[1], bark[2], 0.15 + t * 0.55, WOOD, ang / 6.2832, len
+  ]);
+  const nLeaf = 14 + ((rnd() * 10) | 0);
+  for (let i = 0; i < nLeaf; i++) {
+    const t = 0.08 + rnd() * 0.88;
+    const a = t * turns * 6.2832;
+    const px = Math.cos(a) * rad * (0.55 + 0.55 * t);
+    const pz = Math.sin(a) * rad * (0.55 + 0.55 * t);
+    const py = H * t;
+    const dead = rnd() < 0.16;
+    const col = dead
+      ? [0.28 + rnd() * 0.1, 0.2 + rnd() * 0.08, 0.08 + rnd() * 0.04]
+      : [0.05 + rnd() * 0.05, 0.24 + rnd() * 0.14, 0.04 + rnd() * 0.03];
+    const side = rnd() < 0.5 ? -1 : 1;
+    addLeaflet(m, px, py, pz,
+      Math.cos(a + side) * 0.7, 0.2 - rnd() * 0.4, Math.sin(a + side) * 0.7,
+      0.11 + rnd() * 0.16, 0.02 + rnd() * 0.018, col, 0.55 + rnd() * 0.35, (rnd() - 0.5) * 0.7);
+  }
+  return m;
+}
+
+// Hanging vine / liana cascade from an anchor height.
+function makeHangingVine(seed) {
+  const rnd = seeded((seed | 0) * 23 + 7);
+  const m = new Mesh();
+  const strands = 3 + ((rnd() * 3) | 0);
+  for (let s = 0; s < strands; s++) {
+    const ox = (rnd() - 0.5) * 0.28, oz = (rnd() - 0.5) * 0.28;
+    const drop = 1.1 + rnd() * 1.6;
+    const sway = (rnd() - 0.5) * 0.45;
+    const pts = [];
+    const rings = 10;
+    for (let i = 0; i <= rings; i++) {
+      const t = i / rings;
+      const curl = Math.sin(t * 4.2 + s) * 0.06 * t;
+      pts.push([ox + sway * t * t + curl, -drop * t, oz + Math.cos(t * 3.1 + s) * 0.045 * t]);
+    }
+    const bark = [0.18 + rnd() * 0.07, 0.13 + rnd() * 0.05, 0.07];
+    tube(m, pts, 4, false, (t, ang, len) => [
+      0.012 * (1 - t * 0.45), bark[0], bark[1], bark[2], 0.4 + t * 0.7, WOOD, ang / 6.2832, len
+    ]);
+    const nLeaf = 8 + ((rnd() * 7) | 0);
+    for (let i = 0; i < nLeaf; i++) {
+      const t = 0.1 + rnd() * 0.85;
+      const px = ox + sway * t * t, py = -drop * t, pz = oz;
+      const dead = rnd() < 0.2;
+      const col = dead
+        ? [0.32 + rnd() * 0.1, 0.22 + rnd() * 0.08, 0.09]
+        : [0.06 + rnd() * 0.05, 0.26 + rnd() * 0.12, 0.05];
+      addLeaflet(m, px, py, pz,
+        (rnd() - 0.5) * 1.2, -0.15 - rnd() * 0.55, (rnd() - 0.5) * 1.2,
+        0.1 + rnd() * 0.14, 0.018 + rnd() * 0.016, col, 0.65 + rnd() * 0.3, (rnd() - 0.5) * 0.8);
+    }
+  }
+  return m;
+}
+
+// Moss pillow / low ground cover — soft irregular mound of fronds.
+function makeMossClump(seed) {
+  const rnd = seeded((seed | 0) * 11 + 5);
+  const m = new Mesh();
+  const tufts = 12 + ((rnd() * 12) | 0);
+  for (let i = 0; i < tufts; i++) {
+    const ang = rnd() * 6.2832;
+    const r = rnd() * 0.22;
+    const ox = Math.cos(ang) * r, oz = Math.sin(ang) * r;
+    const dead = rnd() < 0.12;
+    const col = dead
+      ? [0.24 + rnd() * 0.08, 0.22 + rnd() * 0.06, 0.09]
+      : [0.08 + rnd() * 0.06, 0.28 + rnd() * 0.16, 0.06 + rnd() * 0.04];
+    const nLeaf = 3 + ((rnd() * 3) | 0);
+    for (let k = 0; k < nLeaf; k++) {
+      const a = ang + (k - 1) * 0.4 + rnd() * 0.3;
+      addLeaflet(m, ox, 0.002 + rnd() * 0.015, oz,
+        Math.cos(a) * 0.35, 0.9 + rnd() * 0.45, Math.sin(a) * 0.35,
+        0.07 + rnd() * 0.09, 0.016 + rnd() * 0.016, col, 0.15 + rnd() * 0.2, (rnd() - 0.5) * 0.5);
+    }
+  }
+  return m;
+}
+
+// Surface root snarl — nature reclaiming bare soil / rock feet.
+function makeRootSnarl(seed) {
+  const rnd = seeded((seed | 0) * 31 + 2);
+  const m = new Mesh();
+  const arms = 3 + ((rnd() * 3) | 0);
+  for (let a = 0; a < arms; a++) {
+    const yaw = a / arms * 6.2832 + rnd() * 0.8;
+    const len = 0.25 + rnd() * 0.45;
+    const pts = [];
+    const steps = 6;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const bend = Math.sin(t * 2.8 + a) * 0.08;
+      pts.push([
+        Math.cos(yaw) * len * t + Math.cos(yaw + 1.57) * bend,
+        0.01 + Math.sin(t * 3.1) * 0.025 * (1 - t),
+        Math.sin(yaw) * len * t + Math.sin(yaw + 1.57) * bend
+      ]);
+    }
+    const bark = [0.16 + rnd() * 0.06, 0.11 + rnd() * 0.04, 0.07];
+    tube(m, pts, 4, false, (t, ang, len) => [
+      0.014 * (1 - t * 0.65), bark[0], bark[1], bark[2], 0.02, WOOD, ang / 6.2832, len
+    ]);
+  }
+  return m;
+}
+
 function makeRock(seed, lod) {
   // A boulder is a lump that has lost pieces along planes, and has then had its edges
   // worn round: the cuts give it faces, the shared normals take the knife edge off them.
@@ -770,11 +899,77 @@ function forestMask(x, z, h, grad) {
   return smooth01(1.9, 4.4, h) * (1 - smooth01(0.55, 1.0, grad)) * smooth01(-0.62, -0.12, forestNoise(x, z));
 }
 
+// Domain-warped multi-scale density — organic clusters, never a sow grid or noise rings.
+function warpXZ(x, z, amp, freq) {
+  const wx = (vnoise(x * freq + 17.1, z * freq + 3.7) - 0.5) * amp;
+  const wz = (vnoise(x * freq + 9.2, z * freq + 21.4) - 0.5) * amp;
+  return [x + wx, z + wz];
+}
+function clusterField(x, z) {
+  const a = warpXZ(x, z, 14, 0.018);
+  const b = warpXZ(a[0], a[1], 4.5, 0.055);
+  const broad = vnoise(b[0] * 0.011 + 1.1, b[1] * 0.011);
+  const mid = vnoise(b[0] * 0.038 + 4.7, b[1] * 0.038);
+  const fine = vnoise(b[0] * 0.11 + 8.3, b[1] * 0.11);
+  // Soft lobes, not concentric rings: product of warped scales with a low floor.
+  return Math.min(1, broad * 0.48 + mid * 0.34 + fine * 0.22);
+}
+// Ecological preferences: moisture, shade, slope, near-water, canopy cover.
+function ecoPrefs(x, z, h, sl) {
+  const moist = smooth01(0.15, 2.4, h) * (1 - smooth01(0.18, 0.75, sl)) * (0.4 + 0.6 * vnoise(x * 0.021 + 3, z * 0.021));
+  const shade = forestMask(x, z, h, sl);
+  const nearWater = smooth01(2.8, 0.35, h) * smooth01(-0.4, 0.55, h);
+  const beachEdge = smooth01(0.2, 1.1, h) * (1 - smooth01(1.6, 3.2, h));
+  const jungle = clusterField(x, z) * smooth01(0.9, 3.5, h) * (1 - smooth01(0.45, 0.9, sl));
+  return { moist, shade, nearWater, beachEdge, jungle, cluster: clusterField(x, z) };
+}
+
 // A limb: a tapering tube with wood for a surface. flare swells the foot into buttress roots.
 function addLimb(m, pts, r0, r1, sides, col, sway0, sway1, flare) {
   tube(m, pts, sides, true, (t, ang, len) => [
     (r0 + (r1 - r0) * t) * (1 + (flare ? flare * Math.pow(1 - t, 5) * (0.5 + Math.max(0, Math.cos(ang * 3 + flare * 40))) : 0)),
     col[0], col[1], col[2], sway0 + (sway1 - sway0) * t, WOOD, ang / 6.2832, len]);
+}
+
+// One lobed pad of a crown. Closed mesh, no cutouts: the outline is the radius, so a
+// far tree is the same family as the near one and nothing on it can flicker. The belly
+// tucks in and one side hangs, which is what stops the pad reading as a ball.
+function addCrownShell(m, cx, cy, cz, size, flat, yaw, petals, contrast, col, sway0, lod, salt) {
+  const rings = [6, 4, 3][lod];
+  const sides = [14, 10, 8][lod];
+  let prev = null;
+  for (let r = 0; r <= rings; r++) {
+    const t = r / rings;
+    const u = 0.1 + t * 0.88;
+    const yk = -0.46 + u * 1.5;
+    const shoulder = Math.sin(Math.pow(u, 0.58) * Math.PI);
+    const tuck = u < 0.34 ? 0.42 + (u - 0.1) * 1.7 : 1;
+    const row = [];
+    for (let k = 0; k <= sides; k++) {
+      const a = k / sides * 6.2831853;
+      const petal = 1 - contrast + contrast * Math.pow(0.5 + 0.5 * Math.cos(a * petals + yaw), 1.4);
+      const asym = 0.84 + 0.18 * Math.cos(a + yaw * 1.37 + salt);
+      const grit = 0.9 + 0.12 * Math.sin(a * (3 + (salt % 3)) + t * 3.1 + salt);
+      const rad = Math.max(0.01, size * shoulder * tuck * petal * asym * grit);
+      const hang = Math.sin(a + yaw) * size * flat * 0.16 * (1 - t);
+      const px = cx + Math.cos(a) * rad;
+      const py = cy + yk * size * flat + hang;
+      const pz = cz + Math.sin(a) * rad;
+      const ny = -0.35 + u * 1.55;
+      const nx = Math.cos(a), nz = Math.sin(a);
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      const up = Math.max(0, Math.min(1, u));
+      const lightK = (0.58 + 0.5 * up * up);
+      row.push(m.v(px, py, pz, nx / nl, ny / nl, nz / nl,
+        col[0] * lightK, col[1] * lightK, col[2] * lightK,
+        sway0 + up * 0.026, CROWN, a / 6.2831853, t));
+    }
+    if (prev) for (let k = 0; k < sides; k++) {
+      m.tri(prev[k], row[k], prev[k + 1]);
+      m.tri(prev[k + 1], row[k], row[k + 1]);
+    }
+    prev = row;
+  }
 }
 
 // Forest canopy trees with distinct silhouettes: spreading, emergent, rounded, multi-stem,
@@ -799,133 +994,194 @@ function makeTree(seed, lod) {
   };
   const flare = (form === 1 ? 1.0 : 0.55) + rnd() * 0.85;
   buildTrunk(lean, r0, flare);
-  if (form === 3 && lod < 2) {
-    // Second / third stems for multi-stem tropical habit.
+  if (form === 3) {
+    // Extra stems. The random draws run at every level of detail so the crown above them
+    // does not jump when the far mesh (which skips the stems) takes over.
     const stems = 1 + ((rnd() * 2) | 0);
     for (let s = 0; s < stems; s++) {
       const a = rnd() * 6.28, off = 0.04 + rnd() * 0.05;
-      const L2 = lean + Math.cos(a) * 0.08;
-      const pts = [];
-      for (let i = 0; i <= rings; i++) {
-        const t = Math.pow(i / rings, 1.5);
-        const p = at(t, L2);
-        pts.push([p[0] + Math.cos(a) * off * (1 - t), p[1] * (0.85 + rnd() * 0.1), p[2] + Math.sin(a) * off * (1 - t)]);
+      const rise = [];
+      for (let i = 0; i < 8; i++) rise.push(0.85 + rnd() * 0.1);
+      if (lod < 2) {
+        const L2 = lean + Math.cos(a) * 0.08;
+        const pts = [];
+        for (let i = 0; i <= rings; i++) {
+          const t = Math.pow(i / rings, 1.5);
+          const p = at(t, L2);
+          const lift = rise[Math.min(7, Math.round(t * 7))];
+          pts.push([p[0] + Math.cos(a) * off * (1 - t), p[1] * lift, p[2] + Math.sin(a) * off * (1 - t)]);
+        }
+        addLimb(m, pts, r0 * 0.7, r0 * 0.4, [10, 6, 3][lod], bark, 0, 0.014, flare * 0.6);
       }
-      addLimb(m, pts, r0 * 0.7, r0 * 0.4, [10, 6, 3][lod], bark, 0, 0.014, lod < 2 ? flare * 0.6 : 0);
     }
   }
-  const lobes = form === 2 ? 7 + (Math.abs(sd) % 3)
-    : form === 1 ? 4 + (Math.abs(sd) % 2)
-    : form === 4 ? 4 + (Math.abs(sd) % 3)
-    : form === 5 ? 4 + (Math.abs(sd) % 2)
-    : 5 + (Math.abs(sd) % 4);
-  const spread = form === 2 ? 0.14 + rnd() * 0.08
-    : form === 1 ? 0.12 + rnd() * 0.1
-    : form === 5 ? 0.1 + rnd() * 0.08
-    : form === 4 ? 0.22 + rnd() * 0.16
-    : 0.18 + rnd() * 0.14;
+  // flat: pad squash. contrast: depth of the bites in the outline. spread: plan radius.
+  const fam = [
+    { flat: 0.42, petals: 5, contrast: 0.48, spread: 0.36, size: 1.05, lobes: 6, stack: 0.02 },
+    { flat: 0.82, petals: 3, contrast: 0.28, spread: 0.15, size: 0.84, lobes: 5, stack: 0.18 },
+    { flat: 0.58, petals: 4, contrast: 0.22, spread: 0.22, size: 1.0, lobes: 7, stack: 0.04 },
+    { flat: 0.5, petals: 4, contrast: 0.36, spread: 0.3, size: 0.92, lobes: 6, stack: 0.05 },
+    { flat: 0.36, petals: 3, contrast: 0.6, spread: 0.42, size: 0.88, lobes: 5, stack: 0.0 },
+    { flat: 0.7, petals: 3, contrast: 0.34, spread: 0.13, size: 0.7, lobes: 4, stack: 0.12 }
+  ][form];
+  const lobes = fam.lobes + (Math.abs(sd) % 2);
+  const spread = fam.spread * (0.86 + rnd() * 0.28);
   const hue = rnd();
   const green = [
     0.04 + hue * 0.03 + (form === 4 ? 0.02 : 0),
     0.1 + hue * 0.04 + (form === 2 ? 0.02 : 0),
     0.025 + (1 - hue) * 0.015
   ];
+  const dens = form === 2 ? 1.06 : form === 4 ? 0.86 : 1;
+  const tone = [green[0] * dens, green[1] * dens, green[2] * dens];
+  const sway0 = form === 5 ? 0.03 : 0.022;
   const unit = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
   const cross = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-  // One leaf: a blade folded along its midrib, four vertices. d is the way it points,
-  // up the way its face looks, out the way the crown's surface looks there: the shading
-  // normal leans toward that, so a crown is lit as one rounded mass and not as noise.
-  const leafAt = (o, d, up, out, len, wid, col, sway) => {
+  // A blade folded on its midrib. rich adds a drip tip (the leaves that cut the sky).
+  // d points along the blade, up is the face, out is the crown's surface there.
+  const leafAt = (o, d, up, out, len, wid, col, sway, rich, asym) => {
     const sd = unit(cross(up, d)), nn = unit(cross(d, sd));
-    const ns = unit([nn[0] + out[0] * 0.9, nn[1] + out[1] * 0.9 + 0.25, nn[2] + out[2] * 0.9]);
+    const ns = unit([nn[0] + out[0] * 0.85, nn[1] + out[1] * 0.85 + 0.28, nn[2] + out[2] * 0.85]);
     const ix = [];
+    const skew = asym || 0;
     m.leaf();
-    // Stalk end, the two widest points, the tip: two triangles that meet along the midrib.
-    for (const [t, side, c] of [[0, 0, 0.8], [0.46, 1, 1], [0.46, -1, 1], [1, 0, 1.12]]) {
-      const h = side ? wid * 0.3 : -t * len * 0.3;
-      ix.push(m.v(o[0] + d[0] * len * t + sd[0] * wid * side + nn[0] * h,
-        o[1] + d[1] * len * t + sd[1] * wid * side + nn[1] * h,
-        o[2] + d[2] * len * t + sd[2] * wid * side + nn[2] * h,
-        ns[0] - sd[0] * side * 0.3, ns[1] - sd[1] * side * 0.3, ns[2] - sd[2] * side * 0.3,
-        col[0] * c, col[1] * c, col[2] * c, sway * (1 + 0.5 * t), LEAF, side, t));
+    const layout = rich
+      ? [[0, 0, 0.78], [0.36, 1, 1], [0.36, -1, 1], [0.68, 0.52, 1.05], [0.68, -0.46, 0.94], [1.06, 0.06, 1.08]]
+      : [[0, 0, 0.8], [0.42, 1, 1], [0.42, -1, 1], [1, 0, 1.1]];
+    for (const [t, side, c] of layout) {
+      const sgn = side < 0 ? -1 : side > 0 ? 1 : 0;
+      const mag = Math.abs(side) * (1 + skew * sgn);
+      const across = mag * sgn;
+      const fold = sgn ? mag * wid * 0.28 : -t * len * 0.22;
+      const droop = t * t * len * (rich ? 0.34 : 0.2);
+      ix.push(m.v(
+        o[0] + d[0] * len * t + sd[0] * wid * across + nn[0] * fold,
+        o[1] + d[1] * len * t + sd[1] * wid * across + nn[1] * fold - droop,
+        o[2] + d[2] * len * t + sd[2] * wid * across + nn[2] * fold,
+        ns[0] - sd[0] * sgn * 0.28, ns[1], ns[2] - sd[2] * sgn * 0.28,
+        col[0] * c, col[1] * c, col[2] * c, sway * (0.82 + 0.22 * t), LEAF, Math.abs(side) > 0.75 ? sgn : side * 0.2, Math.min(1, t)));
     }
-    m.tri(ix[0], ix[3], ix[1]); m.tri(ix[0], ix[2], ix[3]);
+    if (rich) {
+      m.tri(ix[0], ix[1], ix[2]); m.tri(ix[1], ix[3], ix[2]);
+      m.tri(ix[2], ix[3], ix[4]); m.tri(ix[3], ix[5], ix[4]);
+    } else {
+      m.tri(ix[0], ix[3], ix[1]); m.tri(ix[0], ix[2], ix[3]);
+    }
   };
+  // Far pads are a little larger so they fill the leaves that level no longer draws.
+  const shellK = [0.8, 0.94, 1.04][lod];
+  const dark = [0.82, 0.9, 0.98][lod];
+  const shellCol = [tone[0] * dark, tone[1] * dark, tone[2] * dark];
   for (let i = 0; i < lobes; i++) {
-    const blob = icosphere(lod ? 1 : 2, 1, [0.1, 0.1, 0.1]), n = blob.pos.length / 3;
-    const ang = form === 4 ? rnd() * 6.28 : i * 2.399 + rnd() * (form === 2 ? 0.35 : 0.9);
-    const rr = i === 0 ? (form === 2 ? spread * 0.2 : 0) : spread * (form === 4 ? 0.4 + rnd() : 0.55 + rnd() * 0.7);
-    const size = (i === 0 ? (form === 1 ? 0.2 : 0.26) : (form === 1 ? 0.14 : 0.16)) + rnd() * (form === 2 ? 0.07 : 0.1);
-    const cy = th + (i === 0 ? (form === 1 ? 0.22 : 0.15) : rnd() * (form === 1 ? 0.22 : 0.14)) + size * 0.28;
+    const jA = rnd(), jR = rnd(), jS = rnd(), jY = rnd(), jLimb = rnd(), jTake = rnd();
+    const tier = i === 0 ? 2 : i % 3;
+    const ang = form === 4 ? jA * 6.2832 : i * 2.399 + (jA - 0.5) * (form === 2 ? 0.4 : 0.85);
+    const rr = i === 0 ? spread * (form === 2 ? 0.15 : 0.05) : spread * (0.5 + jR * 0.55);
+    const size = ((i === 0 ? 0.22 : 0.15) * fam.size + jS * 0.05);
+    const cy = th + fam.stack + (i === 0 ? 0.14 : tier * 0.045) + jY * 0.05 + size * 0.15;
     const cx = Math.cos(ang) * rr + lean, cz = Math.sin(ang) * rr;
-    const flat = form === 2 ? 0.7 + rnd() * 0.15 : form === 1 ? 0.4 + rnd() * 0.15 : 0.48 + rnd() * 0.22;
-    if (lod < 2 && (i === 0 || form !== 2 || rnd() > 0.3)) {
-      const s0 = at(i === 0 ? 1 : 0.62 + rnd() * 0.35), e = [cx, cy - size * flat * 0.2, cz], q = [];
-      const c = [s0[0] + (e[0] - s0[0]) * 0.25, s0[1] + (e[1] - s0[1]) * 0.8, s0[2] + (e[2] - s0[2]) * 0.25];
+    const flat = fam.flat * (0.92 + jTake * 0.16);
+    // Same draw on every level, so the bough exists in the same place when the mesh changes.
+    const s0 = at(i === 0 ? 1 : 0.58 + jLimb * 0.34);
+    const e = [cx, cy - size * flat * 0.15, cz];
+    // The bough is on every level. Without it the far pads sit off the trunk.
+    if (i === 0 || form !== 2 || jTake > 0.28) {
+      const q = [];
+      const c = [s0[0] + (e[0] - s0[0]) * 0.28, s0[1] + (e[1] - s0[1]) * 0.72, s0[2] + (e[2] - s0[2]) * 0.28];
       for (let k = 0; k <= 3; k++) {
         const t = k / 3, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), d = t * t;
         q.push([s0[0] * a + c[0] * b + e[0] * d, s0[1] * a + c[1] * b + e[1] * d, s0[2] * a + c[2] * b + e[2] * d]);
       }
-      addLimb(m, q, r0 * (i === 0 ? 0.55 : 0.32), r0 * 0.12, [5, 4][lod], bark, 0.012, 0.032, 0);
+      addLimb(m, q, r0 * (i === 0 ? 0.55 : 0.32), r0 * 0.11, [5, 4, 3][lod], bark, 0.012, 0.03, 0);
+      if (lod === 0) {
+        for (let f = 0; f < 2; f++) {
+          const a2 = ang + (f ? 0.85 : -0.7);
+          const tip = [cx + Math.cos(a2) * size * 0.85, cy + size * flat * 0.05, cz + Math.sin(a2) * size * 0.85];
+          const mid = [(e[0] + tip[0]) * 0.5, Math.max(e[1], tip[1]) + size * 0.08, (e[2] + tip[2]) * 0.5];
+          addLimb(m, [e, mid, tip], r0 * 0.09, r0 * 0.03, 4, bark, 0.02, 0.034, 0);
+        }
+      }
     }
-    // Where the lobe's surface is, in the direction (x, y, z) from its middle.
-    const lumpAt = (x, y, z) => 0.7 + 0.42 * vnoise(x * 2.3 + sd + i * 3.1, z * 2.3 + y * 1.9) + 0.24 * vnoise(x * 5.3 + i * 7.7, z * 5.3 + y * 4.1 + sd);
-    const swayAt = (y) => (form === 5 ? 0.04 : 0.028) + Math.max(0, Math.min(1, y * 0.5 + 0.5)) * 0.038;
-    // The mass inside: what shows between the leaves, and all there is of a far tree. Near,
-    // it sits back under the leaves and is their shade; far, it is the crown and is their colour.
-    const core = [0.78, 0.92, 1.04][lod], dark = [0.8, 0.9, 0.95][lod];
-    for (let v = 0; v < n; v++) {
-      const x = blob.pos[v * 3], y = blob.pos[v * 3 + 1], z = blob.pos[v * 3 + 2];
-      const lump = lumpAt(x, y, z) * core;
-      const px = x * lump * size, py = y * lump * size * (y < 0 ? flat * 0.5 : flat), pz = z * lump * size;
-      blob.pos[v * 3] = px + cx; blob.pos[v * 3 + 1] = py + cy; blob.pos[v * 3 + 2] = pz + cz;
-      const up = Math.max(0, Math.min(1, y * 0.5 + 0.5));
-      const lightK = (0.7 + 0.3 * up) * dark;
-      // Sparse crowns leave darker interiors; rounded ones stay denser/brighter on top.
-      const dens = form === 2 ? 1.08 : form === 4 ? 0.85 : 1;
-      blob.col[v * 3] = green[0] * lightK * dens;
-      blob.col[v * 3 + 1] = green[1] * lightK * dens;
-      blob.col[v * 3 + 2] = green[2] * lightK * dens;
-      blob.sway[v] = swayAt(y);
-      blob.kind[v] = CROWN;
-    }
-    appendMesh(m, blob, 0, 0, 0, 0, 1, null, 1);
-    if (lod === 2) continue;
-    // The leaves: sprays set over the lobe, thick on top and thin underneath, each a twig's
-    // end with its leaves turned out to the light. The coarser level keeps one spray in four
-    // and makes its leaves bigger, so the crown covers the same sky from further off.
+    addCrownShell(m, cx, cy, cz, size * shellK, flat, ang + i, fam.petals, fam.contrast, shellCol, sway0, lod, sd + i * 3);
+    // Sprays sit on the pad. The count and the random stream do not depend on level of
+    // detail: the coarser mesh keeps the skyline and every fourth spray, leaves bigger.
     const lr = seeded(sd * 53 + i * 131 + 7);
-    const nSpray = Math.max(26, Math.min(76, Math.round(1100 * size * size)));
-    const big = lod ? 2.3 : 1.12;
+    const nSpray = Math.max(18, Math.min(44, Math.round(980 * size * size)));
+    const big = lod ? 2.05 : 1;
     for (let k = 0; k < nSpray; k++) {
-      // Even over the sphere, from the top down to well under the equator.
-      const yy = 1 - (k + 0.5) / nSpray * 1.72, rad = Math.sqrt(Math.max(0, 1 - yy * yy)), ga = k * 2.39996 + i;
-      const j0 = lr(), j1 = lr(), j2 = lr(), j3 = lr();
-      if (lod && (k & 3)) { for (let q = 0; q < 6 * 4; q++) lr(); continue; }
-      const dir = unit([rad * Math.cos(ga) + (j0 - 0.5) * 0.3, yy + (j1 - 0.5) * 0.3, rad * Math.sin(ga) + (j2 - 0.5) * 0.3]);
-      const lump = lumpAt(dir[0], dir[1], dir[2]) * (0.9 + j3 * 0.16);
-      const o = [cx + dir[0] * lump * size, cy + dir[1] * lump * size * (dir[1] < 0 ? flat * 0.5 : flat), cz + dir[2] * lump * size];
-      const out = unit([dir[0], dir[1] / flat, dir[2]]);
-      const upK = Math.max(0, Math.min(1, dir[1] * 0.5 + 0.5)), lightK = 0.5 + 0.62 * upK * upK;
-      // A side of the twig, and the other side.
+      const r0l = lr(), r1l = lr(), r2l = lr(), r3l = lr();
+      const t = 0.32 + ((k + 0.37) / nSpray) * 0.64;
+      const ga = k * 2.39996 + i + (r0l - 0.5) * 0.35;
+      const petal = 1 - fam.contrast + fam.contrast * Math.pow(0.5 + 0.5 * Math.cos(ga * fam.petals + ang), 1.4);
+      const skyline = Math.abs(t - 0.55) < 0.12 || petal > 0.8;
+      const keep = lod === 0 || skyline || (k % 4 === 0);
+      if (lod === 2 || !keep) continue;
+      const u = 0.12 + t * 0.84;
+      const shoulder = Math.sin(Math.pow(u, 0.58) * Math.PI);
+      const rad = size * shellK * shoulder * petal * (0.92 + r1l * 0.12);
+      const yk = -0.46 + u * 1.5;
+      const o = [cx + Math.cos(ga) * rad, cy + yk * size * flat * shellK, cz + Math.sin(ga) * rad];
+      const out = unit([Math.cos(ga), 0.15 + (u - 0.4), Math.sin(ga)]);
+      const upK = Math.max(0, Math.min(1, out[1] * 0.5 + 0.45));
+      const lightK = 0.55 + 0.55 * upK * upK;
       const sa = unit(cross(out, [0.31, 0.9, 0.29])), sb = cross(out, sa);
-      const nLeaf = lod ? 4 : 5;
-      for (let q = 0; q < 6; q++) {
-        const r0l = lr(), r1l = lr(), r2l = lr(), r3l = lr();
-        if (q >= nLeaf) continue;
-        const a = q / nLeaf * 6.2832 + r0l * 0.9, ca = Math.cos(a), sn = Math.sin(a);
-        // Leaves stand out round the twig and hang a little; their faces look up and out.
-        const d = unit([sa[0] * ca + sb[0] * sn + out[0] * 0.3, sa[1] * ca + sb[1] * sn + out[1] * 0.3 - 0.3 - r1l * 0.35, sa[2] * ca + sb[2] * sn + out[2] * 0.3]);
-        const face = unit([out[0] * 0.7 + (r2l - 0.5) * 0.5, out[1] * 0.7 + 0.75, out[2] * 0.7 + (r3l - 0.5) * 0.5]);
-        const len = (0.026 + 0.014 * r2l) * big, tone = lightK * (0.82 + 0.5 * r3l), young = r1l > 0.86 ? 1 : 0;
-        leafAt([o[0] + d[0] * 0.004, o[1] + d[1] * 0.004, o[2] + d[2] * 0.004], d, face, out, len, len * (0.3 + 0.08 * r0l),
-          [green[0] * tone * (1 + 0.9 * young), green[1] * tone * (1 + 0.35 * young), green[2] * tone * 0.9], swayAt(dir[1]) + 0.012);
+      const nLeaf = 4;
+      for (let q = 0; q < nLeaf; q++) {
+        const a = q / nLeaf * 6.2832 + r0l * 0.8, ca = Math.cos(a), sn = Math.sin(a);
+        const d = unit([
+          sa[0] * ca + sb[0] * sn + out[0] * 0.35,
+          sa[1] * ca + sb[1] * sn + out[1] * 0.2 - 0.28 - r1l * 0.2,
+          sa[2] * ca + sb[2] * sn + out[2] * 0.35
+        ]);
+        const face = unit([out[0] * 0.65, out[1] * 0.5 + 0.8, out[2] * 0.65]);
+        const len = (0.028 + 0.012 * r2l) * big;
+        const young = r3l > 0.88 ? 1 : 0;
+        const col = [
+          tone[0] * lightK * (0.86 + 0.4 * r2l) * (1 + 0.85 * young),
+          tone[1] * lightK * (0.86 + 0.4 * r2l) * (1 + 0.3 * young),
+          tone[2] * lightK * 0.9
+        ];
+        leafAt(
+          [o[0] + d[0] * 0.004, o[1] + d[1] * 0.004, o[2] + d[2] * 0.004],
+          d, face, out, len, len * (0.32 + 0.08 * r0l), col, sway0 + upK * 0.026, false, (r3l - 0.5) * 0.35);
+      }
+    }
+    // Leaves that actually cut the sky: longer, dripping, on the shoulder of each pad.
+    // Level 1 keeps every other one so the outline does not round off as you step back.
+    const rim = seeded(sd * 91 + i * 17 + 3);
+    const nRim = form === 4 ? 6 : 9;
+    for (let u = 0; u < nRim; u++) {
+      const a0 = rim(), a1 = rim(), a2 = rim();
+      if (lod === 2 || (lod === 1 && (u % 2))) continue;
+      const a = ang + u / nRim * 6.2832 + (a0 - 0.5) * 0.4;
+      const petal = 1 - fam.contrast + fam.contrast * Math.pow(0.5 + 0.5 * Math.cos(a * fam.petals + ang), 1.4);
+      const rad = size * shellK * petal * (0.85 + a1 * 0.2);
+      const o = [cx + Math.cos(a) * rad, cy + size * flat * shellK * (0.02 - a2 * 0.08), cz + Math.sin(a) * rad];
+      // Round and emergent crowns stay up. Spreading, sparse and slender let the rim hang.
+      const hang = (form === 1 || form === 2) ? 0.04 : 0.22;
+      const d = unit([Math.cos(a) * 0.7, -hang - a2 * hang, Math.sin(a) * 0.7]);
+      const face = unit([Math.cos(a) * 0.3, 0.85, Math.sin(a) * 0.3]);
+      const len = (0.05 + 0.03 * a1) * (lod ? 1.7 : 1);
+      leafAt(o, d, face, face, len, len * 0.28, [
+        tone[0] * (0.7 + 0.35 * a0), tone[1] * (0.75 + 0.3 * a0), tone[2] * 0.85
+      ], sway0 + 0.02, true, (a2 - 0.5) * 0.5);
+    }
+    // Hung under the pad: what you see looking up into the crown. Near only.
+    if (lod === 0 && i > 0) {
+      const hangN = 4;
+      for (let u = 0; u < hangN; u++) {
+        const a = ang + u * 1.57 + 0.4;
+        const o = [cx + Math.cos(a) * size * 0.28, cy - size * flat * 0.22, cz + Math.sin(a) * size * 0.28];
+        const d = unit([Math.cos(a) * 0.25, -0.92, Math.sin(a) * 0.25]);
+        leafAt(o, d, [0, -1, 0], d, 0.045 + (u % 2) * 0.012, 0.014, [
+          tone[0] * 0.55, tone[1] * 0.62, tone[2] * 0.5
+        ], sway0 * 0.8, true, 0.15);
       }
     }
   }
-  // How far each part gives to the wind was written as if the model were the tree. It is one
-  // unit tall and stands 6 to 19 m, and what the wind moves is metres: a trunk barely, a
-  // bough a hand's breadth in a breeze. As written, nothing moved that could be seen.
+  // The model is one unit tall and the tree stands 6 to 19 m. Sway is in metres after this.
+  // Leaves share the pad's weight so a gust moves the crown as one mass; the shader's
+  // own flutter is only the tip.
   for (let i = 0; i < m.sway.length; i++) m.sway[i] *= 14;
   return m;
 }
@@ -1009,37 +1265,12 @@ function grassGeom() {
   }
   return { pos: new Float32Array(pos), uv: new Float32Array(uv), idx: new Uint16Array(idx) };
 }
-function birdGeom() {
-  const pos = [], wing = [], idx = [];
-  const add = (x, y, z, w) => { pos.push(x, y, z); wing.push(w); return pos.length / 3 - 1; };
-  // A spindle of a body with a head and a fanned tail, and wings in two parts: the arm out to
-  // the wrist, then the hand swept back to a point.
-  const nose = add(0, 0.01, 0.3, 0), back = add(0, 0.045, 0.02, 0), belly = add(0, -0.04, 0.04, 0), rump = add(0, 0.005, -0.2, 0);
-  const sl = add(-0.04, 0.0, 0.05, 0), sr = add(0.04, 0.0, 0.05, 0), beak = add(0, 0.0, 0.37, 0);
-  const tl = add(-0.06, 0.0, -0.36, 0), tr = add(0.06, 0.0, -0.36, 0);
-  idx.push(nose, sl, back, nose, back, sr, nose, belly, sl, nose, sr, belly, rump, back, sl, rump, sr, back, rump, sl, belly, rump, belly, sr, rump, tl, tr, beak, sl, sr);
-  for (const sg of [-1, 1]) {
-    const a0 = add(sg * 0.04, 0.02, 0.1, sg), a1 = add(sg * 0.3, 0.02, 0.13, sg), a2 = add(sg * 0.27, 0.012, -0.03, sg), a3 = add(sg * 0.04, 0.02, -0.07, sg);
-    const h1 = add(sg * 0.62, 0.0, -0.03, sg * 2), h2 = add(sg * 0.6, 0.0, -0.055, sg * 2);
-    idx.push(a0, a1, a2, a0, a2, a3, a1, h1, h2, a1, h2, a2);
-  }
-  return { pos: new Float32Array(pos), wing: new Float32Array(wing), idx: new Uint16Array(idx) };
-}
-
 function packInterleaved(pos, uv) {
   const n = pos.length / 3;
   const o = new Float32Array(n * 6);
   for (let i = 0; i < n; i++) {
     o[i * 6] = pos[i * 3]; o[i * 6 + 1] = pos[i * 3 + 1]; o[i * 6 + 2] = pos[i * 3 + 2];
     o[i * 6 + 4] = uv[i * 2]; o[i * 6 + 5] = uv[i * 2 + 1];
-  }
-  return o;
-}
-function packBird(pos, wing) {
-  const n = pos.length / 3;
-  const o = new Float32Array(n * 4);
-  for (let i = 0; i < n; i++) {
-    o[i * 4] = pos[i * 3]; o[i * 4 + 1] = pos[i * 3 + 1]; o[i * 4 + 2] = pos[i * 3 + 2]; o[i * 4 + 3] = wing[i];
   }
   return o;
 }
@@ -1164,6 +1395,9 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
       const mz = SC_OZ + (cz + 0.5) * SC_CW - ez;
       if (mx * mx + mz * mz > (pad + SC_CW) * (pad + SC_CW)) continue;
       const a0 = cellStart[cell], a1 = cellStart[cell + 1];
+      // Far stream rings start one LOD coarser. Distance cuts still run, so a plant
+      // that is close does not lose its fine mesh just because the cell is wide.
+      const cellBias = (this.stream && this.stream.enabled) ? this.stream.vegBias(SC_OX + (cx + 0.5) * SC_CW, SC_OZ + (cz + 0.5) * SC_CW) : 0;
       for (let k = a0; k < a1; k++) {
         const i = order[k];
         const o = i * ISTRIDE, p = this.protos[this.kind[i]];
@@ -1191,7 +1425,7 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
               ok = cw > -hr && Math.abs(cxi) < cw + hr * 2.8 && Math.abs(cv) < cw + hr * 2.8 && hr > dist * (coarser ? 0.03 : Math.max(0.0016, (this.pxw || 0) * 1.5));
             }
             if (ok) {
-              let lod = coarser;
+              let lod = coarser + (cellBias > 0 ? cellBias : 0);
               const bias = Math.min(28, r * 1.8), last = p.lods.length - 1, cuts = coarser ? p.far : p.cuts;
               // The view's cuts are set for a canvas some 1400 pixels high. On a smaller one a
               // blade is under a pixel sooner, and the level with wider blades takes over sooner.
@@ -1384,8 +1618,9 @@ function smooth01(e0, e1, x) {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
 }
-// The six places are the six numbered views: card n, key n and view n are one camera, in
-// this order. Each is somewhere worth going, and no two are the same kind of place.
+// The six places are viewpoints. The Places button jumps straight to one. Shift+1 through
+// Shift+6 does that same jump, so a walk can still be left for a view. Bare 1–7 are the
+// cinematic spaces below: they change the light and leave the camera where it is.
 const PLACES = [
   { title: 'Palm Beach', line: 'White sand, leaning palms and the wash running up the shore', swatch: 'linear-gradient(#bfe0ea, #37a9a0 48%, #efe3c4 52%)' },
   { title: 'Cliff Overlook', line: 'High on the bluff, with the cove and its shallows below', swatch: 'linear-gradient(#c9d8e2, #4f9f9c 46%, #2f5a3c 78%)' },
@@ -1393,6 +1628,19 @@ const PLACES = [
   { title: 'Lagoon Shallows', line: 'Knee-deep in clear water, with palms along the lagoon shore', swatch: 'linear-gradient(#d3ecee, #58c6b6 50%, #cfe3c4)' },
   { title: 'Offshore', line: 'Out on the swell, the island standing across the water', swatch: 'linear-gradient(#b7cbe4 40%, #2c7a50 41% 47%, #1d6f98 48%, #0f4a70)' },
   { title: 'Coral Garden', line: 'Under the surface, beside a coral head and its school', swatch: 'linear-gradient(#2a8fa2, #1f6f86 55%, #e8b7b0)' }
+];
+// Seven looks for the same island. Each is an hour and a weather row, eased in over a few
+// seconds and then held. spot is an optional Places index: Shift-click or a double-click
+// flies there while the light changes. The sea model and fly/walk are not touched.
+const wxRow = (id) => WEATHER[id].slice(1);
+const SPACES = [
+  { title: 'Golden Paradise', line: 'Late sun on the sand, the water gone to gold. Shift-click flies to the beach.', swatch: 'linear-gradient(#f6d7a2, #e08a3c 48%, #efe3c4)', hour: ENV_OPEN, wx: 'clear', v: wxRow('clear'), wet: 0, dur: 3.2, spot: 0 },
+  { title: 'Tropical Morning', line: 'Soft mist in the hollows and a young sun on the lagoon. Shift-click flies to the shallows.', swatch: 'linear-gradient(#f7e7c1, #7ec8c3 52%, #d7ead0)', hour: 8, wx: 'clouds', v: [0.14, 0, 0.38, 0.74, 2.8, 0.18, 0.24, 0.06, 0.3, 0.18], wet: 0.22, dur: 3.0, spot: 3 },
+  { title: 'Blue Paradise', line: 'High sun, a clear sky and turquoise shallows. Shift-click flies to the lagoon.', swatch: 'linear-gradient(#9fd4f2, #1f7eb8 46%, #3ec6b0)', hour: 12, wx: 'clear', v: wxRow('clear'), wet: 0, dur: 2.6, spot: 3 },
+  { title: 'Cloud Kingdom', line: 'Towers over the island and a soft light underneath. Shift-click flies above it.', swatch: 'linear-gradient(#f4f7fb, #8aa4c4 42%, #4d6d58)', hour: ENV_H0, wx: 'clouds', v: [0.55, 0, 0, 0.5, 6.5, 0.55, 0.7, 0.4, 1.05, 0.35], wet: 0, dur: 3.6, spot: 2 },
+  { title: 'Sunset Dream', line: 'The sun in the sea, colour still held in the air. Shift-click flies offshore.', swatch: 'linear-gradient(#f3a07a, #c45b78 44%, #2a3d6b)', hour: 18.02, wx: 'after', v: wxRow('after'), wet: 0.85, dur: 3.4, spot: 4 },
+  { title: 'Tropical Storm', line: 'A dark deck, heavy rain and a sea that stands up. Shift-click flies to the cliff.', swatch: 'linear-gradient(#6d7888, #2c3a48 50%, #1a2830)', hour: ENV_H0, wx: 'storm', v: wxRow('storm'), wet: 1, dur: 3.8, spot: 1 },
+  { title: 'Moonlit Island', line: 'The moon on the lagoon, the palms gone to silhouette. Shift-click flies to the beach.', swatch: 'linear-gradient(#1b2740, #3d5a7a 48%, #c5d2e4)', hour: 22.5, wx: 'clear', v: [0.05, 0, 0.16, 0.4, 2.0, 0.12, 0.1, 0, 0.1, 0.45], wet: 0.05, dur: 3.6, spot: 0 }
 ];
 // The water the island opens with and keeps.
 const WATER = { amp: 0.55, spd: 0.85, frq: 0.9, dir: 0.08, layers: 7, cx: 0.9, rough: 0.09, refl: 0.82, refr: 1.15, alpha: 1, depthK: 0.55, sun: 1.02, sky: 1.02, sunAng: -0.1, sim: 1, rip: 0.75, ripSpd: 0.95, disturb: 0.85, ripSize: 1.15, deep: [0.012, 0.08, 0.11], shal: [0.05, 0.26, 0.24], mood: [0.55, 0, 0.12, 0.65] };
@@ -1498,6 +1746,42 @@ function showCaption(p) {
 function markPlace(i) {
   document.querySelectorAll('#places button').forEach((b, n) => b.classList.toggle('on', n === i));
 }
+function markSpace(i) {
+  document.querySelectorAll('#spaces button').forEach((b, n) => b.classList.toggle('on', n === i));
+}
+function releaseSpace() {
+  envCineRelease();
+  markSpace(-1);
+}
+function spaceSpec(i) {
+  const s = SPACES[i];
+  const spec = { hour: s.hour, wx: s.wx, v: s.v, wet: s.wet, dur: s.dur, id: i, astroDay: 0, spaceId: 0 };
+  // Moonlit Island keeps its weather row and its ease, and lands on the hour tonight's
+  // real moon stands highest, once the island sun is below the twilight.
+  if (i === SPACES.length - 1 && typeof astroMoonlitHour === 'function') {
+    const pick = astroMoonlitHour();
+    spec.hour = pick.hour;
+    spec.astroDay = pick.day;
+    spec.spaceId = 7;
+  }
+  return spec;
+}
+// Ease into space i. cam flies to its optional start (smooth, unless snap). Number keys
+// pass cam false so a walk or a flight is not interrupted.
+function applySpace(i, opt) {
+  const s = SPACES[i];
+  if (!s) return;
+  const o = opt || {};
+  const same = env.spacePick === i && (env._cine || env.pin);
+  if (o.snap) envCineSnap(spaceSpec(i));
+  else if (!same) envCineBegin(spaceSpec(i));
+  markSpace(i);
+  if (o.cam && s.spot != null && spots[s.spot]) {
+    if (o.snap) goSpot(s.spot);
+    else goPlace(s.spot, true);
+  }
+  if (!o.quiet) showCaption(s);
+}
 // Go to place i, which is view i + 1. Flown there, the camera leaves from wherever it is,
 // rises over what lies between, and comes down onto the view exactly.
 function goPlace(i, animate) {
@@ -1581,15 +1865,16 @@ function bindStudio() {
     b.append(sw, name, line);
     b.addEventListener('click', () => {
       // Keep the Places strip open so another place can be picked without reopening.
-      document.body.classList.remove('hour-open', 'weather-open');
+      document.body.classList.remove('hour-open', 'weather-open', 'spaces-open');
       goPlace(id, false);
     });
     nav.append(b);
   });
   $('placebtn').addEventListener('click', () => {
-    document.body.classList.remove('hour-open', 'weather-open');
+    document.body.classList.remove('hour-open', 'weather-open', 'spaces-open');
     document.body.classList.toggle('places-open');
   });
+  bindSpaces();
   bindPickMenus();
   $('walkbtn').addEventListener('click', () => {
     trip = null;
@@ -1597,7 +1882,7 @@ function bindStudio() {
     setFlyMode(false);
     mode = 2;
     document.body.classList.add('playing', 'studio');
-    document.body.classList.remove('places-open', 'cinema');
+    document.body.classList.remove('places-open', 'spaces-open', 'cinema');
     showModeHint(false);
     tryLockPointer();
   });
@@ -1607,7 +1892,7 @@ function bindStudio() {
     orbit = false;
     mode = 2;
     document.body.classList.add('playing', 'studio');
-    document.body.classList.remove('places-open', 'cinema');
+    document.body.classList.remove('places-open', 'spaces-open', 'cinema');
     setFlyMode(true);
     showModeHint(true);
     tryLockPointer();
@@ -1620,7 +1905,7 @@ function bindStudio() {
   $('watchbtn').addEventListener('click', () => {
     const on = !document.body.classList.contains('cinema');
     document.body.classList.toggle('cinema', on);
-    document.body.classList.remove('places-open', 'cinema-peek');
+    document.body.classList.remove('places-open', 'spaces-open', 'cinema-peek');
     if (on && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
     if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
   });
@@ -1706,26 +1991,50 @@ function makeAudio() {
   burst.getChannelData(0).set(data.subarray(0, burst.length));
   const master = ac.createGain();
   master.gain.value = 0.85;
+  // Underwater muffler only — open above water. Category EQ lives on ocean/insect/bird buses.
   const under = ac.createBiquadFilter();
   under.type = 'lowpass'; under.frequency.value = 16000; under.Q.value = 0.2;
   const sfx = ac.createGain();
   sfx.gain.value = sfxOn ? 1 : 0;
   master.connect(sfx); sfx.connect(under); under.connect(ac.destination);
-  function bed(type, freq, q) {
+  // Category buses: gentle LPF + upper-mid peaking cuts (not one global muffler).
+  function catEq(lpHz, cutHz, cutDb, cutQ) {
+    const bus = ac.createGain(); bus.gain.value = 1;
+    const cut = ac.createBiquadFilter();
+    cut.type = 'peaking'; cut.frequency.value = cutHz; cut.Q.value = cutQ; cut.gain.value = cutDb;
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = lpHz; lp.Q.value = 0.35;
+    bus.connect(cut); cut.connect(lp); lp.connect(master);
+    return { bus: bus, cut: cut, lp: lp };
+  }
+  const oceanEq = catEq(9800, 2600, -3.5, 0.85);
+  // Insects: cut piercing upper-mids + gentle LPF (texture remains; not muted).
+  const insectEq = catEq(4800, 3100, -9.5, 1.25);
+  const insectBite = ac.createBiquadFilter();
+  insectBite.type = 'peaking'; insectBite.frequency.value = 4500; insectBite.Q.value = 1.05; insectBite.gain.value = -8.5;
+  insectEq.cut.disconnect(); insectEq.cut.connect(insectBite); insectBite.connect(insectEq.lp);
+  const birdEq = catEq(6000, 3800, -5.5, 1.05);
+  const airEq = catEq(7200, 2200, -2.5, 0.7);
+  function bed(type, freq, q, dest) {
     const src = ac.createBufferSource();
     src.buffer = buf; src.loop = true;
     const f = ac.createBiquadFilter();
     f.type = type; f.frequency.value = freq; f.Q.value = q;
     const g = ac.createGain(); g.gain.value = 0;
-    src.connect(f); f.connect(g); g.connect(master);
+    src.connect(f); f.connect(g); g.connect(dest || master);
     src.start(0, Math.random() * 20);
     return { gain: g, filter: f };
   }
-  const surf = bed('lowpass', 480, 0.55);
-  const hiss = bed('highpass', 2200, 0.45);
-  const wind = bed('bandpass', 260, 0.35);
-  const insects = bed('highpass', 3400, 0.7);
-  // Layered wind ambience — same shared gust as plants/ocean, filtered noise only.
+  // Ocean-first foundation: deep swell + mid body + soft foam (synth noise only).
+  const oceanPan = ac.createStereoPanner(); oceanPan.pan.value = 0;
+  oceanPan.connect(oceanEq.bus);
+  const swell = bed('lowpass', 120, 0.4, oceanEq.bus);
+  const surf = bed('lowpass', 340, 0.48, oceanEq.bus);
+  const body = bed('bandpass', 680, 0.6, oceanPan);
+  const hiss = bed('bandpass', 1400, 0.55, oceanPan);
+  const wind = bed('bandpass', 240, 0.35, airEq.bus);
+  const insects = bed('bandpass', 2600, 0.5, insectEq.bus);
+  // Subtle air — same shared gust as plants/ocean; sits under ocean in the mix.
   function windBed(type, freq, q) {
     const src = ac.createBufferSource();
     src.buffer = buf; src.loop = true;
@@ -1733,40 +2042,58 @@ function makeAudio() {
     f.type = type; f.frequency.value = freq; f.Q.value = q;
     const g = ac.createGain(); g.gain.value = 0;
     const p = ac.createStereoPanner(); p.pan.value = 0;
-    src.connect(f); f.connect(g); g.connect(p); p.connect(master);
+    src.connect(f); f.connect(g); g.connect(p); p.connect(airEq.bus);
     src.start(0, Math.random() * 20);
     return { gain: g, filter: f, pan: p };
   }
   const airFar = windBed('lowpass', 180, 0.4);
   const airCoast = windBed('bandpass', 520, 0.55);
-  const airPalm = windBed('bandpass', 1400, 0.7);
-  const airCanopy = windBed('bandpass', 900, 0.5);
-  const airGrass = windBed('highpass', 3200, 0.45);
+  const airPalm = windBed('bandpass', 1200, 0.6);
+  const airCanopy = windBed('bandpass', 820, 0.45);
+  const airGrass = windBed('bandpass', 2100, 0.4);
+  // Ocean stereo wash + filter breathe.
   const lfo = ac.createOscillator();
-  lfo.frequency.value = 0.047;
-  const lfoG = ac.createGain(); lfoG.gain.value = 160;
+  lfo.frequency.value = 0.034;
+  const lfoG = ac.createGain(); lfoG.gain.value = 100;
   lfo.connect(lfoG); lfoG.connect(surf.filter.frequency); lfo.start();
+  const lfoSwell = ac.createOscillator();
+  lfoSwell.frequency.value = 0.019;
+  const lfoSwellG = ac.createGain(); lfoSwellG.gain.value = 40;
+  lfoSwell.connect(lfoSwellG); lfoSwellG.connect(swell.filter.frequency); lfoSwell.start();
+  const lfoBody = ac.createOscillator();
+  lfoBody.frequency.value = 0.048;
+  const lfoBodyG = ac.createGain(); lfoBodyG.gain.value = 160;
+  lfoBody.connect(lfoBodyG); lfoBodyG.connect(body.filter.frequency); lfoBody.start();
   const lfo2 = ac.createOscillator();
   lfo2.frequency.value = 0.013;
-  const lfo2G = ac.createGain(); lfo2G.gain.value = 90;
+  const lfo2G = ac.createGain(); lfo2G.gain.value = 70;
   lfo2.connect(lfo2G); lfo2G.connect(wind.filter.frequency); lfo2.start();
   const panLfo = ac.createOscillator(); panLfo.frequency.value = 0.021;
-  const panAmt = ac.createGain(); panAmt.gain.value = 0.4;
+  const panAmt = ac.createGain(); panAmt.gain.value = 0.35;
   panLfo.connect(panAmt); panAmt.connect(airCoast.pan.pan); panLfo.start();
   const panLfo2 = ac.createOscillator(); panLfo2.frequency.value = 0.017;
-  const panAmt2 = ac.createGain(); panAmt2.gain.value = 0.28;
+  const panAmt2 = ac.createGain(); panAmt2.gain.value = 0.25;
   panLfo2.connect(panAmt2); panAmt2.connect(airPalm.pan.pan); panLfo2.start();
+  const seaPanLfo = ac.createOscillator(); seaPanLfo.frequency.value = 0.027;
+  const seaPanAmt = ac.createGain(); seaPanAmt.gain.value = 0.32;
+  seaPanLfo.connect(seaPanAmt); seaPanAmt.connect(oceanPan.pan); seaPanLfo.start();
   // Underwater rush (Abyssal): same noise bed, bandpass that opens with swim speed.
-  const rush = bed('bandpass', 280, 0.55);
+  const rush = bed('bandpass', 280, 0.55, master);
   const api = {
     ac: ac, master: master, under: under, sfx: sfx,
-    surf: surf.gain, hiss: hiss.gain, wind: wind.gain, insects: insects.gain,
+    oceanEq: oceanEq, insectEq: insectEq, birdEq: birdEq, airCat: airEq,
+    swell: swell.gain, surf: surf.gain, body: body.gain, hiss: hiss.gain,
+    wind: wind.gain, insects: insects.gain,
     airFar: airFar.gain, airCoast: airCoast.gain, airPalm: airPalm.gain,
     airCanopy: airCanopy.gain, airGrass: airGrass.gain,
     airCoastF: airCoast.filter, airPalmF: airPalm.filter, airCanopyF: airCanopy.filter,
     rush: rush.gain, rushF: rush.filter,
-    shoreAmt: 0.4, underAmt: 0, alive: true, hush: 1, birds: 1, _gustPeak: 0, _tBub: 0
+    shoreAmt: 0.4, underAmt: 0, deepAmt: 0, wreckNear: 0, alive: true, hush: 1, birds: 1, _gustPeak: 0, _tBub: 0, _underGoal: 16000
   };
+  // Deep pressure rumble — low filtered noise that rises with immersion depth.
+  const pressure = bed('lowpass', 90, 0.7, master);
+  api.pressure = pressure.gain;
+  api.pressureF = pressure.filter;
   // ---- What lives in the air, by ear. Nothing here is a loop: each singer keeps its own
   // time, and how many are singing follows the hour, the rain, the wind and the trees.
   // A rasp: a band of noise beaten at a steady rate, which is how a cicada's tymbal and a
@@ -1783,39 +2110,40 @@ function makeAudio() {
     src.start(0, Math.random() * 20); o.start();
     return g.gain;
   };
-  const bus = () => { const g = ac.createGain(); g.gain.value = 0; g.connect(master); return g; };
+  // Insects = subtle texture through insectEq (upper-mid cut + LPF), not muted.
+  const bus = () => { const g = ac.createGain(); g.gain.value = 0; g.connect(insectEq.bus); return g; };
   const cicadas = bus(), crickets = bus(), chorus = bus();
   for (let i = 0; i < 4; i++) {
-    // Each cicada sings in bouts of its own length, swelling in and dying away.
-    const g = rasp(4300 + Math.random() * 3200, 14, 110 + Math.random() * 120, 0.5, cicadas);
+    // Soft tymbal texture — low Q so the band is air, not a ringing metal hit (via insectEq).
+    const g = rasp(3000 + Math.random() * 1400, 3.2, 85 + Math.random() * 80, 0.35, cicadas);
     const bout = () => {
       if (!api.alive) return;
-      const t = ac.currentTime, len = 4 + Math.random() * 10, peak = 0.4 + Math.random() * 0.6;
+      const t = ac.currentTime, len = 5 + Math.random() * 11, peak = 0.22 + Math.random() * 0.32;
       g.cancelScheduledValues(t); g.setValueAtTime(0.0001, t);
-      g.exponentialRampToValueAtTime(peak, t + 1.5 + Math.random() * 2);
-      g.setValueAtTime(peak, t + len); g.exponentialRampToValueAtTime(0.0001, t + len + 2.5);
-      setTimeout(bout, (len + 3 + Math.random() * 9) * 1000);
+      g.exponentialRampToValueAtTime(peak, t + 2 + Math.random() * 2.5);
+      g.setValueAtTime(peak, t + len); g.exponentialRampToValueAtTime(0.0001, t + len + 3);
+      setTimeout(bout, (len + 5 + Math.random() * 12) * 1000);
     };
-    setTimeout(bout, Math.random() * 8000);
+    setTimeout(bout, Math.random() * 12000);
   }
-  for (let i = 0; i < 6; i++) {
-    // Each cricket has its own pitch, its own number of pulses to a chirp and its own pace,
-    // and now and then stops to listen.
+  for (let i = 0; i < 5; i++) {
+    // Soft cricket texture: lower pitch, gentler envelope, longer gaps — no metallic tick.
     const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
-    o.frequency.value = 4100 + Math.random() * 1300; g.gain.value = 0; p.pan.value = Math.random() * 1.8 - 0.9;
+    o.type = 'sine';
+    o.frequency.value = 2800 + Math.random() * 900; g.gain.value = 0; p.pan.value = Math.random() * 1.8 - 0.9;
     o.connect(g); g.connect(p); p.connect(crickets); o.start();
-    const loud = 0.15 + Math.random() * 0.5, n = 2 + ((Math.random() * 3) | 0), gap = 0.45 + Math.random() * 0.9;
+    const loud = 0.06 + Math.random() * 0.18, n = 2 + ((Math.random() * 2) | 0), gap = 1.1 + Math.random() * 1.8;
     const call = () => {
       if (!api.alive) return;
       const t = ac.currentTime + 0.02;
-      for (let k = 0; k < n; k++) { const a = t + k * 0.034; g.gain.setValueAtTime(0, a); g.gain.linearRampToValueAtTime(loud, a + 0.006); g.gain.linearRampToValueAtTime(0, a + 0.02); }
-      setTimeout(call, (gap * (0.9 + Math.random() * 0.25) + (Math.random() < 0.06 ? 2 + Math.random() * 6 : 0)) * 1000);
+      for (let k = 0; k < n; k++) { const a = t + k * 0.045; g.gain.setValueAtTime(0, a); g.gain.linearRampToValueAtTime(loud, a + 0.012); g.gain.linearRampToValueAtTime(0, a + 0.035); }
+      setTimeout(call, (gap * (0.95 + Math.random() * 0.35) + (Math.random() < 0.14 ? 3 + Math.random() * 8 : 0)) * 1000);
     };
-    setTimeout(call, Math.random() * 3000);
+    setTimeout(call, Math.random() * 4500);
   }
-  // The far chorus after dark: thousands of small singers heard as one shimmer.
-  rasp(6200, 5, 38, 0.6, chorus).value = 1;
-  const rain = bed('highpass', 1500, 0.3), patter = bed('bandpass', 420, 0.5), rustle = bed('highpass', 2800, 0.3);
+  // Far night chorus: soft shimmer, not a high resonant scream.
+  rasp(4200, 2.4, 28, 0.4, chorus).value = 0.7;
+  const rain = bed('bandpass', 1600, 0.35, airEq.bus), patter = bed('bandpass', 420, 0.5, airEq.bus), rustle = bed('bandpass', 2400, 0.35, airEq.bus);
   const hum = (type, f) => {
     const o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
     o.type = type; o.frequency.value = f; lp.type = 'lowpass'; lp.frequency.value = f * 5; g.gain.value = 0;
@@ -1833,18 +2161,19 @@ function makeAudio() {
     const g2 = Math.min(3, (s.gust * s.gust) / 25);
     const breeze = Math.min(1, s.gust / 6);
     const blow = Math.min(1, s.gust / 11);
-    cicadas.gain.value = m * 0.05 * s.heat * dry * (0.25 + 0.75 * s.wood) * up * api.hush * (1 - 0.4 * blow);
-    crickets.gain.value = m * 0.045 * s.dark * dry * (0.4 + 0.6 * s.wood) * up * (1 - 0.5 * blow);
-    chorus.gain.value = m * 0.03 * Math.max(s.dark, s.low * 0.5) * dry * up;
-    rain.gain.value = m * 0.1 * s.rain * (s.under ? 0.15 : 1);
-    patter.gain.value = m * 0.09 * s.rain * s.rain * (s.under ? 0.3 : 1);
-    rustle.gain.value = m * 0.028 * g2 * (0.25 + 0.75 * s.wood) * up;
-    // Shared-wind ambience layers.
-    ease(airFar.gain, m * 0.035 * (0.2 + 0.8 * breeze) * up);
-    ease(airCoast.gain, m * 0.055 * blow * (0.35 + 0.65 * (s.shore || 0)) * up);
-    ease(airPalm.gain, m * 0.04 * g2 * (0.2 + 0.8 * (s.palm || 0)) * up);
-    ease(airCanopy.gain, m * 0.045 * g2 * (0.15 + 0.85 * s.wood) * up);
-    ease(airGrass.gain, m * 0.022 * breeze * (1 - 0.6 * s.wood) * (1 - (s.shore || 0) * 0.3) * up);
+    // Hierarchy: ocean carries the bed; insects stay a quiet texture (no metal ring).
+    cicadas.gain.value = m * 0.032 * s.heat * dry * (0.25 + 0.75 * s.wood) * up * api.hush * (1 - 0.4 * blow);
+    crickets.gain.value = m * 0.024 * s.dark * dry * (0.4 + 0.6 * s.wood) * up * (1 - 0.5 * blow);
+    chorus.gain.value = m * 0.016 * Math.max(s.dark, s.low * 0.5) * dry * up;
+    rain.gain.value = m * 0.085 * s.rain * (s.under ? 0.15 : 1);
+    patter.gain.value = m * 0.075 * s.rain * s.rain * (s.under ? 0.3 : 1);
+    rustle.gain.value = m * 0.02 * g2 * (0.25 + 0.75 * s.wood) * up;
+    // Subtle air under the ocean bed.
+    ease(airFar.gain, m * 0.022 * (0.2 + 0.8 * breeze) * up);
+    ease(airCoast.gain, m * 0.032 * blow * (0.35 + 0.65 * (s.shore || 0)) * up);
+    ease(airPalm.gain, m * 0.026 * g2 * (0.2 + 0.8 * (s.palm || 0)) * up);
+    ease(airCanopy.gain, m * 0.028 * g2 * (0.15 + 0.85 * s.wood) * up);
+    ease(airGrass.gain, m * 0.014 * breeze * (1 - 0.6 * s.wood) * (1 - (s.shore || 0) * 0.3) * up);
     // Gust whoosh: open filters briefly when a strong cell arrives.
     if (s.gust > api._gustPeak + 1.8 && s.gust > 7) {
       api._gustPeak = s.gust;
@@ -1868,8 +2197,9 @@ function makeAudio() {
     if (!api.alive) return;
     if (!muted && wetness > 0.03 && Math.random() < 0.3 + woods) {
       const t = ac.currentTime, src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(), p = ac.createStereoPanner();
-      src.buffer = burst; f.type = 'bandpass'; f.frequency.value = 2500 + Math.random() * 4000; f.Q.value = 6; p.pan.value = Math.random() * 2 - 1;
-      g.gain.setValueAtTime(0.02 + Math.random() * 0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03 + Math.random() * 0.04);
+      // Soft leaf drip — low Q so it is water, not a ringing metal ping.
+      src.buffer = burst; f.type = 'bandpass'; f.frequency.value = 1800 + Math.random() * 2200; f.Q.value = 2.2; p.pan.value = Math.random() * 2 - 1;
+      g.gain.setValueAtTime(0.012 + Math.random() * 0.03, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04 + Math.random() * 0.05);
       src.connect(f); f.connect(g); g.connect(p); p.connect(master);
       src.start(t, Math.random()); src.stop(t + 0.1);
     }
@@ -1877,72 +2207,103 @@ function makeAudio() {
   };
   drip();
   // Underwater bubble bursts (Abyssal): short rising blips while submerged.
+  // Deeper water uses softer, lower blips; wreck proximity adds a wood groan cue.
   const bubble = () => {
     if (!api.alive) return;
     if (!muted && api.underAmt > 0.4 && Math.random() < 0.45) {
       const t = ac.currentTime;
-      const n = 1 + ((Math.random() * 5) | 0);
+      const deep = Math.min(1, api.deepAmt || 0);
+      const n = 1 + ((Math.random() * (5 - deep * 2)) | 0);
       for (let i = 0; i < n; i++) {
         const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
-        const f0 = 480 + Math.random() * 900, len = 0.04 + Math.random() * 0.07;
+        const f0 = (320 + Math.random() * 700) * (1 - 0.45 * deep), len = 0.04 + Math.random() * 0.08;
         const a = t + i * (0.03 + Math.random() * 0.05);
-        o.type = 'sine'; o.frequency.setValueAtTime(f0, a); o.frequency.exponentialRampToValueAtTime(f0 * 1.7, a + len);
-        g.gain.setValueAtTime(0.0001, a); g.gain.exponentialRampToValueAtTime(0.012 + Math.random() * 0.02, a + 0.01);
+        o.type = 'sine'; o.frequency.setValueAtTime(f0, a); o.frequency.exponentialRampToValueAtTime(f0 * (1.4 + 0.4 * (1 - deep)), a + len);
+        g.gain.setValueAtTime(0.0001, a); g.gain.exponentialRampToValueAtTime((0.01 + Math.random() * 0.018) * (1 - 0.35 * deep), a + 0.01);
         g.gain.exponentialRampToValueAtTime(0.0001, a + len);
         p.pan.value = Math.random() * 1.6 - 0.8;
         o.connect(g); g.connect(p); p.connect(sfx); o.start(a); o.stop(a + len + 0.02);
       }
     }
+    // Occasional hull creak when near a colonised wreck underwater.
+    if (!muted && api.underAmt > 0.5 && api.wreckNear > 0.35 && Math.random() < 0.12 * api.wreckNear) {
+      const t = ac.currentTime;
+      const o = ac.createOscillator(), g = ac.createGain(), f = ac.createBiquadFilter();
+      o.type = 'triangle';
+      const f0 = 55 + Math.random() * 40;
+      o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * 0.7, t + 0.35);
+      f.type = 'bandpass'; f.frequency.value = f0 * 1.4; f.Q.value = 3.5;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.018 * api.wreckNear, t + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+      o.connect(f); f.connect(g); g.connect(sfx); o.start(t); o.stop(t + 0.45);
+    }
     setTimeout(bubble, 180 + Math.random() * 520 / Math.max(api.underAmt, 0.15));
   };
   bubble();
-  // Birds. A singer keeps a phrase of its own: the same notes in the same order every time,
-  // a little faster or slower, from the same place, the way a bird repeats its song.
+  // Birds: category EQ from ambient mix; phrases spatial (pan + distance) from living agents.
   const note = (t, f0, f1, len, peak, pan, type, trill) => {
     const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
     o.type = type; p.pan.value = pan;
     o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + len);
     if (trill) {
       const v = ac.createOscillator(), vg = ac.createGain();
-      v.frequency.value = trill; vg.gain.value = f0 * 0.09; v.connect(vg); vg.connect(o.frequency); v.start(t); v.stop(t + len + 0.05);
+      v.frequency.value = trill; vg.gain.value = f0 * 0.055; v.connect(vg); vg.connect(o.frequency); v.start(t); v.stop(t + len + 0.05);
     }
-    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + Math.min(0.03, len * 0.3));
-    g.gain.setValueAtTime(peak, t + len * 0.55); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
-    o.connect(g); g.connect(p); p.connect(master); o.start(t); o.stop(t + len + 0.05);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + Math.min(0.04, len * 0.35));
+    g.gain.setValueAtTime(peak, t + len * 0.5); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    o.connect(g); g.connect(p); p.connect(birdEq.bus); o.start(t); o.stop(t + len + 0.05);
   };
   const R = (a, b) => a + Math.random() * (b - a);
-  // Tropical song only, all synthesised (no samples): warblers, trills, chirp cascades.
-  // No dove/owl coos, no gull — every phrase stays above ~2.4 kHz so nothing reads as a hoot.
-  const singers = [0, 0, 0, 1, 1, 1, 2, 2].map((kind) => {
+  // Sparse tropical song, synthesised only: warblers, trills, chirp cascades; varied distance.
+  const singers = [0, 0, 1, 1, 2].map((kind) => {
     const ph = [];
+    const dist = R(0.2, 1);
     if (kind === 0) {
-      // A warbler: a run of short slurred notes.
-      for (let k = 0, t = 0, n = 4 + ((Math.random() * 4) | 0); k < n; k++) { const f = R(2600, 5600), len = R(0.05, 0.12); ph.push([t, f, f * R(0.75, 1.35), len, 0]); t += len + R(0.03, 0.08); }
+      for (let k = 0, t = 0, n = 3 + ((Math.random() * 3) | 0); k < n; k++) { const f = R(2400, 4000), len = R(0.06, 0.13); ph.push([t, f, f * R(0.82, 1.22), len, 0]); t += len + R(0.05, 0.12); }
     } else if (kind === 1) {
-      // A bright trill: two lead-ins then a held chatter — tropical, not a hoot.
-      const f = R(3200, 4800);
-      ph.push([0, f * 0.85, f * 0.95, 0.06, 0], [0.1, f * 0.95, f, 0.06, 0], [0.22, f, f * R(0.97, 1.03), R(0.45, 0.95), R(16, 26)]);
+      const f = R(2700, 3800);
+      ph.push([0, f * 0.88, f * 0.96, 0.07, 0], [0.12, f * 0.96, f, 0.07, 0], [0.26, f, f * R(0.98, 1.02), R(0.35, 0.75), R(11, 18)]);
     } else {
-      // A chirp cascade: quick descending ticks, like a small tropical passerine.
-      for (let k = 0, t = 0, f = R(3800, 6200), n = 5 + ((Math.random() * 4) | 0); k < n; k++) {
-        const len = R(0.035, 0.07);
-        ph.push([t, f, f * R(0.82, 0.94), len, 0]);
-        f *= R(0.88, 0.97); t += len + R(0.02, 0.05);
+      for (let k = 0, t = 0, f = R(3000, 4500), n = 4 + ((Math.random() * 3) | 0); k < n; k++) {
+        const len = R(0.04, 0.075);
+        ph.push([t, f, f * R(0.84, 0.95), len, 0]);
+        f *= R(0.9, 0.97); t += len + R(0.03, 0.07);
       }
     }
-    return { kind: kind, ph: ph, pan: R(-0.85, 0.85), far: R(0.35, 1) };
+    const pan = (dist > 0.55 ? R(-0.9, 0.9) : R(-0.35, 0.35));
+    return { kind: kind, ph: ph, pan: pan, far: dist, x: 0, z: 0 };
   });
+  api._birdEar = { x: 0, z: 0, yaw: 0 };
+  api.birdListen = (x, z, yaw) => { api._birdEar.x = x; api._birdEar.z = z; api._birdEar.yaw = yaw; };
+  function birdSpatialize(bx, bz) {
+    const e = api._birdEar;
+    const dx = bx - e.x, dz = bz - e.z, dist = Math.hypot(dx, dz);
+    const localX = dx * Math.cos(-e.yaw) - dz * Math.sin(-e.yaw);
+    const pan = Math.max(-1, Math.min(1, localX / Math.max(8, dist * 0.35)));
+    const far = Math.pow(Math.max(0.12, 1 - dist / 55), 1.4);
+    return { pan, far, dist };
+  }
   function sing(b, again) {
     if (!api.alive || muted) return;
-    const t = ac.currentTime + 0.03, pace = R(0.92, 1.1), tune = R(0.985, 1.015);
-    const peak = [0.028, 0.02, 0.022][b.kind] * b.far;
-    for (const n of b.ph) note(t + n[0] * pace, n[1] * tune, n[2] * tune, n[3] * pace, peak, b.pan, 'sine', n[4]);
-    if (b.far > 0.7) api.hush = 0.25;
+    const t = ac.currentTime + 0.03, pace = R(0.94, 1.08), tune = R(0.988, 1.012);
+    const spat = (b.x || b.z) ? birdSpatialize(b.x, b.z) : { pan: b.pan, far: b.far, dist: 20 };
+    if (spat.dist > 52) return;
+    const peak = [0.013, 0.01, 0.011][b.kind] * (0.35 + 0.65 * spat.far);
+    for (const n of b.ph) note(t + n[0] * pace, n[1] * tune, n[2] * tune, n[3] * pace, peak, spat.pan, 'sine', n[4]);
+    if (spat.far > 0.55 && spat.dist < 18) api.hush = 0.45;
     const end = (b.ph[b.ph.length - 1][0] + 0.6) * pace;
-    // It sings its phrase a few times over, and sometimes another of its kind answers.
-    if (again > 0) setTimeout(() => sing(b, again - 1), (end + R(0.7, 2.2)) * 1000);
-    else if (Math.random() < 0.35) { const o = singers.filter((x) => x.kind === b.kind && x !== b)[0]; if (o) setTimeout(() => sing(o, 0), (end + R(0.6, 2)) * 1000); }
+    if (again > 0 && Math.random() < 0.55) setTimeout(() => sing(b, again - 1), (end + R(1.4, 3.5)) * 1000);
+    else if (Math.random() < 0.22) { const o = singers.filter((x) => x.kind === b.kind && x !== b)[0]; if (o) setTimeout(() => sing(o, 0), (end + R(1.2, 3.2)) * 1000); }
   }
+  // Prefer a perched/forest agent as the singer when the ecosystem exposes one.
+  api.singFrom = (agents) => {
+    if (!agents || !agents.length) return false;
+    const a = agents[(Math.random() * agents.length) | 0];
+    const b = singers[(Math.random() * singers.length) | 0];
+    b.x = a.x; b.z = a.z; b.far = 1;
+    sing(b, (Math.random() * 2) | 0);
+    return true;
+  };
   // Thunder: a crack when the stroke was close, then the low roll of the rest of the channel
   // arriving from further and further off. Distance takes the top off it and stretches it out.
   api.thunder = (d) => {
@@ -1978,29 +2339,30 @@ function makeAudio() {
     if (!api.alive || muted) return;
     const t = ac.currentTime;
     const amt = Math.max(api.shoreAmt || 0, 0.05);
-    // Low boom of the collapsing body.
+    // Low boom of the collapsing body — richer low, less mid bite.
     const src = ac.createBufferSource(); src.buffer = burst;
     const f = ac.createBiquadFilter();
-    f.type = 'lowpass'; f.frequency.setValueAtTime(900 + amt * 700, t);
-    f.frequency.exponentialRampToValueAtTime(180, t + 0.55 + Math.random() * 0.35);
+    f.type = 'lowpass'; f.frequency.setValueAtTime(520 + amt * 420, t);
+    f.frequency.exponentialRampToValueAtTime(120, t + 0.7 + Math.random() * 0.4);
     const g = ac.createGain();
-    const loud = 0.035 + amt * 0.14;
+    const loud = 0.04 + amt * 0.16;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(loud, t + 0.03 + Math.random() * 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.7 + Math.random() * 0.55);
-    src.connect(f); f.connect(g); g.connect(master);
-    src.start(t); src.stop(t + 1.6);
-    // Whitewater hiss that follows the boom.
+    g.gain.exponentialRampToValueAtTime(loud, t + 0.04 + Math.random() * 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.85 + Math.random() * 0.6);
+    src.connect(f); f.connect(g); g.connect(oceanEq.bus);
+    src.start(t); src.stop(t + 1.8);
+    // Soft foam wash that follows the boom (bandpassed, not harsh white).
     const hs = ac.createBufferSource(); hs.buffer = burst;
     const hf = ac.createBiquadFilter(); hf.type = 'bandpass';
-    hf.frequency.setValueAtTime(1800 + Math.random() * 1400, t);
-    hf.Q.value = 0.7;
+    hf.frequency.setValueAtTime(1100 + Math.random() * 700, t);
+    hf.Q.value = 0.55;
+    const hl = ac.createBiquadFilter(); hl.type = 'lowpass'; hl.frequency.value = 3400; hl.Q.value = 0.3;
     const hg = ac.createGain();
-    hg.gain.setValueAtTime(0.0001, t + 0.04);
-    hg.gain.exponentialRampToValueAtTime(0.02 + amt * 0.06, t + 0.12);
-    hg.gain.exponentialRampToValueAtTime(0.0001, t + 0.9 + Math.random() * 0.5);
-    hs.connect(hf); hf.connect(hg); hg.connect(master);
-    hs.start(t + 0.04); hs.stop(t + 1.5);
+    hg.gain.setValueAtTime(0.0001, t + 0.05);
+    hg.gain.exponentialRampToValueAtTime(0.014 + amt * 0.045, t + 0.16);
+    hg.gain.exponentialRampToValueAtTime(0.0001, t + 1.1 + Math.random() * 0.55);
+    hs.connect(hf); hf.connect(hl); hl.connect(hg); hg.connect(oceanEq.bus);
+    hs.start(t + 0.05); hs.stop(t + 1.7);
   }
   function later(fn, lo, hi) {
     const wait = (lo + Math.random() * (hi - lo)) * 1000;
@@ -2011,15 +2373,19 @@ function makeAudio() {
     }, wait);
   }
   later(() => {
-    // Birds sing most at first light, less through the day, and not in rain or at night.
-    if (Math.random() > api.birds) return;
-    sing(singers[(Math.random() * singers.length) | 0], (Math.random() * 3) | 0);
-  }, 3.5, 11);
-  // Breaker crashes denser near shore; still irregular timing.
+    // Sparse tropical calls with long natural pauses; strongest at dawn.
+    if (Math.random() > api.birds * 0.65) return;
+    if (api._singLiving && api._singLiving()) return;
+    const b = singers[(Math.random() * singers.length) | 0];
+    b.x = api._birdEar.x + R(-25, 25); b.z = api._birdEar.z + R(-25, 25);
+    sing(b, Math.random() < 0.35 ? 1 : 0);
+  }, 7, 18);
+  // Soft breaker accents — beds carry the ocean; crashes stay occasional.
   later(() => {
-    if ((api.shoreAmt || 0) < 0.12 && Math.random() > 0.35) return;
+    if ((api.shoreAmt || 0) < 0.18 && Math.random() > 0.28) return;
+    if ((api.shoreAmt || 0) < 0.45 && Math.random() > 0.55) return;
     crash();
-  }, 1.6, 5.5);
+  }, 3.2, 8.5);
   try {
     score = createScore(ac, under);
     score.start();
@@ -2066,9 +2432,48 @@ const walkOut = [0, 0];
 // The height the eye came to stand at on the last step, before any easing toward it.
 let walkEye = 1e9;
 
+// Spaces strip: keys 1–7 and the Spaces button. Built with the other pickers.
+function bindSpaces() {
+  const nav = $('spaces');
+  if (!nav || nav.dataset.ready) return;
+  nav.dataset.ready = '1';
+  let lastId = -1, lastAt = 0;
+  SPACES.forEach((p, id) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'card';
+    const sw = document.createElement('i');
+    sw.style.background = p.swatch;
+    sw.textContent = String(id + 1);
+    const name = document.createElement('b');
+    name.textContent = p.title;
+    const line = document.createElement('span');
+    line.textContent = p.line;
+    b.append(sw, name, line);
+    b.addEventListener('click', (e) => {
+      document.body.classList.remove('hour-open', 'weather-open', 'places-open');
+      document.body.classList.add('spaces-open');
+      const now = performance.now();
+      const again = lastId === id && now - lastAt < 420;
+      lastId = id;
+      lastAt = now;
+      // A second click, or Shift, also takes the optional camera start. The first click
+      // only changes the light, so browsing the strip does not pick you up.
+      applySpace(id, { cam: e.shiftKey || again });
+    });
+    nav.append(b);
+  });
+  markSpace(env.spacePick);
+  const btn = $('spacebtn');
+  if (btn) btn.addEventListener('click', () => {
+    document.body.classList.remove('hour-open', 'weather-open', 'places-open');
+    document.body.classList.toggle('spaces-open');
+  });
+}
 // T / Hour and R / Weather open pickers. Shift+T / Shift+R still step for capture workflows.
-function stepHour(back) { envNextStop(back); if (!qstr.has('shot')) env.run = true; showCaption(envLabel()); paintPickMenus(); }
+function stepHour(back) { releaseSpace(); envNextStop(back); if (!qstr.has('shot')) env.run = true; showCaption(envLabel()); paintPickMenus(); }
 function stepWeather(back) {
+  releaseSpace();
   const names = Object.keys(WEATHER), i = names.indexOf(env.wx) + (back ? -1 : 1);
   env.auto = i < 0 || i >= names.length;
   envSet(names[(i + names.length) % names.length], false);
@@ -2077,15 +2482,18 @@ function stepWeather(back) {
   paintPickMenus();
 }
 function pickHour(stopH) {
+  releaseSpace();
   env.goal = stopH;
+  env.astroDay = 0;
   if (!qstr.has('shot')) env.run = true;
   // Leave the Hour menu open next to the chrome so another stop can be chosen.
-  document.body.classList.remove('weather-open', 'places-open');
+  document.body.classList.remove('weather-open', 'places-open', 'spaces-open');
   document.body.classList.add('hour-open');
   showCaption(envLabel());
   paintPickMenus();
 }
 function pickWeather(wx) {
+  releaseSpace();
   if (wx === 'auto') {
     env.auto = true;
     env.hold = 240;
@@ -2095,7 +2503,7 @@ function pickWeather(wx) {
     env.hold = 1e9;
   }
   // Leave the Weather menu open next to the chrome so another kind can be chosen.
-  document.body.classList.remove('hour-open', 'places-open');
+  document.body.classList.remove('hour-open', 'places-open', 'spaces-open');
   document.body.classList.add('weather-open');
   showCaption(envLabel());
   paintPickMenus();
@@ -2113,7 +2521,8 @@ function paintPickMenus() {
   if (wxMenu) {
     wxMenu.querySelectorAll('button[data-wx]').forEach((b) => {
       const id = b.dataset.wx;
-      b.classList.toggle('on', id === 'auto' ? env.auto : (!env.auto && id === env.wx));
+      const held = !!(env.pin || env._cine);
+      b.classList.toggle('on', !held && (id === 'auto' ? env.auto : (!env.auto && id === env.wx)));
     });
   }
 }
@@ -2151,7 +2560,7 @@ function bindPickMenus() {
   if (hourBtn) {
     hourBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      document.body.classList.remove('places-open', 'weather-open');
+      document.body.classList.remove('places-open', 'spaces-open', 'weather-open');
       document.body.classList.toggle('hour-open');
       paintPickMenus();
     });
@@ -2159,7 +2568,7 @@ function bindPickMenus() {
   if (skyBtn) {
     skyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      document.body.classList.remove('places-open', 'hour-open');
+      document.body.classList.remove('places-open', 'spaces-open', 'hour-open');
       document.body.classList.toggle('weather-open');
       paintPickMenus();
     });
@@ -2389,9 +2798,10 @@ function bootKeys() {
         return;
       }
       if (document.body.classList.contains('places-open')
+        || document.body.classList.contains('spaces-open')
         || document.body.classList.contains('hour-open')
         || document.body.classList.contains('weather-open')) {
-        document.body.classList.remove('places-open', 'hour-open', 'weather-open');
+        document.body.classList.remove('places-open', 'spaces-open', 'hour-open', 'weather-open');
         return;
       }
       // First Esc releases look without resetting the camera; second opens the menu.
@@ -2405,7 +2815,7 @@ function bootKeys() {
     if (e.code === 'KeyT' && mode > 0) {
       if (e.shiftKey) stepHour(true);
       else {
-        document.body.classList.remove('places-open', 'weather-open');
+        document.body.classList.remove('places-open', 'spaces-open', 'weather-open');
         document.body.classList.toggle('hour-open');
         paintPickMenus();
       }
@@ -2413,12 +2823,23 @@ function bootKeys() {
     if (e.code === 'KeyR' && mode > 0) {
       if (e.shiftKey) stepWeather(true);
       else {
-        document.body.classList.remove('places-open', 'hour-open');
+        document.body.classList.remove('places-open', 'spaces-open', 'hour-open');
         document.body.classList.toggle('weather-open');
         paintPickMenus();
       }
     }
-    if (e.code >= 'Digit1' && e.code <= 'Digit6' && mode === 2) goPlace(e.code.charCodeAt(5) - 49, false);
+    // 1–7 ease a cinematic space and leave the camera. Shift+1–6 still jumps to a place.
+    // 7 is Moonlit Island: the ease lands on tonight's real moon and holds. It does not aim the view.
+    if (e.code >= 'Digit1' && e.code <= 'Digit7' && mode === 2) {
+      const n = e.code.charCodeAt(5) - 49;
+      if (e.shiftKey && n < PLACES.length) {
+        document.body.classList.remove('spaces-open', 'hour-open', 'weather-open');
+        goPlace(n, false);
+      } else {
+        document.body.classList.remove('places-open', 'hour-open', 'weather-open');
+        applySpace(n);
+      }
+    }
   });
   addEventListener('keyup', (e) => { const kc = ARROWS[e.code] || e.code; if (K[kc] != null) K[kc] = 0; });
   // A key held when the window loses focus never sends its keyup, and the walker would run on.
@@ -2512,9 +2933,21 @@ let introT = 0, introFrom = null, introTo = null;
 function openMenu() {
   if (mode === 0) return;
   mode = 0;
-  document.body.classList.remove('playing', 'places-open', 'cinema', 'cinema-peek', 'locked');
+  document.body.classList.remove('playing', 'places-open', 'spaces-open', 'cinema', 'cinema-peek', 'locked');
   velX = velY = velZ = 0;
   if (document.pointerLockElement) document.exitPointerLock();
+}
+// Point the camera at tonight's moon. The moon in the uniform is turned by sunAng; the
+// camera is not, so the aim uses that same turn. moonview=land keeps the coast in frame.
+function aimMoon() {
+  envLight(env.cover || 0);
+  const m = env.moon, a = (typeof wp !== 'undefined' && wp.sunAng) || 0;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const x = m[0] * ca - m[2] * sa, y = m[1], z = m[0] * sa + m[2] * ca;
+  const land = qstr.get('moonview') === 'land';
+  const yp = lookYP(x, land ? Math.min(y, 0.2) : y, z);
+  yaw = yp[0];
+  pitch = land ? Math.max(0.02, Math.min(0.22, 0.06 + yp[1] * 0.2)) : Math.max(-1.2, Math.min(1.2, yp[1]));
 }
 function goSpot(i) {
   orbit = false;
@@ -2604,19 +3037,30 @@ async function main() {
     const VS = GPUShaderStage.VERTEX, FS = GPUShaderStage.FRAGMENT;
     // One letter a binding; the letters are listed in gpu.js.
     const ubLayout = layoutOf(device, VS | FS, 'u');
-    const geoLayout = layoutOf(device, VS | FS, 'uttdcuttasdf');
+    const geoLayout = layoutOf(device, VS | FS, 'uttdcuttasdffs');
     const simLayout = layoutOf(device, FS, 'tu');
     const zLetter = MS > 1 ? 'm' : 'd';
-    const waterLayout = layoutOf(device, VS | FS, 't' + zLetter + 'fstttf');
+    const waterLayout = layoutOf(device, VS | FS, 't' + zLetter + 'fstttf-----');
     // The air pass reads the scene's depth and nothing else from the second group.
-    const airLayout = layoutOf(device, FS, zLetter, 1);
+    // Binding 13 is the cloud buffer. The air pass folds it in so water stays at 16 sampled textures.
+    const airLayout = layoutOf(device, FS, zLetter + '-----------f', 1);
+    // Volume clouds: scene depth, then the noise volume, its sampler, and the weather map.
+    const cloudLayout = layoutOf(device, FS, zLetter + '------vsf', 1);
     const geoPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout] });
     const skyPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout] });
+    // Grass stands on the ground it casts its shadow from, so that one shadow pipeline reads
+    // the height map as well. The rest of the first group holds the shadow maps themselves.
+    const groundLayout = layoutOf(device, VS, 'ut');
+    const groundPL = device.createPipelineLayout({ bindGroupLayouts: [groundLayout] });
     // The sky's passes each read what the one before made: noise, then weather, then cloud
     // shadow, then the panorama, then the panorama gathered small.
     const skyLayouts = ['vs', 'vsf', 'vsff', '-s--a'].map((w) => layoutOf(device, FS, w, 8));
     const skyPLs = skyLayouts.map((l) => device.createPipelineLayout({ bindGroupLayouts: [ubLayout, l] }));
+    // Depth plus the noise and weather the cloud march reads. Binding numbers match the shader.
+    const boltLayout = layoutOf(device, FS, '-' + zLetter + '------vsf');
+    const boltPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout, boltLayout] });
     const waterPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, waterLayout] });
+    const cloudPL = device.createPipelineLayout({ bindGroupLayouts: [ubLayout, cloudLayout] });
 
     // A vertex buffer layout from [location, byte offset, float count] triples.
     const vbuf = (stride, attrs, inst) => ({
@@ -2642,6 +3086,7 @@ async function main() {
     const noZ = depthOn('depth24plus', false, 'always');
     const overZ = depthOn('depth24plus', false, 'less');
     const over = { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
+    const add = { color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } };
     const lerp = { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' };
     const sceneFmt = 'rgba16float';
     const airPL = device.createPipelineLayout({ bindGroupLayouts: [geoLayout, airLayout] });
@@ -2663,7 +3108,8 @@ async function main() {
       whenBuilt(name, pipes, device.createRenderPipelineAsync({
         layout: layout,
         vertex: { module: m, entryPoint: vs, buffers: o.buffers },
-        fragment: fs ? { module: m, entryPoint: fs, targets: [{ format: o.format || sceneFmt, blend: o.blend }] } : undefined,
+        // depthOnly: a shadow map with a fragment stage (crown gaps) and no colour target.
+        fragment: fs ? { module: m, entryPoint: fs, targets: o.depthOnly ? [] : [{ format: o.format || sceneFmt, blend: o.blend }] } : undefined,
         primitive: { topology: 'triangle-list', cullMode: o.cull || 'none' },
         depthStencil: o.depth,
         multisample: { count: fs && o.depth && o.depth.format === 'depth32float' ? MS : 1 }
@@ -2677,14 +3123,18 @@ async function main() {
     pipe('skyBake', skyPLs[2], 'vsSky', 'fsSkyBake', {});
     pipe('skyDim', skyPLs[3], 'vsSky', 'fsSkyDim', { blend: { color: lerp, alpha: lerp } });
     pipe('skyIrr', skyPLs[3], 'vsSky', 'fsSkyIrr', {});
+    pipe('bolt', boltPL, 'vsSky', 'fsBoltVol', { blend: add });
+    pipe('cloud', cloudPL, 'vsSky', 'fsCloudVol', {});
     pipe('terrain', geoPL, 'vsTerrain', 'fsTerrain', { buffers: posBuf, cull: 'back', depth: sceneZ });
     pipe('mesh', geoPL, 'vsMesh', 'fsMesh', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowTerrain', skyPL, 'vsShadowTerrain', null, { buffers: posBuf, cull: 'back', depth: shadowZ });
-    pipe('shadowMesh', skyPL, 'vsShadowMesh', null, { buffers: meshBuffers, depth: shadowZ });
-    // HOTFIX: grass shadow pipeline needs geoLayout (htex @binding(1)); skyPL only has
-    // the uniform. Disabled to restore load — re-enable with geoPL + geo bind groups.
-    // const shadowZGrass = { ...shadowZ, depthBias: 0, depthBiasSlopeScale: 0.55, depthBiasClamp: 0.001 };
-    // pipe('shadowGrass', skyPL, 'vsShadowGrass', null, { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: shadowZGrass });
+    pipe('shadowMesh', skyPL, 'vsShadowMesh', 'fsShadowMesh', { buffers: meshBuffers, depth: shadowZ, depthOnly: true });
+    // Grass/flower casters must be ready with the first shadow bake — late compile left meadows
+    // unshadowed until a sun-move rebuild, and island maps never drew grass at all.
+    // groundPL (uniforms + htex), not skyPL or geoPL: vsShadowGrass needs sampleField, and geoPL
+    // samples the shadow maps these passes are writing into.
+    const shadowZGrass = { ...shadowZ, depthBias: 0, depthBiasSlopeScale: 0.55, depthBiasClamp: 0.001 };
+    pipe('shadowGrass', groundPL, 'vsShadowGrass', null, { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: shadowZGrass });
     // The finished scene goes to the screen through the water's own two groups.
     pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: noZ });
     const oceanLayout = layoutOf(device, GPUShaderStage.COMPUTE, 'rwuo');
@@ -2699,7 +3149,7 @@ async function main() {
     pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
     pipe('air', airPL, 'vsSky', 'fsAir', {});
     pipe('grass', geoPL, 'vsGrass', 'fsGrass', { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: sceneZ });
-    pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: [vbuf(16, [[0, 0, 3], [1, 12, 1]]), oneVec4], depth: sceneZ });
+    pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: meshBuffers, depth: sceneZ });
     pipe('fish', geoPL, 'vsFish', 'fsFish', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowFish', skyPL, 'vsShadowFish', null, { buffers: meshBuffers, depth: shadowZ });
     // Insects go straight onto the finished frame, after the water, so a clear wing over the
@@ -2709,7 +3159,12 @@ async function main() {
     pipe('drops', airPL, 'vsDrops', 'fsDrops', { format: format, blend: over, depth: overZ });
     pipe('sim', simPL, 'vs', 'fs', { module: simMod });
     // A capture waits for everything, so it is always the whole picture.
+    // ?read&rf=N grabs one frame. ?read&seq=K&rf=N grabs K frames every stride (default 4)
+    // into window.__pngs for beach showcase video without reloading.
     const READ = qstr.has('read'), READ_AT = parseInt(qstr.get('rf'), 10) || 16;
+    const READ_SEQ = Math.max(0, parseInt(qstr.get('seq'), 10) || 0);
+    const READ_STRIDE = Math.max(1, parseInt(qstr.get('stride'), 10) || 4);
+    if (READ_SEQ) window.__pngs = [];
     const pipesReady = Promise.all(READ ? jobs.concat(lateJobs) : jobs);
     pipesReady.catch(() => {});
     Promise.all(lateJobs).catch((err) => console.error(err));
@@ -2809,6 +3264,14 @@ async function main() {
     const moistAt = (x, z, h) => smooth01(0.2, 2.2, h) * (1 - smooth01(0.2, 0.7, fieldSlope(world, x, z))) * (0.45 + 0.55 * vnoise(x * 0.02 + 3, z * 0.02));
     const plantSoft = () => 0.65 + rnd() * 0.7;
     const plantBias = () => rnd();
+    // Instance Y so a woody foot of radius footR stays under the ground on a slope.
+    // footBelow: how far the mesh already dips below its origin after scale (palms ~0.2·sc·sy).
+    const stemY = (x, z, h, footR, footBelow) => {
+      const s = fieldSlope(world, x, z);
+      const r = Math.max(0.05, footR);
+      const need = Math.max(0.1, r * 0.5 + s * r * 1.35);
+      return h - need + (footBelow || 0);
+    };
     for (let i = 0; i < 9 && palms < q.palms; i++) {
       const along = shore
         ? (Math.sign(i - 4.5) * (3.8 + Math.abs(i - 4) * 4.0 + (i % 2) * 1.2))
@@ -2820,7 +3283,8 @@ async function main() {
       if (h < 0.4 || h > 4.5) continue;
       const tint = [0.88 + rnd() * 0.2, 0.9 + rnd() * 0.16, 0.8 + rnd() * 0.2];
       const psc = 0.75 + rnd() * 0.45;
-      scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.88 + rnd() * 0.28, 1.1 + rnd() * 0.35, plantBias());
+      const psy = 0.88 + rnd() * 0.28;
+      scatter.add(pick(palmIds, x, z), x, stemY(x, z, h, 0.28 * psc, 0.2 * psc * psy), z, leanYaw(x, z), psc, tint, psy, 1.1 + rnd() * 0.35, plantBias());
       walkHits.push(x, z, 0.22 * psc);
       palmSites.push(x, z, h);
       palms++;
@@ -2839,23 +3303,28 @@ async function main() {
       // Coastal palms: wind-exposed, irregular gaps on sand.
       if (palms < q.palms && h > 0.55 && h < 5.8 && s < 0.34 && clump > 0.38 && (h < 2.2 || clump2 > 0.35)) {
         const psc = 0.7 + rnd() * 0.55;
-        scatter.add(pick(palmIds, x, z), x, h, z, leanYaw(x, z), psc, tint, 0.85 + rnd() * 0.35, 1.05 + rnd() * 0.4, plantBias());
+        const psy = 0.85 + rnd() * 0.35;
+        scatter.add(pick(palmIds, x, z), x, stemY(x, z, h, 0.28 * psc, 0.2 * psc * psy), z, leanYaw(x, z), psc, tint, psy, 1.05 + rnd() * 0.4, plantBias());
         walkHits.push(x, z, 0.22 * psc);
         palmSites.push(x, z, h);
         palms++;
       } else if (shrubs < shrubBudget && h > 0.3 && h < 2.8 && s < 0.4 && clump > 0.3 && (h < 1.6 || clump2 > 0.4)) {
         // Beach interior shrubs in irregular clusters.
-        scatter.add(pick(shrubIds, x, z), x, h, z, rnd() * 6.28, 1.5 + rnd() * 1.9, tint, 0.65 + rnd() * 0.6, plantSoft(), plantBias());
+        const ssc = 1.5 + rnd() * 1.9, ssy = 0.65 + rnd() * 0.6;
+        scatter.add(pick(shrubIds, x, z), x, stemY(x, z, h, 0.1 * ssc * ssy), z, rnd() * 6.28, ssc, tint, ssy, plantSoft(), plantBias());
         shrubs++;
       } else if (ferns < fernBudget && h > 1.1 && h < 14 && s < 0.4 && (moist > 0.45 || fm > 0.35) && clump > 0.4) {
         // Ferns favour humid lowlands and shaded forest floor.
-        scatter.add(pick(fernIds, x, z), x, h, z, rnd() * 6.28, 1.15 + rnd() * 1.15, tint, 0.55 + rnd() * 0.5, 0.75 + rnd() * 0.4, plantBias());
+        const fsc = 1.15 + rnd() * 1.15, fsy = 0.55 + rnd() * 0.5;
+        scatter.add(pick(fernIds, x, z), x, stemY(x, z, h, 0.06 * fsc * fsy), z, rnd() * 6.28, fsc, tint, fsy, 0.75 + rnd() * 0.4, plantBias());
         ferns++;
       } else if (canopies < canopyBudget && h > 6 && h < 26 && s < 0.32 && fm > 0.2 && clump > 0.45) {
-        scatter.add(pick(canopyIds, x, z), x, h, z, rnd() * 6.28, 4.6 + rnd() * 3.2, tint, 0.85 + rnd() * 0.35, plantSoft(), plantBias());
+        const csc = 4.6 + rnd() * 3.2, csy = 0.85 + rnd() * 0.35;
+        scatter.add(pick(canopyIds, x, z), x, stemY(x, z, h, 0.1 * csc * csy), z, rnd() * 6.28, csc, tint, csy, plantSoft(), plantBias());
         canopies++;
       } else if (broads < q.broad && h > 2.4 && h < 18 && s < 0.4 && (fm > 0.15 || moist > 0.4) && clump > 0.38) {
-        scatter.add(pick(broadIds, x, z), x, h, z, rnd() * 6.28, 4.8 + rnd() * 3.4, tint, 0.8 + rnd() * 0.4, plantSoft(), plantBias());
+        const bsc = 4.8 + rnd() * 3.4, bsy = 0.8 + rnd() * 0.4;
+        scatter.add(pick(broadIds, x, z), x, stemY(x, z, h, 0.09 * bsc * bsy), z, rnd() * 6.28, bsc, tint, bsy, plantSoft(), plantBias());
         broads++;
       }
     }
@@ -2868,9 +3337,10 @@ async function main() {
       const h = fieldSample(world, x, z);
       if (h < 0.7 || h > 9 || fieldSlope(world, x, z) > 0.35) return false;
       const f = flowerIds[(rnd() * flowerIds.length) | 0], rot = rnd() * 6.28, sc = 0.9 + rnd() * 0.5, c = Math.cos(rot), s = Math.sin(rot), B = f.blooms;
-      scatter.add(f.id, x, h - 0.02, z, rot, sc, [0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2], 1, 0.85 + rnd() * 0.4, rnd());
+      const fy = stemY(x, z, h, 0.08 * sc, 0);
+      scatter.add(f.id, x, fy, z, rot, sc, [0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2, 0.9 + rnd() * 0.2], 1, 0.85 + rnd() * 0.4, rnd());
       for (let i = 0; i < B.length; i += 6) {
-        blooms.push(x + (B[i] * c - B[i + 2] * s) * sc, h - 0.02 + B[i + 1] * sc, z + (B[i] * s + B[i + 2] * c) * sc, B[i + 3] * c - B[i + 4] * s, B[i + 3] * s + B[i + 4] * c);
+        blooms.push(x + (B[i] * c - B[i + 2] * s) * sc, fy + B[i + 1] * sc, z + (B[i] * s + B[i + 2] * c) * sc, B[i + 3] * c - B[i + 4] * s, B[i + 3] * s + B[i + 4] * c);
         perch.push(x, z, sc, scatter.kind.length - 1, B[i + 5]);
       }
       return true;
@@ -2886,6 +3356,7 @@ async function main() {
     // Bounding radius must match canopy size or distant trees fail the pixel/frustum tests and pop.
     const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [48, 130], [28, 95]));
     let trees = 0;
+    const treeSites = [];
     for (let i = 0; i < q.forest * 32 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
       const z = (rnd() - 0.5) * 410;
@@ -2901,24 +3372,30 @@ async function main() {
       const tall = (h < 4 ? 6.2 : 7.2) + inland * (5.5 + rnd() * 3) + rnd() * 4;
       const sy = 0.78 + rnd() * 0.5;
       const tint = [0.72 + rnd() * 0.4, 0.74 + rnd() * 0.32, 0.68 + rnd() * 0.35];
-      // Habitat bias: slender coastal (seed%6==5), emergent/round inland dense (1,2).
+      // Habitat picks the architecture, not the density. Coastal trees are slender or
+      // sparse, ridges take the open crowns, wet flats the round and multi-stem, deep
+      // cover the emergents. Ground cover is a separate pass.
       const seeds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218];
+      const coast = h < 4.5 && inland < 0.35;
+      const ridge = !coast && s > 0.22 && h > 3.2;
+      const wet = !coast && !ridge && moistAt(x, z, h) > 0.62 && s < 0.16;
+      const forms = coast ? [5, 4] : ridge ? [4, 1, 5] : wet ? [2, 3] : (fm > 0.65 && inland > 0.45) ? [1, 2, 3] : null;
       let pickIds = treeIds;
-      if (h < 4.5 && inland < 0.35) {
-        const coastal = treeIds.filter((_, k) => seeds[k] % 6 === 5 || seeds[k] % 6 === 4);
-        if (coastal.length) pickIds = coastal;
-      } else if (fm > 0.65 && inland > 0.45) {
-        const deep = treeIds.filter((_, k) => seeds[k] % 6 === 1 || seeds[k] % 6 === 2 || seeds[k] % 6 === 3);
-        if (deep.length) pickIds = deep;
+      if (forms) {
+        const sub = treeIds.filter((_, k) => forms.indexOf(seeds[k] % 6) >= 0);
+        if (sub.length) pickIds = sub;
       }
       // Each habit gives to the wind in its own way: the emergent stands stiff, the slender
       // and the sparse bend, and of one habit the taller tree moves further.
       const pid = pickIds[(rnd() * pickIds.length) | 0];
       const flex = [0.75, 0.5, 0.6, 0.8, 0.9, 1][seeds[treeIds.indexOf(pid)] % 6] * (0.5 + 0.5 * tall / 19);
-      scatter.add(pid, x, h - 0.15, z, rnd() * 6.28, tall, tint, sy, flex * (0.85 + rnd() * 0.3), rnd());
+      // Buttress flare ≈ 0.05·tall; old 0.15 m bury left the downhill rim floating on slopes.
+      scatter.add(pid, x, stemY(x, z, h, 0.055 * tall * sy), z, rnd() * 6.28, tall, tint, sy, flex * (0.85 + rnd() * 0.3), rnd());
       walkHits.push(x, z, 0.03 * tall);
+      treeSites.push(x, z, h, tall);
       trees++;
     }
+    const rockSites = [];
     for (let i = 0; i < q.rocks * 20 && rocks < q.rocks; i++) {
       const x = (rnd() - 0.5) * 500;
       const z = (rnd() - 0.5) * 420;
@@ -2931,6 +3408,7 @@ async function main() {
       scatter.add(pick(rockIds, x, z), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
       // A boulder lower than the knee is stepped over; damp foreshore stones stay passable.
       if (sc > 0.75 && h > 0.45) walkHits.push(x, z, 0.6 * sc);
+      rockSites.push(x, z, h, sc);
       rocks++;
     }
     // Coastal rocks: denser headland pockets, size/tint variety; stamped into SWE bed for wrap.
@@ -2999,6 +3477,161 @@ async function main() {
       if (h < 0.15 || h > 4.5 || fieldSlope(world, x, z) > 0.45) continue;
       scatter.add(pick(frondIds, x, z), x, h + 0.01, z, rnd() * 6.28, 0.85 + rnd() * 0.45, [0.95, 0.9, 0.85], 1, 0.2, rnd());
     }
+    // Tropical overgrowth — own seeded streams so earlier island layout stays fixed.
+    // Layered reclaim: moss pillows, root snarls, climbing + hanging vines on rocks/trees/skiff.
+    {
+      const og = seeded(772351);
+      const climbIds = [3, 8, 14, 21, 29].map((sd) => scatter.proto([makeClimbingVine(sd)], 2.2, [55]));
+      const hangIds = [4, 11, 18, 26].map((sd) => scatter.proto([makeHangingVine(sd)], 2.4, [60]));
+      const mossIds = protoSet([2, 6, 10, 15, 20, 25], makeMossClump, 0.85);
+      const rootIds = protoSet([5, 9, 16, 22], makeRootSnarl, 1.1);
+      let vines = 0, mossN = 0, roots = 0;
+      const vineBudget = q.vines | 0;
+      const mossBudget = q.moss | 0;
+      const rootBudget = Math.max(14, (q.moss * 0.28) | 0);
+      // Climbing vines reclaim inland rock faces (structure overgrowth).
+      for (let i = 0; i < rockSites.length && vines < vineBudget * 0.35; i += 4) {
+        if (og() > 0.38) continue;
+        const rx = rockSites[i], rz = rockSites[i + 1], rh = rockSites[i + 2], rsc = rockSites[i + 3];
+        const eco = ecoPrefs(rx, rz, rh, fieldSlope(world, rx, rz));
+        if (eco.cluster < 0.2 && eco.moist < 0.25) continue;
+        const a = og() * 6.28, off = rsc * (0.2 + og() * 0.4);
+        const x = rx + Math.cos(a) * off, z = rz + Math.sin(a) * off;
+        const h = fieldSample(world, x, z);
+        const tint = og() < 0.2
+          ? [0.75 + og() * 0.2, 0.55 + og() * 0.15, 0.35 + og() * 0.1]
+          : [0.82 + og() * 0.25, 0.9 + og() * 0.18, 0.78 + og() * 0.2];
+        scatter.add(pick(climbIds, x, z), x, h, z, a, (1.1 + og() * 1.1) * (0.65 + rsc * 0.55), tint, 0.9 + og() * 0.35, 0.85 + og() * 0.4, og());
+        vines++;
+        if (vines < vineBudget && og() < 0.55) {
+          const a2 = a + 1.2 + og();
+          scatter.add(pick(climbIds, x, z), rx + Math.cos(a2) * off * 0.7, h, rz + Math.sin(a2) * off * 0.7,
+            a2, 0.85 + og() * 0.7, tint, 0.85, 0.8, og());
+          vines++;
+        }
+      }
+      // Climbing vines wrapping tree trunks + hanging cascades readable from the floor.
+      for (let i = 0; i < treeSites.length && vines < vineBudget; i += 4) {
+        const tx = treeSites[i], tz = treeSites[i + 1], th = treeSites[i + 2], tall = treeSites[i + 3];
+        const eco = ecoPrefs(tx, tz, th, fieldSlope(world, tx, tz));
+        if (eco.shade < 0.22 && eco.jungle < 0.28) continue;
+        const tint = og() < 0.16
+          ? [0.7 + og() * 0.2, 0.5 + og() * 0.15, 0.3]
+          : [0.85 + og() * 0.2, 0.92 + og() * 0.15, 0.8 + og() * 0.18];
+        // Trunk climbers — nature reclaiming the bole.
+        if (vines < vineBudget && og() < 0.72 + eco.jungle * 0.25) {
+          const a = og() * 6.28, r = 0.08 + og() * 0.22;
+          scatter.add(pick(climbIds, tx, tz), tx + Math.cos(a) * r, th, tz + Math.sin(a) * r,
+            a, 1.4 + og() * 1.6 + tall * 0.04, tint, 1.05 + og() * 0.4, 0.95 + og() * 0.4, og());
+          vines++;
+        }
+        // Low hanging strands — readable at walking eye height under the canopy.
+        if (vines < vineBudget && eco.jungle > 0.28 && og() < 0.75) {
+          const a = og() * 6.28, r = 0.25 + og() * 1.3;
+          const x = tx + Math.cos(a) * r, z = tz + Math.sin(a) * r;
+          const anchor = th + 1.35 + og() * 1.8;
+          scatter.add(pick(hangIds, x, z), x, anchor, z, a, 1.35 + og() * 1.15, tint, 1, 1.2 + og() * 0.45, og());
+          vines++;
+        }
+        if (vines < vineBudget && eco.jungle > 0.45 && og() < 0.55) {
+          const a2 = og() * 6.28, r2 = 0.2 + og() * 1.0;
+          scatter.add(pick(hangIds, tx, tz), tx + Math.cos(a2) * r2, th + 1.1 + og() * 1.5, tz + Math.sin(a2) * r2,
+            a2, 1.15 + og() * 1.0, tint, 1, 1.1 + og() * 0.4, og());
+          vines++;
+        }
+      }
+      // Beach→jungle vine fringe: climbing vines on moist banks (not open sand).
+      for (let i = 0; i < vineBudget * 22 && vines < vineBudget; i++) {
+        const x = (og() - 0.5) * 420, z = (og() - 0.5) * 360;
+        const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+        if (h < 0.7 || h > 7 || sl > 0.5) continue;
+        const eco = ecoPrefs(x, z, h, sl);
+        const dens = eco.jungle * 0.55 + eco.moist * 0.4 + eco.shade * 0.3;
+        if (dens < 0.32 || og() > dens * 1.05) continue;
+        if (Math.hypot(x - beach.x, z - beach.z) < 10) continue;
+        const tint = [0.8 + og() * 0.28, 0.88 + og() * 0.2, 0.75 + og() * 0.22];
+        scatter.add(pick(climbIds, x, z), x, h, z, og() * 6.28, 1.15 + og() * 1.2, tint, 0.9 + og() * 0.4, 0.95 + og() * 0.35, og());
+        vines++;
+      }
+      // Skiff / beach structure reclaim.
+      {
+        const sx = beach.x + 3.5, sz = beach.z + 1.2;
+        for (let k = 0; k < 5 && vines < vineBudget; k++) {
+          const a = og() * 6.28, r = 0.5 + og() * 1.6;
+          const x = sx + Math.cos(a) * r, z = sz + Math.sin(a) * r;
+          const h = fieldSample(world, x, z);
+          if (h < 0.2 || h > 2.8) continue;
+          scatter.add(pick(climbIds, x, z), x, h, z, a, 0.85 + og() * 0.7,
+            [0.78 + og() * 0.2, 0.85 + og() * 0.15, 0.7 + og() * 0.15], 0.85, 0.75 + og() * 0.3, og());
+          vines++;
+        }
+      }
+      // Moss / low cover: shade + moisture pockets; bare clearings stay clear.
+      for (let i = 0; i < mossBudget * 26 && mossN < mossBudget; i++) {
+        const x = (og() - 0.5) * 440, z = (og() - 0.5) * 380;
+        const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+        if (h < 0.35 || h > 18 || sl > 0.55) continue;
+        const eco = ecoPrefs(x, z, h, sl);
+        if (eco.shade > 0.55 && eco.cluster < 0.2) continue;
+        const dens = eco.moist * 0.55 + eco.shade * 0.45 + eco.jungle * 0.4 + eco.nearWater * 0.15;
+        if (dens < 0.22 || og() > dens * dens * 0.7 + dens * 0.3) continue;
+        const dead = og() < 0.14;
+        const tint = dead
+          ? [0.75 + og() * 0.2, 0.6 + og() * 0.15, 0.38 + og() * 0.1]
+          : [0.95 + og() * 0.25, 1.15 + og() * 0.2, 0.85 + og() * 0.2];
+        const sc = 1.6 + og() * 2.2 + eco.moist * 0.7;
+        scatter.add(pick(mossIds, x, z), x, h + 0.005, z, og() * 6.28, sc, tint, 0.5 + og() * 0.4, 0.35 + og() * 0.3, og());
+        mossN++;
+        if (mossN < mossBudget && og() < 0.55 + dens * 0.35) {
+          const a = og() * 6.28, d = 0.18 + og() * (0.55 + dens);
+          const x2 = x + Math.cos(a) * d, z2 = z + Math.sin(a) * d;
+          const h2 = fieldSample(world, x2, z2);
+          if (h2 > 0.3 && h2 < 18 && fieldSlope(world, x2, z2) < 0.55) {
+            scatter.add(pick(mossIds, x2, z2), x2, h2 + 0.005, z2, og() * 6.28, sc * (0.45 + og() * 0.55), tint, 0.5, 0.3, og());
+            mossN++;
+          }
+        }
+      }
+      // Moss on rock crowns — structure reclaim.
+      for (let i = 0; i < rockSites.length && mossN < mossBudget; i += 4) {
+        if (og() > 0.35) continue;
+        const rx = rockSites[i], rz = rockSites[i + 1], rh = rockSites[i + 2], rsc = rockSites[i + 3];
+        const eco = ecoPrefs(rx, rz, rh, fieldSlope(world, rx, rz));
+        if (eco.moist < 0.15 && eco.cluster < 0.28) continue;
+        scatter.add(pick(mossIds, rx, rz), rx, rh + rsc * 0.18, rz, og() * 6.28, 0.85 + rsc * 0.75,
+          [0.7 + og() * 0.25, 0.9 + og() * 0.18, 0.65 + og() * 0.2], 0.45, 0.25, og());
+        mossN++;
+      }
+      // Surface roots under dense canopy.
+      for (let i = 0; i < rootBudget * 24 && roots < rootBudget; i++) {
+        const x = (og() - 0.5) * 400, z = (og() - 0.5) * 360;
+        const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+        if (h < 1.4 || h > 16 || sl > 0.45) continue;
+        const eco = ecoPrefs(x, z, h, sl);
+        if (eco.shade < 0.32 || eco.jungle < 0.32 || og() > eco.jungle * 1.1) continue;
+        scatter.add(pick(rootIds, x, z), x, h + 0.01, z, og() * 6.28, 1.15 + og() * 1.3,
+          [0.85 + og() * 0.2, 0.75 + og() * 0.15, 0.6 + og() * 0.15], 1, 0.15, og());
+        roots++;
+      }
+      // Extra moist ferns in jungle hollows (dead tint mix).
+      const fernExtra = Math.max(18, (q.broad * 0.65) | 0);
+      let fe = 0;
+      for (let i = 0; i < fernExtra * 32 && fe < fernExtra; i++) {
+        const x = (og() - 0.5) * 430, z = (og() - 0.5) * 370;
+        const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+        if (h < 1.0 || h > 14 || sl > 0.42) continue;
+        const eco = ecoPrefs(x, z, h, sl);
+        const dens = eco.moist * 0.55 + eco.shade * 0.5 + eco.jungle * 0.45;
+        if (dens < 0.38 || og() > dens) continue;
+        const dead = og() < 0.16;
+        const tint = dead
+          ? [0.55 + og() * 0.2, 0.4 + og() * 0.15, 0.22 + og() * 0.1]
+          : [0.8 + og() * 0.28, 0.88 + og() * 0.2, 0.75 + og() * 0.22];
+        const fsc = 1.15 + og() * 1.35, fsy = 0.55 + og() * 0.5;
+        scatter.add(pick(fernIds, x, z), x, stemY(x, z, h, 0.06 * fsc * fsy), z, og() * 6.28, fsc, tint, fsy, 0.75 + og() * 0.4, og());
+        fe++;
+      }
+    }
     const stackList = [];
     for (let i = 0; i < q.stacks * 30 && stacks < q.stacks; i++) {
       const x = -40 - rnd() * 160;
@@ -3025,7 +3658,19 @@ async function main() {
     }
     for (let i = 3; i < perch.length; i += 5) perch[i] = scatter.data[perch[i] * ISTRIDE + 6];
     scatter.finish();
+    let deepSea = null;
+    function ensureDeepSea() {
+      if (deepSea) return deepSea;
+      if (!globalThis.__wwDeepSeaReady) {
+        const el = document.getElementById('ww-deferred-deep-sea');
+        if (el) (0, eval)(el.textContent);
+      }
+      if (typeof DeepSeaLife === 'function') deepSea = new DeepSeaLife(world, reef, q);
+      return deepSea;
+    }
+    ensureDeepSea();
     const fishLife = new FishLife(world, reef, q, stackList);
+    window.__fishLife = fishLife;
     reefBlocks = fishLife.blocks;
     walkBuild();
     const fishPack = packMeshes(fishMeshes());
@@ -3053,19 +3698,26 @@ async function main() {
     const grassList = [];
     const weedList = [];
     const grassDens = (x, z, h, sl) => {
-      const patch = vnoise(x * 0.022, z * 0.022) * 0.55 + vnoise(x * 0.055 + 3, z * 0.055) * 0.45;
-      const fine = vnoise(x * 0.09 + 4, z * 0.09);
+      // Domain-warped patches — no circular noise rings or even sow density.
+      const w = warpXZ(x, z, 9, 0.02);
+      const patch = vnoise(w[0] * 0.022, w[1] * 0.022) * 0.5 + vnoise(w[0] * 0.055 + 3, w[1] * 0.055) * 0.35 + vnoise(w[0] * 0.13 + 7, w[1] * 0.13) * 0.15;
+      const fine = vnoise(w[0] * 0.09 + 4, w[1] * 0.09);
       const fromBeach = Math.hypot(x - beach.x, z - beach.z);
       const under = forestMask(x, z, h, sl);
+      const eco = ecoPrefs(x, z, h, sl);
       let d = 0;
       if (h > 0.2 && h < 1.35 && sl < 0.28 && fromBeach > 10 && fromBeach < 90) {
-        // Dune fringe: soft rise from open sand.
-        d = Math.max(d, smooth01(0.22, 0.55, patch) * smooth01(0.28, 0.18, sl) * (0.55 + 0.45 * fine));
+        // Dune fringe: soft rise from open sand into beach→jungle transition.
+        d = Math.max(d, smooth01(0.22, 0.55, patch) * smooth01(0.28, 0.18, sl) * (0.55 + 0.45 * fine) * (0.7 + 0.3 * eco.beachEdge));
       }
       if (h > 1.05 && h < 28 && sl < 0.55) {
         let meadow = smooth01(0.18, 0.52, patch) * smooth01(0.55, 0.32, sl);
         meadow *= 1 - under * 0.72;
+        // Jungle floor: grass thins under canopy; moss/ferns own the shade.
+        meadow *= 1 - eco.jungle * 0.35 * under;
         if (under > 0.55) meadow *= smooth01(0.25, 0.7, fine);
+        // Real clearings: low cluster under trees stays sparse (not a ring).
+        if (under > 0.5 && eco.cluster < 0.28) meadow *= 0.15 + eco.cluster;
         d = Math.max(d, meadow);
       }
       return Math.min(1, d);
@@ -3087,14 +3739,18 @@ async function main() {
       sc *= 0.75 + rnd() * 0.5;
       grassList.push(x, z, rnd() * 6.28, sc);
     }
-    for (let i = 0; i < q.weed * 12 && weedList.length / 4 < q.weed; i++) {
-      const x = (rnd() - 0.5) * 460, z = (rnd() - 0.5) * 400;
+    for (let i = 0; i < q.weed * 14 && weedList.length / 4 < q.weed; i++) {
+      // Bias toward rocky shelves (west/north ridges) for taller current-driven weed/kelp strips.
+      const shelf = rnd() < 0.55;
+      const x = shelf ? -180 + rnd() * 200 : (rnd() - 0.5) * 460;
+      const z = shelf ? -20 + rnd() * 220 : (rnd() - 0.5) * 400;
       const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
       const patch = vnoise(x * 0.028, z * 0.028);
-      if (h >= -0.35 || h <= -3.2 || sl > 0.5 || x <= 20) continue;
-      const dens = smooth01(0.18, 0.5, patch);
+      if (h >= -0.35 || h <= -7.5 || sl > 0.55 || (!shelf && x <= 20)) continue;
+      const dens = smooth01(0.18, 0.5, patch) * (shelf ? 1.15 : 1);
       if (rnd() > dens) continue;
-      weedList.push(x, z, rnd() * 6.28, -(0.4 + dens * (0.7 + rnd() * 0.5)));
+      const tall = shelf && h < -1.8 ? 1.15 + rnd() * 0.7 : 0.4 + dens * (0.7 + rnd() * 0.5);
+      weedList.push(x, z, rnd() * 6.28, -tall);
     }
     // Fill: each tuft gets two smaller neighbours sized from the same density field.
     {
@@ -3116,18 +3772,7 @@ async function main() {
     const grassInst = new Float32Array(grassList.length + weedList.length);
     grassInst.set(grassList, 0);
     grassInst.set(weedList, grassList.length);
-    const grassCount = grassInst.length / 4;
-
-    const birdMeta = new Float32Array(Math.max(q.birds, 1) * 4);
-    const birdData = new Float32Array(Math.max(q.birds, 1) * 4);
-    for (let i = 0; i < q.birds; i++) {
-      const ang = rnd() * 6.28;
-      const rad = 25 + rnd() * 110;
-      birdMeta[i * 4] = Math.cos(ang) * rad;
-      birdMeta[i * 4 + 1] = Math.sin(ang) * rad * 0.8;
-      birdMeta[i * 4 + 2] = ang + 1.4 + rnd() * 0.6;
-      birdMeta[i * 4 + 3] = 14 + rnd() * 36;
-    }
+    let grassCount = grassInst.length / 4;
 
     mark('planting');
     setStatus('Tuning the swell', 0.78);
@@ -3140,9 +3785,9 @@ async function main() {
       return;
     }
     mark('wgsl');
-    const uf = new Float32Array(252);
-    const ur = new Float32Array(252);
-    const un = new Float32Array(252);
+    const uf = new Float32Array(268);
+    const ur = new Float32Array(268);
+    const un = new Float32Array(268);
     for (let i = 0; i < 8; i++) {
       const w = WAVES[i];
       const L = Math.hypot(w[0], w[1]) || 1;
@@ -3151,9 +3796,9 @@ async function main() {
     }
     ur.set(uf);
 
-    const ubuf = device.createBuffer({ size: 1008, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const rbuf = device.createBuffer({ size: 1008, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const nbuf = device.createBuffer({ size: 1008, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const ubuf = device.createBuffer({ size: 1072, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const rbuf = device.createBuffer({ size: 1072, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const nbuf = device.createBuffer({ size: 1072, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const htex = device.createTexture({
       size: [q.hres, q.hres],
@@ -3187,11 +3832,32 @@ async function main() {
     const packed = scatter.packed;
     const g = grassGeom();
     const grassVert = packInterleaved(g.pos, g.uv);
-    const bgeom = birdGeom();
-    const birdVert = packBird(bgeom.pos, bgeom.wing);
-
     const terrainVB = upload(terrain.pos, GPUBufferUsage.VERTEX);
     const terrainIB = upload(terrain.idx, GPUBufferUsage.INDEX);
+    // ?stream=0 or ?no=stream keeps the single mesh and the full grass list.
+    const streamOn = qstr.get('stream') !== '0' && !NO.stream;
+    const stream = new WorldStream({ enabled: streamOn });
+    window.__stream = stream;
+    stream.sharedVB = terrainVB;
+    stream.bindTerrain(q.terrain, q.textent, terrain.pos);
+    stream.bindGrass(grassInst);
+    scatter.stream = stream;
+    const grassDraw = new Float32Array(grassInst.length);
+    let grassKey = '';
+    if (stream.enabled) {
+      try {
+        const bootPrep = stream.prepMs, bootUp = stream.uploads;
+        stream.prepMs = 48;
+        stream.uploads = 100;
+        stream.tick(camX, camZ, camY, 0.016, Math.sin(yaw), -Math.cos(yaw), null, device);
+        stream.prepMs = bootPrep;
+        stream.uploads = bootUp;
+      } catch (err) {
+        stream.enabled = false;
+        stream.fail = (err && err.message) || String(err);
+        console.warn('stream boot', err);
+      }
+    }
     const waterVB = upload(water.pos, GPUBufferUsage.VERTEX);
     const waterIB = upload(water.idx, GPUBufferUsage.INDEX);
     const shoreVB = upload(shoreMesh.pos, GPUBufferUsage.VERTEX);
@@ -3250,13 +3916,18 @@ async function main() {
     }
     const grassVB = upload(grassVert, GPUBufferUsage.VERTEX);
     const grassIB = upload(g.idx, GPUBufferUsage.INDEX);
-    const grassInstB = upload(grassInst, GPUBufferUsage.VERTEX);
-    const birdVB = upload(birdVert, GPUBufferUsage.VERTEX);
-    const birdIB = upload(bgeom.idx, GPUBufferUsage.INDEX);
-    const birdInstB = device.createBuffer({ size: Math.max(16, birdData.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    const grassInstB = upload(grassInst, GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST);
     const fishVB = upload(fishPack.vert, GPUBufferUsage.VERTEX);
     const fishIB = upload(fishPack.idx, GPUBufferUsage.INDEX);
     const bugLife = new BugLife(world, blooms, perch);
+    const birdLife = new BirdLife(world, q, beach, treeSites, blooms);
+    birdLife.bugLife = bugLife;
+    const birdPack = packMeshes(birdMeshes());
+    const birdVB = upload(birdPack.vert, GPUBufferUsage.VERTEX);
+    const birdIB = upload(birdPack.idx, GPUBufferUsage.INDEX);
+    const birdArr = new Float32Array(Math.max(1, birdLife.n) * ISTRIDE);
+    const birdInstB = device.createBuffer({ size: birdArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    let birdDraws = [];
     const bugPack = packMeshes(bugMeshes());
     const bugVB = upload(bugPack.vert, GPUBufferUsage.VERTEX), bugIB = upload(bugPack.idx, GPUBufferUsage.INDEX);
     const bugArr = new Float32Array(bugLife.agents.length * BUG_STRIDE);
@@ -3283,7 +3954,11 @@ async function main() {
     const nearRows = [0, 0];
     const sky = createSky(device, { dim: q.sky, format: sceneFmt, layouts: skyLayouts });
     const skySamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
-    let skyFor = null, skyPace = 1;
+    const starTex = astroStarTexture(device);
+    const starView = starTex.createView();
+    const starSamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
+    const noiseView = sky.noise.createView();
+    let skyFor = null, skyPace = 1, cloudOwn = false, cloudOwnBake = false;
     const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 56], 0.3, 0, 11);
     const glintH0 = makeOceanH0(OCEAN_N, 4, [4.5, 0.3], 0.002, [0.08, 0.45], 0, 0.3, 29);
     const oceanU = new Float32Array(4);
@@ -3317,12 +3992,13 @@ async function main() {
     await pipesReady;
     mark('pipelines');
     const shadowPass = passOf(undefined, null, shadowView);
-    let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null, airTex = null, bgAir = null;
+    let sceneTex = null, sceneDepth = null, swapDepth = null, reflTex = null, reflDepth = null, airTex = null, cloudTex = null, bgAir = null, bgBolt = null, bgCloud = null;
     let sceneMS = null, reflMS = null;
     let readTex = null, readDepth = null, readBuf = null, readBpr = 0;
     let bgGeoSet = [null, null], bgGeoR, bgUB, bgUBR, bgWater;
     let viewW = 2, viewH = 2;
     const hview = htex.createView();
+    const bgGround = groupOf(device, groundLayout, [ubuf, hview]), bgGroundN = groupOf(device, groundLayout, [nbuf, hview]);
     const ripViews = [0, 1].map(() => targetOf(device, 256, 256, 'rgba16float').createView());
     const simBuf = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const simU = new Float32Array(12);
@@ -3343,6 +4019,8 @@ async function main() {
     const swapPass = passOf(null, [0.55, 0.65, 0.72, 1], null);
     let swapDepthView = null, readViews = null;
     const airPass = passOf(null, [0, 0, 0, 1]);
+    const boltPass = passOf(null);
+    const cloudPass = passOf(null, [0, 0, 0, 1]);
     function destroyTex(t) { if (t) t.destroy(); }
     // The share of the preset's resolution being drawn. It follows the frame rate (frameBody).
     let dynScale = 1;
@@ -3357,7 +4035,7 @@ async function main() {
       w = Math.max(2, (w * dynScale) | 0); h = Math.max(2, (h * dynScale) | 0);
       canvas.width = w; canvas.height = h;
       context.configure({ device: device, format: format, alphaMode: 'opaque' });
-      destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth); destroyTex(airTex);
+      destroyTex(sceneTex); destroyTex(sceneDepth); destroyTex(swapDepth); destroyTex(reflTex); destroyTex(reflDepth); destroyTex(airTex); destroyTex(cloudTex);
       destroyTex(sceneMS); destroyTex(reflMS);
       sceneTex = targetOf(device, w, h, sceneFmt);
       // The depth keeps every sample, since the passes after the scene read it. The colour's
@@ -3370,6 +4048,7 @@ async function main() {
       sceneMS = MS > 1 ? targetOf(device, w, h, sceneFmt, 0, MS) : null;
       reflMS = MS > 1 ? targetOf(device, rw, rh, sceneFmt, 0, MS) : null;
       airTex = targetOf(device, rw, rh, sceneFmt);
+      cloudTex = targetOf(device, rw, rh, sceneFmt);
       viewW = w; viewH = h;
       if (READ) {
         if (readTex) readTex.destroy();
@@ -3381,9 +4060,13 @@ async function main() {
         readBuf = device.createBuffer({ size: readBpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
         readViews = [readTex.createView(), readDepth.createView()];
       }
-      const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView(), av = airTex.createView();
+      const sv = sceneTex.createView(), sd = sceneDepth.createView(), rv = reflTex.createView(), av = airTex.createView(), cv = cloudTex.createView();
       // Views are made here, once per size, not once per frame.
       airPass.colorAttachments[0].view = av;
+      boltPass.colorAttachments[0].view = sv;
+      bgBolt = groupOf(device, boltLayout, [null, sd, null, null, null, null, null, null, sky.noise.createView(), sky.samp, sky.wx]);
+      cloudPass.colorAttachments[0].view = cv;
+      bgCloud = groupOf(device, cloudLayout, [sd, null, null, null, null, null, null, noiseView, sky.nSamp, sky.wx], 1);
       for (const [pass, view, ms] of [[scenePass, sv, sceneMS], [reflPass, rv, reflMS]]) {
         const c = pass.colorAttachments[0];
         c.view = ms ? ms.createView() : view;
@@ -3393,9 +4076,9 @@ async function main() {
       scenePass.depthStencilAttachment.view = sd;
       reflPass.depthStencilAttachment.view = reflDepth.createView();
       swapDepthView = swapDepth.createView();
-      bgAir = groupOf(device, airLayout, [sd], 1);
+      bgAir = groupOf(device, airLayout, [sd, null, null, null, null, null, null, null, null, null, null, null, cv], 1);
       const geoGroup = (buf, rip) => groupOf(device, geoLayout,
-        [buf, hview, rip, shadowView, shadowSamp, shoreSim.ubuf, shoreSim.stateView, shoreSim.wetView, sky.view, skySamp, nearView, sky.shade]);
+        [buf, hview, rip, shadowView, shadowSamp, shoreSim.ubuf, shoreSim.stateView, shoreSim.wetView, sky.view, skySamp, nearView, sky.shade, starView, starSamp]);
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
       bgGeoR = geoGroup(rbuf, ripViews[0]);
       bgUB = groupOf(device, ubLayout, [ubuf]);
@@ -3405,22 +4088,36 @@ async function main() {
     resize();
     addEventListener('resize', resize);
 
+    let terrainList = null;
+    function drawTerrain(pass) {
+      if (NO.terrain) return;
+      // Null list is the full island mesh: a cell that is not on the GPU yet cannot hole the ground.
+      if (!terrainList) {
+        pass.setVertexBuffer(0, terrainVB);
+        pass.setIndexBuffer(terrainIB, 'uint32');
+        pass.drawIndexed(terrain.idx.length);
+        frameDraws++;
+        return;
+      }
+      let vb = null, ib = null;
+      for (let i = 0; i < stream.patchN; i++) {
+        const p = terrainList[i];
+        if (p.vb !== vb) { pass.setVertexBuffer(0, p.vb); vb = p.vb; }
+        if (p.ib !== ib) { pass.setIndexBuffer(p.ib, 'uint32'); ib = p.ib; }
+        pass.drawIndexed(p.count);
+        frameDraws++;
+      }
+    }
     function drawWorld(pass, ub, geo, birds, draws) {
       // The mirrored view holds the land and what grows on it and nothing else. The sky the
       // water reflects is worked out where it is used, for the tilt of each wave; a mirrored
       // picture of it, pushed about and blurred, laid pale columns over the swell.
       if (birds && !NO.sky) { pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3); }
       pass.setPipeline(pipes.terrain); pass.setBindGroup(0, geo);
-      pass.setVertexBuffer(0, terrainVB); pass.setIndexBuffer(terrainIB, 'uint32');
-      if (!NO.terrain) pass.drawIndexed(terrain.idx.length);
+      drawTerrain(pass);
       if (!NO.mesh) drawMeshes(pass, pipes.mesh, geo, meshVB, meshIB, instB, draws);
-      // The gulls go to roost as the light goes.
-      const flock = Math.round(q.birds * (1 - env.night));
-      if (birds && flock && pipes.bird) {
-        pass.setPipeline(pipes.bird); pass.setBindGroup(0, geo);
-        pass.setVertexBuffer(0, birdVB); pass.setVertexBuffer(1, birdInstB);
-        pass.setIndexBuffer(birdIB, 'uint16');
-        pass.drawIndexed(bgeom.idx.length, flock);
+      if (birds && birdDraws.length && pipes.bird) {
+        drawMeshes(pass, pipes.bird, geo, birdVB, birdIB, birdInstB, birdDraws);
       }
       if (birds) drawMeshes(pass, pipes.fish, geo, fishVB, fishIB, fishInstB, fishDraws);
       if (birds && grassCount && pipes.grass && !NO.grass) {
@@ -3439,9 +4136,19 @@ async function main() {
     envSky(time, 0);
     // Captures hold the hour and the weather still unless asked to let them run.
     if (qstr.has('shot') || qstr.has('studio')) { env.run = env.auto = qstr.has('flow'); }
-    if (qstr.has('tod')) env.hour = parseFloat(qstr.get('tod')) || ENV_H0;
-    else if (!qstr.has('shot')) { env.hour = ENV_OPEN; env.run = false; }
+    if (qstr.has('tod')) {
+      let h = parseFloat(qstr.get('tod')) || ENV_H0;
+      env.astroDay = h >= 24 ? 1 : 0;
+      if (h >= 24) h -= 24;
+      env.hour = h;
+    } else if (!qstr.has('shot')) { env.hour = ENV_OPEN; env.run = false; }
     if (qstr.has('wx')) { envSet(qstr.get('wx'), true); env.auto = false; }
+    if (qstr.get('moon') === 'art') env.realMoon = false;
+    if (qstr.has('space')) {
+      const raw = parseInt(qstr.get('space'), 10);
+      const si = raw - 1;
+      if (SPACES[si]) applySpace(si, { snap: qstr.has('shot') || qstr.has('read'), quiet: true });
+    }
     let last = performance.now();
     // Resolution follows the frame rate, so a machine the preset is too much for gets a
     // softer picture and not a slide show. Captures and the benchmark are left alone, and
@@ -3545,8 +4252,16 @@ async function main() {
       const c0 = performance.now();
       try { frameBody(now); if (frames > 4) { PERF.cpuN = (PERF.cpuN || 0) + 1; PERF.cpuMs = (PERF.cpuMs || 0) + performance.now() - c0; } } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
     }
+    // Bench is deferred (critical gzip). Eval before install; B/G/?bench still work.
+    function ensureBench() {
+      if (typeof WW_BENCH !== 'undefined') return true;
+      const el = document.getElementById('ww-deferred-bench');
+      if (!el) return false;
+      (0, eval)(el.textContent);
+      return typeof WW_BENCH !== 'undefined';
+    }
     // Bench path: forest → palms → coast → beach/ocean → aerial → clouds → underwater (AG fly idea).
-    if (typeof WW_BENCH !== 'undefined') {
+    if (ensureBench()) {
       const keys = [];
       const pushKey = (s) => keys.push([s.x, s.y, s.z, s.yaw, s.pitch]);
       // Dense canopy inland of the beach.
@@ -3710,7 +4425,7 @@ async function main() {
         applyOrbitPose();
         const orr = Math.hypot(camX, camZ);
         if (orr > 980) { camX *= 980 / orr; camZ *= 980 / orr; }
-        if (camY > 320) camY = 320;
+        if (camY > FLY_TOP) camY = FLY_TOP;
         if (camY < 0.35) camY = 0.35;
         }
       } else if (mode === 2) {
@@ -3740,7 +4455,10 @@ async function main() {
           if (wl3 > 1) { wishX /= wl3; wishY /= wl3; wishZ /= wl3; }
           if (K.Space || K.KeyE) wishY += 1;
           if (K.ControlLeft || K.ControlRight || K.KeyQ) wishY -= 1;
-          const spm = sprint ? 48 : 14;
+          // Near the ground the old speeds stand. Higher up the air thins the trip:
+          // the cloud base is about a kilometre up, and the ceiling is above the cirrus.
+          const altLift = 1 + Math.min(6.5, Math.max(0, camY - 80) / 180);
+          const spm = (sprint ? 48 : 14) * altLift;
           const accel = 9.0, friction = 7.0;
           const tx = wishX * spm, ty = wishY * spm, tz = wishZ * spm;
           const kA = 1 - Math.exp(-accel * dt), kF = 1 - Math.exp(-friction * dt);
@@ -3767,7 +4485,7 @@ async function main() {
         }
         const rr = Math.hypot(camX, camZ);
         if (rr > 980) { camX *= 980 / rr; camZ *= 980 / rr; }
-        if (camY > 320) camY = 320;
+        if (camY > FLY_TOP) camY = FLY_TOP;
         if (camY < -8) camY = -8;
       }
       // Nothing puts the eye under the land or the seabed: not an orbit swung over a hill, not
@@ -3805,7 +4523,10 @@ async function main() {
       }
 
       // Insects are above-water only; skip when submerged (draws already empty underwater).
-      if (camY >= waveHere - 0.05) bugLife.update(dt, time, camX, camY, camZ);
+      if (camY >= waveHere - 0.05) {
+        bugLife.update(dt, time, camX, camY, camZ);
+        birdLife.update(dt, time, camX, camY, camZ);
+      }
       if (bugCam && bugCam.a) {
         // A capture framing: close to one insect, from the side the sun is on, looking at it.
         const a = bugCam.a, S = bugLife.sites.bloom, on = BUGS[a.sp].site === 'bloom' && a.site >= 0;
@@ -3827,20 +4548,41 @@ async function main() {
       if (!underLatch && waterGap > 0.12) underLatch = true;
       else if (underLatch && waterGap < -0.1) underLatch = false;
       const under = underLatch ? 1 : 0;
+      // Lazy-load deep-sea once the eye is in a deep basin (bed under −6 m).
+      if (under && !deepSea && fieldSample(world, camX, camZ) < -6) ensureDeepSea();
+      if (deepSea) deepSea.update(dt, time, camX, camY, camZ);
       // Continuous immersion for shaders (fog/fill/caustics) — no forced jump across 0.5.
       // Latch still gates discrete app paths (reflections, bugs, audio).
       let immersion = Math.min(1, Math.max(0, (waterGap + 0.22) / 0.7));
       // Ease ends so the first/last centimetres do not pop tone.
       immersion = immersion * immersion * (3 - 2 * immersion);
-      // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
+      // Disk centred on the eye. The old square stopped at 6.4 km, so from altitude its
+      // edge crossed the frame. Stay inside the 36 km far plane: a vertex past it, pulled
+      // back by hand, clipped into a sheet that painted over the island.
       const eyeH = Math.max(camY, 0.4);
-      const cover = Math.min(6400, 2200 + eyeH * 28) * 2;
+      const angPx = Math.tan(fov * 0.5) / Math.max(viewH, 64);
+      const reach = Math.min(30000, Math.max(8000, eyeH / Math.max(angPx, 1e-5)));
       const snap = 4;
-      const ox = Math.floor(camX / snap) * snap - cover * 0.5;
-      const oz = Math.floor(camZ / snap) * snap - cover * 0.5;
+      const ox = Math.floor(camX / snap) * snap;
+      const oz = Math.floor(camZ / snap) * snap;
+      // Match seaRadius: first ring ~1 m on the inner 8 km, whatever the horizon reach.
+      const split = 0.72, inner = 8000, cell0 = 1;
+      const sRing = cell0 * split * (q.water - 1) / inner;
+      let kSea = 5;
+      for (let i = 0; i < 6; i++) {
+        const ek = Math.exp(kSea), den = ek - 1;
+        kSea -= (kSea / den - sRing) / ((den - kSea * ek) / (den * den));
+        if (kSea < 2) kSea = 2;
+        if (kSea > 12) kSea = 12;
+      }
 
       fillCam(uf, camX, camY, camZ, yaw, pitch, 0, immersion);
-      uf[80] = ox; uf[81] = oz; uf[82] = cover; uf[83] = fieldDamp(world, camX, camZ);
+      uf[80] = ox; uf[81] = oz; uf[82] = reach; uf[83] = fieldDamp(world, camX, camZ);
+      uf[87] = kSea;
+      // Geometric grass fades before a cell stops submitting it. 0 keeps every tuft (?stream=0).
+      // Float 87 is the sea-disk exponent, so the fade lives in the trailing grassFade field.
+      const grassEnd = stream.enabled ? (340 + Math.max(0, camY - 4) * 3.4) : 0;
+      uf[264] = grassEnd;
       // Skip unused planar-reflection *pass* while submerged (Snell path does not sample it).
       // Above-water reflection quality/settings are unchanged — not a fidelity cut.
       if (under) uf[86] = 0;
@@ -3853,6 +4595,14 @@ async function main() {
         const want = skyFor === null ? 1 : 1 + Math.abs(key - skyFor) * 900;
         skyFor = key;
         skyPace = Math.max(1, Math.min(skyPace + 1, Math.max(want, skyPace - 0.25)));
+        // Near the base the volume pass owns low cloud. Hysteresis, then one full rebake,
+        // so the panorama does not keep a strip of cloud the volume pass is also drawing.
+        const baseM = env.sky.base * 1000;
+        if (!cloudOwn && camY > baseM - 70) cloudOwn = true;
+        else if (cloudOwn && camY < baseM - 170) cloudOwn = false;
+        if (cloudOwn !== cloudOwnBake) { cloudOwnBake = cloudOwn; sky.reset(); }
+        // Float 265 is the tail after grassFade. Float 87 stays the sea-disk exponent.
+        uf[265] = cloudOwn ? 1 : 0;
         sky.plan(uf, skyPace);
       }
       // Reflected camera, for the water mirror — skipped entirely when reflections are off.
@@ -3874,6 +4624,30 @@ async function main() {
         device.queue.writeBuffer(rbuf, 0, ur);
       }
       device.queue.writeBuffer(ubuf, 0, uf);
+
+      // Rings, predictive cells, then GPU uploads. Ocean cascades and the sky bake
+      // above are untouched — one sea, one atmosphere. A failure falls back to the full mesh.
+      terrainList = null;
+      try {
+        stream.tick(camX, camZ, camY, dt, fwd[0], fwd[2], VP, device);
+        terrainList = stream.patches();
+        if (stream.enabled) {
+          const gkey = stream.grassKey(camX, camZ, grassEnd);
+          if (gkey !== grassKey) {
+            const n = stream.gatherGrass(grassDraw, camX, camZ, grassEnd);
+            if (n >= 0) {
+              grassCount = n;
+              if (n) device.queue.writeBuffer(grassInstB, 0, grassDraw.subarray(0, n * 4));
+              grassKey = gkey;
+            }
+          }
+        }
+      } catch (err) {
+        stream.enabled = false;
+        terrainList = null;
+        stream.fail = (err && err.message) || String(err);
+        console.warn('stream', err);
+      }
 
       // Keep the island skyline filled: base reach covers the coast-to-ridge distance on foot.
       // Large plants get an extra leash inside collect() so distant crowns do not pop.
@@ -3915,7 +4689,7 @@ async function main() {
       cpuCullMs = performance.now() - tCull0;
       // Fish are seen under water from 44 m at most, and from the air only close by.
       if (camY < waveHere + 55) {
-        fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 44 : 30, fishPack.ranges);
+        fishDraws = fishLife.collect(fishArr, uf, camX, camY, camZ, under ? 58 : 30, fishPack.ranges);
         if (fishDraws.end) device.queue.writeBuffer(fishInstB, 0, fishArr, 0, fishDraws.end * ISTRIDE);
       } else {
         fishDraws = bugDrawsEmpty;
@@ -3926,31 +4700,19 @@ async function main() {
         bugDraws = bugLife.collect(bugArr, uf, camX, camY, camZ, uf[63] * 2 / viewH, bugPack.ranges);
         if (bugDraws.end) device.queue.writeBuffer(bugInstB, 0, bugArr, 0, bugDraws.end * BUG_STRIDE);
       }
-      if (q.birds) {
-        for (let i = 0; i < q.birds; i++) {
-          let x = birdMeta[i * 4], z = birdMeta[i * 4 + 1], hd = birdMeta[i * 4 + 2];
-          const sp = 7 + (i % 5) * 1.6;
-          const dist = Math.hypot(x, z) || 1;
-          const home = Math.atan2(-z, -x);
-          let turn = home - hd;
-          while (turn > Math.PI) turn -= Math.PI * 2;
-          while (turn < -Math.PI) turn += Math.PI * 2;
-          hd += (dist > 150 ? turn * 0.45 : Math.sin(time * 0.19 + i * 1.7) * 0.28) * dt;
-          // A bird flies through moving air: it is carried a third as fast as the wind blows.
-          const drift = envWindAt(x, z) * 0.35;
-          x += (Math.cos(hd) * sp + env.wx0 * drift) * dt;
-          z += (Math.sin(hd) * sp + env.wz0 * drift) * dt;
-          const ground = fieldSample(world, x, z);
-          const y = Math.max(birdMeta[i * 4 + 3] + Math.sin(time * 0.35 + i) * 3.5, ground + 9);
-          birdMeta[i * 4] = x; birdMeta[i * 4 + 1] = z; birdMeta[i * 4 + 2] = hd;
-          birdData[i * 4] = x;
-          birdData[i * 4 + 1] = y;
-          birdData[i * 4 + 2] = z;
-          birdData[i * 4 + 3] = hd;
-          // Capture only: bird=<metres> flies the first three past the camera.
-          if (birdNear && i < 3) birdData.set([camX + Math.sin(yaw) * birdNear + Math.cos(yaw) * (i - 1) * 1.3, camY + 0.3 * i, camZ - Math.cos(yaw) * birdNear + Math.sin(yaw) * (i - 1) * 1.3, yaw + [0, 0.9, -2.2][i]], i * 4);
+      if (under) birdDraws = bugDrawsEmpty;
+      else {
+        if (birdNear) {
+          for (let i = 0; i < Math.min(3, birdLife.agents.length); i++) {
+            const a = birdLife.agents[i];
+            a.on = true; a.mode = 0; a.amp = 0.7; a.ph = time * 8 + i;
+            a.x = camX + Math.sin(yaw) * birdNear + Math.cos(yaw) * (i - 1) * 1.3;
+            a.y = camY + 0.3 * i; a.z = camZ - Math.cos(yaw) * birdNear + Math.sin(yaw) * (i - 1) * 1.3;
+            a.yaw = yaw + [0, 0.9, -2.2][i]; a.sc = 1.1;
+          }
         }
-        device.queue.writeBuffer(birdInstB, 0, birdData);
+        birdDraws = birdLife.collect(birdArr, uf, camX, camY, camZ, 160, birdPack.ranges);
+        if (birdDraws.end) device.queue.writeBuffer(birdInstB, 0, birdArr, 0, birdDraws.end * ISTRIDE);
       }
 
       if (pendingSplat && !wp.paused) {
@@ -4023,7 +4785,13 @@ async function main() {
         spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
         spass.drawIndexed(terrain.idx.length);
         drawMeshes(spass, pipes.shadowMesh, bgUB, meshVB, meshIB, instFarB, farDraws);
-        // HOTFIX: grass island shadows off until shadowGrass uses geoPL (see pipe site).
+        // Meadows + flower shrubs: island map is coarse, but dense grass still darkens sand.
+        if (pipes.shadowGrass && grassCount && !NO.grass) {
+          spass.setPipeline(pipes.shadowGrass); spass.setBindGroup(0, bgGround);
+          spass.setVertexBuffer(0, grassVB); spass.setVertexBuffer(1, grassInstB);
+          spass.setIndexBuffer(grassIB, 'uint16');
+          spass.drawIndexed(g.idx.length, grassCount);
+        }
         spass.end();
       }
       // Near cascade: redraw when the eye or sun moved enough; adopt candidate VP then bake.
@@ -4053,7 +4821,13 @@ async function main() {
           np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
           np.drawIndexed(nearRows[1], 1, nearRows[0]);
           if (!NO.near) drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
-          // HOTFIX: grass near-cascade shadows off until shadowGrass uses geoPL.
+          // Nearby grass and flower-shrub meshes (in nearDraws) both darken the ground.
+          if (pipes.shadowGrass && grassCount && !NO.grass) {
+            np.setPipeline(pipes.shadowGrass); np.setBindGroup(0, bgGroundN);
+            np.setVertexBuffer(0, grassVB); np.setVertexBuffer(1, grassInstB);
+            np.setIndexBuffer(grassIB, 'uint16');
+            np.drawIndexed(g.idx.length, grassCount);
+          }
           if (under) drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
           else drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
           np.end();
@@ -4073,6 +4847,20 @@ async function main() {
       const sp = enc.beginRenderPass(scenePass);
       drawWorld(sp, bgUB, geoNow, true, mainDraws);
       sp.end();
+      // The flash is a few frames long. March it into the sky only while it is on.
+      if (bolt.now > 0.004 && pipes.bolt && bgBolt && !under && !NO.sky) {
+        const bp = enc.beginRenderPass(boltPass);
+        bp.setPipeline(pipes.bolt); bp.setBindGroup(0, bgUB); bp.setBindGroup(1, bgBolt);
+        bp.draw(3); bp.end();
+      }
+      {
+        const cp = enc.beginRenderPass(cloudPass);
+        if (pipes.cloud && !NO.cloud && uf[265] > 0.5) {
+          cp.setPipeline(pipes.cloud); cp.setBindGroup(0, bgUB); cp.setBindGroup(1, bgCloud);
+          cp.draw(3);
+        }
+        cp.end();
+      }
       {
         const ap = enc.beginRenderPass(airPass);
         // Until its pipeline is built the pass only clears, which reads as clear air.
@@ -4114,17 +4902,26 @@ async function main() {
         }
         pass.end();
       };
-      const toScreen = !(READ && frames === READ_AT);
-      if (READ && readTex) drawSwap(readViews[0], readViews[1], !toScreen);
-      if (toScreen) drawSwap(context.getCurrentTexture().createView(), swapDepthView, true);
+      // A capture never presents. Headless WebGPU has no swapchain image, and asking for
+      // one destroys the device before the frame can be read back.
+      const seqHit = READ_SEQ > 0 && frames >= READ_AT
+        && ((frames - READ_AT) % READ_STRIDE) === 0
+        && (window.__pngs?.length || 0) < READ_SEQ
+        && !window.__reading;
+      if (READ) {
+        if (readTex && (frames === READ_AT || seqHit)) drawSwap(readViews[0], readViews[1], true);
+      } else {
+        drawSwap(context.getCurrentTexture().createView(), swapDepthView, true);
+      }
       let doRead = false;
-      if (READ && readTex && frames === READ_AT) {
+      if (READ && readTex && (frames === READ_AT || seqHit) && !window.__reading) {
         enc.copyTextureToBuffer(
           { texture: readTex },
           { buffer: readBuf, bytesPerRow: readBpr, rowsPerImage: viewH },
           { width: viewW, height: viewH }
         );
         doRead = true;
+        window.__reading = true;
         window.__stage = 'copy';
       }
       if (tsSlot) {
@@ -4149,6 +4946,7 @@ async function main() {
           if (!window.__png && !window.__gpuerr) {
             window.__gpuerr = 'read timeout';
             console.error('READ timeout');
+            window.__reading = false;
             requestAnimationFrame(frame);
           }
         }, 240000);
@@ -4170,7 +4968,13 @@ async function main() {
           const c2 = document.createElement('canvas');
           c2.width = wCap; c2.height = hCap;
           c2.getContext('2d').putImageData(new ImageData(img, wCap, hCap), 0, 0);
-          window.__png = c2.toDataURL('image/png');
+          const url = c2.toDataURL('image/png');
+          window.__png = url;
+          if (READ_SEQ > 0 && window.__pngs) {
+            window.__pngs.push(url);
+            window.__stage = 'seq:' + window.__pngs.length + '/' + READ_SEQ;
+          }
+          window.__reading = false;
           if (qstr.has('perf')) {
             const tri = (d) => { let n = 0; for (let i = 0; i < d.length; i += 5) n += d[i + 1] * d[i + 4]; return Math.round(n / 3000) + 'k'; };
             const top = (d) => { const r = []; for (let i = 0; i < d.length; i += 5) r.push([d[i + 1] / 3 * d[i + 4], d[i + 1] / 3, d[i + 4]]); return r.sort((x, y) => y[0] - x[0]).slice(0, 14).map((x) => x[1] + 'x' + x[2]).join(' '); };
@@ -4178,7 +4982,7 @@ async function main() {
             console.log('PERF cpu ' + (PERF.cpuMs / PERF.cpuN).toFixed(2) + ' ms/frame over ' + PERF.cpuN + ', plant triangles: view ' + tri(mainDraws) + ', mirror ' + tri(reflDraws) + ', near shadow ' + tri(nearDraws));
           }
           requestAnimationFrame(frame);
-        }).catch((err) => { clearTimeout(readWatch); window.__gpuerr = String(err); console.error('READ', err); });
+        }).catch((err) => { clearTimeout(readWatch); window.__gpuerr = String(err); window.__reading = false; console.error('READ', err); });
         return;
       }
 
@@ -4195,7 +4999,8 @@ async function main() {
         } else if (cpuFrameMs > 12 || sum / ftN > 0.02) {
           bound = cpuCullMs > 4 ? '  ·  CPU cull heavy' : '  ·  check GPU timing';
         }
-        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH + (dynScale < 1 ? ' (' + Math.round(dynScale * 100) + '%)' : '') + gpu + cpu + bound;
+        statsEl.textContent = fps + ' fps  ·  ' + q.name + '  ·  ' + viewW + '×' + viewH + (dynScale < 1 ? ' (' + Math.round(dynScale * 100) + '%)' : '') + gpu + cpu + bound
+          + '  ·  ' + stream.line();
       }
       if (score) score.setAudible(mode > 0 && musicOn && !muted, musicVol);
       if (audio && mode > 0) {
@@ -4204,29 +5009,54 @@ async function main() {
         const land = fieldSample(world, camX, camZ);
         const nearBreak = Math.exp(-Math.max(land, 0) * 0.35) * (land < 3 ? 1 : 0.35);
         audio.shoreAmt = nearBreak;
-        // Swash bed + whitewater hiss scale with break proximity (synthesized noise only).
-        audio.surf.gain.value = (muted ? 0 : 0.18) * shore * (0.75 + 0.55 * nearBreak) * (under ? 0.22 : 1);
-        audio.hiss.gain.value = (muted ? 0 : 0.055) * nearBreak * (0.85 + 0.4 * shore) * (under ? 0.08 : 1);
+        // Ocean-first continuous foundation (synth noise); beds carry, crashes are accents.
+        const sea = muted ? 0 : 1;
+        const uw = audio.underAmt;
+        const wet = 1 - 0.78 * uw;
+        const oceanBed = 0.42 + 0.58 * shore;
+        audio.swell.gain.value = sea * 0.2 * oceanBed * (0.55 + 0.7 * nearBreak) * wet;
+        audio.surf.gain.value = sea * 0.17 * oceanBed * (0.65 + 0.7 * nearBreak) * wet;
+        audio.body.gain.value = sea * 0.11 * oceanBed * (0.4 + 0.9 * nearBreak) * (1 - 0.88 * uw);
+        audio.hiss.gain.value = sea * 0.028 * nearBreak * (0.7 + 0.5 * shore) * (1 - 0.92 * uw);
         // Same travelling gust cells that bend plants and chop the bay.
         const gust = envWindAt(camX, camZ);
         const sy = env.sun[1], dark = smooth01(0.1, -0.08, sy);
         const wood = land > 1.2 ? Math.max(0, Math.min(1, forestMask(camX, camZ, land, fieldSlope(world, camX, camZ)) * 1.5)) : 0;
         const palmZone = Math.max(0, Math.min(1, (1.2 - Math.abs(land - 1.4)) / 1.2)) * (1 - wood * 0.5);
-        audio.wind.gain.value = (muted ? 0 : 0.04) * (0.3 + Math.min(alt, 80) / 80) * (under ? 0.05 : 1) * (land > 8 ? 1.2 : 0.85) * (0.3 + 0.7 * gust * gust / 22);
-        audio.insects.gain.value = (muted ? 0 : 0.02) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (under ? 0 : 1) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2)) * (1 - 0.35 * Math.min(1, gust / 10));
+        audio.wind.gain.value = (muted ? 0 : 0.028) * (0.3 + Math.min(alt, 80) / 80) * (1 - 0.95 * uw) * (land > 8 ? 1.2 : 0.85) * (0.3 + 0.7 * gust * gust / 22);
+        audio.insects.gain.value = (muted ? 0 : 0.012) * Math.max(0, Math.min(1, (land - 0.8) / 5)) * (1 - uw) * (1 - 0.7 * dark) * (1 - Math.min(1, env.v[1] * 2)) * (1 - 0.35 * Math.min(1, gust / 10));
         audio.air({
           heat: smooth01(0.15, 0.6, sy) * (1 - 0.7 * env.cover), dark: dark, low: smooth01(0.4, 0.1, sy) * (1 - dark),
           dawn: smooth01(5, 6, env.hour) * (1 - smooth01(7.5, 9, env.hour)), rain: env.v[1], gust: gust,
           wood: wood, shore: nearBreak, palm: palmZone,
-          alt: camY - Math.max(land, 0) - 1.7, under: under, heard: bugLife.heard
+          alt: camY - Math.max(land, 0) - 1.7, under: under, heard: Object.assign({}, bugLife.heard, birdLife.heard)
         });
-        audio.under.frequency.value = under ? 380 : 16000;
-        audio.underAmt = under ? 1 : 0;
+        if (audio.birdListen) audio.birdListen(camX, camZ, yaw);
+        audio._singLiving = () => !!(audio.singFrom && birdLife.singers.length && audio.singFrom(birdLife.singers));
+        // Depth-aware muffling on the shared under LPF: reef stays readable; abyss cuts highs harder.
+        const camDeep = under ? Math.max(-camY, 0) : 0;
+        const deepAmt = under ? Math.min(1, Math.max(0, (camDeep - 4) / 14)) : 0;
+        audio.deepAmt = deepAmt;
+        const underGoal = under ? (360 - deepAmt * 180) : 16000;
+        if (underGoal !== audio._underGoal) {
+          audio._underGoal = underGoal;
+          audio.under.frequency.setTargetAtTime(underGoal, audio.ac.currentTime, 0.28);
+        }
+        audio.underAmt += ((under ? 1 : 0) - audio.underAmt) * 0.07;
+        // Proximity to either 1800s wreck habitat (for creaks / bubble bias).
+        const w1 = Math.hypot(camX - 232, camZ + 45);
+        const w2 = Math.hypot(camX - 240, camZ - 10);
+        audio.wreckNear = under ? Math.max(0, 1 - Math.min(w1, w2) / 18) : 0;
         // Swim-speed water rush while submerged (Abyssal audio cue).
         const spd = Math.hypot(velX, velY, velZ);
         const m = muted ? 0 : 1;
-        audio.rush.value = m * (under ? 0.045 * Math.pow(Math.min(spd / 14, 1), 1.2) : 0);
-        if (under) audio.rushF.frequency.value = 200 + spd * 12;
+        audio.rush.value = m * (0.045 * Math.pow(Math.min(spd / 14, 1), 1.2) * uw);
+        if (uw > 0.05) audio.rushF.frequency.value = 160 + spd * 12 + deepAmt * 40;
+        // Pressure rumble grows with depth; silent above water.
+        if (audio.pressure) {
+          audio.pressure.gain.value = m * (0.035 * deepAmt * deepAmt * uw);
+          if (audio.pressureF) audio.pressureF.frequency.value = 55 + deepAmt * 50;
+        }
       }
       if (showHint > 0) {
         showHint -= dt;
@@ -4252,11 +5082,20 @@ async function main() {
       if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) {
         // A phone has no keys and no mouse to give up: it keeps the view it is turned by a finger.
         openOrbit();
+        const spPhone = env.spacePick >= 0 ? SPACES[env.spacePick] : null;
+        if (spPhone && qstr.has('spacecam') && spPhone.spot != null) {
+          goPlace(spPhone.spot, true);
+          showCaption(spPhone);
+        }
         showHint = 7;
-        $('hint').textContent = 'Drag to look round · Places to travel · Walk to go on foot';
+        $('hint').textContent = 'Drag to look round · Spaces for the light · Places to travel · Walk to go on foot';
       } else {
         putPlace(WATER);
-        goPlace(0, false);
+        const sp = env.spacePick >= 0 ? SPACES[env.spacePick] : null;
+        if (sp && qstr.has('spacecam') && sp.spot != null) {
+          goPlace(sp.spot, true);
+          showCaption(sp);
+        } else goPlace(0, false);
         showModeHint(false);
         tryLockPointer();
       }
@@ -4288,10 +5127,25 @@ async function main() {
           camX = a[0] || 0; camZ = a[1] || 0; yaw = (a[2] || 0) * Math.PI / 180; pitch = (a[3] || 0) * Math.PI / 180;
           camY = Math.max(fieldSample(world, camX, camZ), 0) + (a[4] || 1.7); fly = true;
         }
+        if (env.spaceId === 7 && !qstr.has('at') && !qstr.has('sunview')) {
+          const turn = num('dyaw'), tilt = num('dpitch');
+          aimMoon();
+          yaw += turn; pitch += tilt;
+        }
         birdNear = num('bird');
         // fish=<species> frames one fish (fd under 1.6 m) or its school; calm stops them minding the camera;
         // warm runs the animals for that many seconds first.
         fishLife.calm = qstr.has('calm');
+        // shark=wreck frames the rare sixgill wreck-emerge school; shark=basin the signature patrol.
+        if (qstr.has('shark') && !qstr.has('fish')) {
+          const wantWreck = qstr.get('shark') === 'wreck';
+          let nth = 0;
+          for (const s of fishLife.schools) {
+            if (s.sp !== 12) continue;
+            if (!!s.wreck === wantWreck) { qstr.set('fish', '12'); qstr.set('nth', String(nth)); break; }
+            nth++;
+          }
+        }
         if (qstr.has('fish')) {
           const fs = fishLife.find(parseInt(qstr.get('fish'), 10) || 0, parseInt(qstr.get('nth') || '0', 10));
           if (fs) {
@@ -4330,6 +5184,37 @@ async function main() {
           bugCam = { a: bugLife.find(qstr.get('bug'), st) || bugLife.find(qstr.get('bug'), null), d: num('bd') || 0.3, turn: num('turn'), up: num('fup'), tilt: num('tilt') };
           if (bugCam.a) { fly = true; if (qstr.has('hold')) { bugCam.a.t = 1e3; bugCam.a.pin = true; } }
           console.log('DBG bug ' + JSON.stringify(bugLife.lvl) + ' sites ' + Object.keys(bugLife.sites).map((k) => k + ':' + bugLife.sites[k].length / 5).join(' ') + ' found ' + (bugCam.a ? [bugCam.a.x, bugCam.a.y, bugCam.a.z, bugCam.a.st].join(',') : 'none'));
+        }
+        if (qstr.has('birdsp') || qstr.has('bwarm')) {
+          envStep(0, time, wp.mood[1], wp.mood[2], wp.dir, wp.amp);
+          birdLife.calm = true;
+          // Seed near the beach so shore/forest species wake around the shot.
+          const warmX = beach.x, warmZ = beach.z, warmY = beach.h + 2;
+          const warmN = Math.min(Math.max(0, num('bwarm') || 6), 12) * 30;
+          for (let k = 0; k < warmN; k++) {
+            bugLife.update(1 / 30, time + k / 30, warmX, warmY, warmZ);
+            birdLife.update(1 / 30, time + k / 30, warmX, warmY, warmZ);
+          }
+          const id = qstr.get('birdsp') || 'tern';
+          let a = birdLife.find(id, num('nth') || 0);
+          if (!a) {
+            // Force one agent of that species onto a home near the beach, then find it.
+            const sp = BIRD_SPECIES.findIndex((b) => b.id === id);
+            if (sp >= 0) {
+              const cand = birdLife.agents.find((x) => x.sp === sp);
+              if (cand) { birdLife.newHome(cand); cand.on = true; a = cand; }
+            }
+          }
+          a = a || birdLife.nearest(warmX, warmY, warmZ);
+          if (a) {
+            fly = true;
+            const back = num('bd') || 4;
+            camX = a.x - Math.sin(a.yaw) * back;
+            camZ = a.z + Math.cos(a.yaw) * back;
+            camY = a.y + (num('fup') || 0.8);
+            yaw = Math.atan2(a.x - camX, -(a.z - camZ));
+            pitch = Math.atan2((a.y - camY), Math.hypot(a.x - camX, a.z - camZ)) + (num('tilt') || 0);
+          }
         }
       }
       barEl.parentElement.hidden = true;

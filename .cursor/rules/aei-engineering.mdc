@@ -1,0 +1,26 @@
+---
+description: Windward AEI 1.0 — versioned contracts, immutable evidence, independent verification
+alwaysApply: true
+---
+
+# Windward AEI 1.0
+
+Authoritative policy: [`AEI/CHARTER.md`](AEI/CHARTER.md). Status: architecture approved; **not operational** until First Acceptance Milestone.
+
+## Governing principle
+
+No model, agent, executive, or workflow may declare its own work successful without independent evidence.
+
+## Three safeguards
+
+1. **Versioned contracts** — tasks, evidence, and responses declare `schemaVersion` (`AEI/contracts/`). Backward compatible or explicit migration.
+2. **Immutable evidence** — never overwrite baselines/results; corrections = new records with `supersedes`.
+3. **Independent reviewer** — verifier assigned separately from implementer; cannot approve own changes; must execute tests.
+
+## Also
+
+- Model independence: provider is metadata only; shared contracts for Cursor / Claude / GPT / others.
+- Size budgets: product vs AEI measured separately (`AEI/BUDGETS.md`); do not game exclusions.
+- Human authority for production, protected baselines, security, architecture replacements, feature removals, budget changes.
+- No dashboard work before foundation milestone (inventory → baseline → evidence → verifier → one real demo).
+- Product code: `DEVELOPMENT_STANDARDS.md` + required gates; no invented passes; label headless vs real-GPU.

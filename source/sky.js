@@ -97,7 +97,7 @@ function createSky(device, o) {
   const wxPass = passOf(wx), shadePass = passOf(shade), panoPass = [passOf(layer(0, 0)), passOf(layer(1, 0))], dimPass = passOf(layer(0, 4)), irrPass = passOf(layer(0, 3));
   let count = -1, todo = 0, tick = 0;
   return {
-    view: pano.createView({ dimension: '2d-array' }), shade: shade, wx: wx, noise: noise, pano: pano,
+    view: pano.createView({ dimension: '2d-array' }), shade: shade, wx: wx, noise: noise, samp: samp, nSamp: samp, pano: pano,
     // Bake everything again, at once: the weather was set, not drifted into.
     reset() { count = -1; },
     // Decide how many strips this frame bakes and tell the shaders where the blend stands.
@@ -159,7 +159,7 @@ const CS_K: f32 = 5.0;
 // Extinction of full cloud per kilometre, the width of one tile of cloud noise, and the cirrus level.
 const C_SIG: f32 = 45.0;
 const C_TILE: f32 = 9.6;
-const C_HIGH: f32 = 10.5;
+const C_HIGH: f32 = 12.0;
 const BR = vec3<f32>(5.8e-3, 13.5e-3, 33.1e-3);
 // Ozone takes green out of the long horizontal paths, which keeps the horizon from going teal.
 const BO = vec3<f32>(1.3e-3, 3.8e-3, 0.2e-3);
@@ -243,7 +243,10 @@ fn atmosphere(rd: vec3<f32>, h0: f32) -> Air {
   // several scatterings, which this sum leaves out: with it the sky sheds on level ground about
   // a quarter of what the high sun does, as it is measured to. The forward glare round the sun
   // is nearly all first scattering and is not raised by it.
-  a.c = F.disc.rgb * 5.6 * (sR * BR * pR + sM * bM * pM * 0.44 + sS * 0.02);
+  // Multi-scatter term lifted slightly at low sun so the dome stays softly luminous
+  // without bleaching midday blue (sS already carries sun-path reddening).
+  let ms = mix(0.02, 0.028, sat(F.day.w));
+  a.c = F.disc.rgb * 5.6 * (sR * BR * pR + sM * bM * pM * 0.44 + sS * ms);
   a.t = exp(-((BR + BO) * od.x + bM * od.y));
   return a;
 }
@@ -264,6 +267,20 @@ fn shellT(b: f32, Rc: f32, dh: f32) -> f32 {
   let cc = dh * (2.0 * Rc + dh);
   let sq = sqrt(b * b + cc);
   return select(-b + sq, cc / (b + sq), b >= 0.0);
+}
+// Distance to a shell dh above the start, or -1 when that shell is not ahead.
+// shellT is the historical form and is kept for the view from under the clouds;
+// this one refuses a negative discriminant, which is what a camera inside or
+// above the deck would hand it.
+fn shellAhead(b: f32, Rc: f32, dh: f32) -> f32 {
+  if (abs(dh) < 1e-5) { return 0.0; }
+  let cc = dh * (2.0 * Rc + dh);
+  let disc = b * b + cc;
+  if (disc <= 0.0) { return -1.0; }
+  let sq = sqrt(disc);
+  let t = select(-b + sq, cc / max(b + sq, 1e-5), b >= 0.0);
+  if (t >= 0.0) { return t; }
+  return -1.0;
 }
 fn riseAt(b: f32, Rc: f32, t: f32) -> f32 {
   let x = 2.0 * b * t + t * t;
@@ -289,10 +306,14 @@ fn mapPlace(ndc: vec2<f32>, k: f32) -> vec2<f32> {
   let prov = nz(vec3<f32>(gd / 288.0, evo)).a;
   let cl = nz(vec3<f32>(gd / 72.0 + vec2<f32>(0.37, 0.11), evo * 3.0 + 0.5));
   let cum = F.cldA.x;
-  let c = sat(cum + ((prov - 0.5) * 1.1 + (cl.a - 0.5) * 0.6) * (0.3 + cum));
+  // Moist provinces run a little larger than the dry ones, so a fair day still has
+  // scattered cumulus and a cloudy day has fields of it, with holes either way.
+  let moist = (prov - 0.4) * 1.05 + (cl.a - 0.46) * 0.7;
+  let c = sat(cum * 1.2 + 0.06 + moist * (0.4 + cum));
   let dn = nz(vec3<f32>((g + F.cldC.zw) / 144.0 + vec2<f32>(0.61, 0.23), evo * 2.0 + 0.25)).a;
   let dk = F.cldB.y;
-  let deck = sat(dk * 1.4 - (1.0 - dn) * 1.6 * (1.0 - dk));
+  // A small deck amount is a broken layer. Only a high amount closes the gaps.
+  let deck = sat(dk * 1.15 + (dn - 0.42) * (0.35 + dk) - 0.08 * (1.0 - dk));
   // Towers stand on a loose grid of sites. Each grows, spreads an anvil downwind and rains
   // out, on its own clock, and unstable air fills more of the sites.
   let gw = g + F.skyD.zw + (cl.ar - 0.5) * 9.0;
@@ -309,9 +330,10 @@ fn mapPlace(ndc: vec2<f32>, k: f32) -> vec2<f32> {
       let ctr = (id + 0.15 + 0.7 * h) * 36.0;
       let life = fract(k.x + evo * 4.0);
       let grow = smoothstep(0.0, 0.35, life) * smoothstep(1.0, 0.8, life);
-      let there = sat((F.cldA.y * 1.15 - 0.3 - k.y * 0.7) * 5.0);
-      // Over the island itself the sky is kept open unless it is raining.
-      let clear = mix(smoothstep(7.0, 24.0, length(ctr - F.skyD.zw)), 1.0, sat(F.wx.x * 2.0));
+      let there = sat((F.cldA.y * 1.25 - 0.22 - k.y * 0.65) * 4.0);
+      // A gap over the island, narrower than the old one, so towers stand offshore.
+      // Rain fills it. The thundercloud pass darkens these towers; it does not add more.
+      let clear = mix(smoothstep(3.5, 12.0, length(ctr - F.skyD.zw)), 1.0, sat(F.wx.x * 2.0));
       let s = grow * there * clear * (0.62 + 0.38 * h.x);
       let R = mix(5.0, 10.0, h.y);
       let dr = length(gw - ctr) / R;
@@ -323,19 +345,22 @@ fn mapPlace(ndc: vec2<f32>, k: f32) -> vec2<f32> {
       anv = max(anv, am * (1.0 - smoothstep(0.35, 1.0, da)));
     }
   }
-  return vec4<f32>(c * (1.0 - 0.75 * sink), body, anv, deck);
+  return vec4<f32>(c * (1.0 - 0.5 * sink), body, anv, deck);
 }
 // Whether any cloud can stand in this column at this height. The march takes long strides
 // wherever this says no.
 fn cloudMay(w: vec4<f32>, y: f32) -> bool {
   let rel = y - F.cldA.z;
   let hT = rel / (F.cldA.w - F.cldA.z);
-  if (hT < 0.0 || hT > 1.0) { return false; }
+  let inCol = hT >= 0.0 && hT <= 1.0;
   let hD = (y - F.cldB.z) / F.cldE.z;
-  return (w.r > 0.02 && rel < F.skyS.w * (0.45 + 1.1 * w.r))
-    || (w.g > 0.2 && hT < pow(max(w.g - 0.18, 0.0) / 0.4, 1.25))
-    || (w.b > 0.02 && hT > 0.8)
-    || (w.a > 0.02 && hD > 0.0 && hD < 1.0);
+  let cir = y > C_HIGH - 0.22 && y < C_HIGH + 0.5;
+  if (!inCol && !cir) { return false; }
+  return (inCol && w.r > 0.08 && rel < F.skyS.w * (0.55 + 1.15 * w.r))
+    || (inCol && w.g > 0.16 && hT < pow(max(w.g - 0.14, 0.0) / 0.45, 1.2))
+    || (inCol && w.b > 0.08 && hT > 0.7)
+    || (inCol && w.a > 0.08 && hD > 0.0 && hD < 1.0)
+    || (cir && F.cldB.x > 0.02);
 }
 // Cloud at a place, from the weather there. Each family has its own profile with height,
 // and one field of billows carves them all. fine adds the small scale, for what the eye sees;
@@ -352,21 +377,32 @@ fn cloudDenW(p: vec3<f32>, w: vec4<f32>, fine: f32) -> f32 {
   var k = 1.0;
   var cut = 1.0;
   // Cumulus: flat where the air first condenses, widest there, narrowing to the crown.
-  let h1 = rel / (F.skyS.w * (0.45 + 1.1 * w.r));
+  let h1 = rel / (F.skyS.w * (0.55 + 1.15 * w.r));
   if (w.r > 0.02 && h1 > 0.0 && h1 < 1.0) {
-    let cov = w.r * (1.0 - 0.72 * pow(h1, 1.4));
-    d = sat((s - 1.0 + cov) * 5.0) * smoothstep(0.0, 0.07, h1) * smoothstep(1.0, 0.8, h1);
+    let cov = w.r * (1.0 - 0.62 * pow(h1, 1.35));
+    // A lower bar than the old field, so moist air actually holds a cloud, and a
+    // steep gain so the crown goes opaque and the march can stop.
+    d = sat((s - 0.93 + cov * 1.15) * 4.5) * smoothstep(0.0, 0.06, h1) * smoothstep(1.0, 0.78, h1);
   }
   // Towers: a column that tapers as it climbs, with the billows pushing its sides in and out.
-  if (w.g > 0.2 && hT > 0.0 && hT < 1.0) {
+  if (w.g > 0.16 && hT > 0.0 && hT < 1.0) {
     let m = w.g + (s - 0.5) * 0.24;
     let f = sat((m - 0.3 - 0.4 * pow(hT, 0.8)) * 7.0) * smoothstep(0.0, 0.03, hT) * smoothstep(1.0, 0.97, hT);
     if (f > d) { d = f; k = 1.4; }
   }
-  // The anvil: thin ice spread flat under the ceiling, smooth where the tower is lumpy.
-  if (w.b > 0.02 && hT > 0.8 && hT < 1.0) {
-    let f = sat((w.b + (s - 0.5) * 0.35 - 0.3) * 2.5) * smoothstep(0.8, 0.87, hT) * smoothstep(1.0, 0.94, hT);
-    if (f > d) { d = f; k = 0.4; cut = 0.25; }
+  // The anvil: thin ice spread flat under the ceiling. Rain under a tower builds a
+  // real shelf; fair weather keeps the lighter sheet.
+  if (w.b > 0.02 && hT > 0.7 && hT < 1.0) {
+    let f = sat((w.b + (s - 0.5) * 0.35 - 0.28) * 2.5) * smoothstep(0.7, 0.8, hT) * smoothstep(1.0, 0.93, hT);
+    if (f > d) { d = f; k = mix(0.38, 0.72, sat(F.mood.y * F.wx.x)); cut = 0.22; }
+  }
+  // Altocumulus: a broken band well above the trade cumulus, not a second deck.
+  let yA = (p.y - 2.7) / 1.45;
+  if (yA > 0.0 && yA < 1.0 && hT > 0.0 && hT < 1.0 && w.a > 0.12) {
+    let nA = nz(vec3<f32>((p.x + F.cldC.x) / 22.0, p.y / 2.2 + 0.2, (p.z + F.cldC.y) / 22.0));
+    let covA = sat(w.r * 0.5 + F.cldB.x * 0.4) * sat(6.0 * yA * (1.0 - yA));
+    let fA = sat((nA.r * 0.7 + nA.a * 0.3 - 0.9 + covA) * 3.0);
+    if (fA > d) { d = fA; k = 0.42; cut = 0.32; }
   }
   // The deck: a broad shallow layer of cells with breaks between them.
   let hD = (p.y - F.cldB.z) / F.cldE.z;
@@ -384,18 +420,38 @@ fn cloudDenW(p: vec3<f32>, w: vec4<f32>, fine: f32) -> f32 {
     let n = nz(q * 6.0 + vec3<f32>(0.13, 0.41, 0.77));
     e = mix(0.5, sat(1.1 - (n.g * 0.62 + n.b * 0.38) * 1.5), fine);
   }
-  return k * max(d - e * cut * (0.5 + 0.3 * sat(hT * 3.0)) * max(1.25 - d, 0.0), 0.0);
+  return k * max(d - e * cut * (0.42 + 0.22 * sat(hT * 3.0)) * max(1.15 - d, 0.0), 0.0);
 }
 fn cloudDen(p: vec3<f32>) -> f32 {
   let w = wxAt(p.xz);
   if (!cloudMay(w, p.y)) { return 0.0; }
   return cloudDenW(p, w, 0.0);
 }
+// Ice fibres at the cirrus sheet. The panorama draws that sheet on its own;
+// this is the same band once a ray is up there, so it stays out of the bake march.
+fn cirrusDen(p: vec3<f32>) -> f32 {
+  let yC = p.y - (C_HIGH - 0.2);
+  if (F.cldB.x <= 0.02 || yC <= 0.0 || yC >= 0.7) { return 0.0; }
+  let al = dot(p.xz, vec2<f32>(0.7071)) + F.cldC.x;
+  let ac = dot(p.xz, vec2<f32>(-0.7071, 0.7071)) + F.cldC.y;
+  let field = nz(vec3<f32>(al / 288.0, ac / 144.0, 0.21)).a;
+  let bend = ac + (nz(vec3<f32>(al / 144.0 + 0.3, ac / 144.0 + 0.7, 0.63)).a - 0.5) * 22.0;
+  let tuft = nz(vec3<f32>(al / 72.0, bend / 18.0, 0.4 + yC));
+  let covC = sat((field - 0.76 + F.cldB.x * 0.85) * 2.2);
+  let fC = sat((tuft.a * 0.65 + tuft.r * 0.35 - 0.4) * 2.5) * covC * sat(10.0 * yC * (0.7 - yC));
+  return fC * 0.28;
+}
 
 // ---- Cloud shadow. For each place on the sea, how much sunlight the clouds let through
 // and the height of whatever is taking it. The ground, the water, the air and the animals all
 // read this, so a shadow on the sand belongs to a cloud that is there in the sky.
-fn shadeDir() -> vec3<f32> { return normalize(vec3<f32>(F.sunTrue.x, max(F.sunTrue.y, 0.09), F.sunTrue.z)); }
+fn shadeDir() -> vec3<f32> {
+  // After the sun has set, cloud shadows fall along the moon, kept a little above the sea.
+  if (F.sunTrue.y < -0.02 && F.moon.y > 0.04) {
+    return normalize(vec3<f32>(F.moon.x, max(F.moon.y, 0.08), F.moon.z));
+  }
+  return normalize(vec3<f32>(F.sunTrue.x, max(F.sunTrue.y, 0.09), F.sunTrue.z));
+}
 @fragment fn fsCloudShadow(in: SkyV) -> @location(0) vec4<f32> {
   let g = mapPlace(in.ndc, CS_K);
   let foot = max(length(dpdx(g)), length(dpdy(g)));
@@ -429,8 +485,28 @@ fn cloudLight(t: texture_2d<f32>, s: sampler, g: vec2<f32>, alt: f32) -> f32 {
 }
 fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
   let dayK = smoothstep(-0.02, 0.08, F.sunTrue.y);
-  if (dayK < 0.01) { return 1.0; }
-  return mix(1.0, 0.05 + 0.95 * cloudLight(cshMap, skySamp, xz * 0.001, max(y, 0.0) * 0.001), dayK);
+  let moonK = (1.0 - dayK) * smoothstep(0.02, 0.22, F.moon.y) * smoothstep(0.0, 0.04, F.astroB.w);
+  let k = max(dayK, moonK);
+  if (k < 0.01) { return 1.0; }
+  let lit = cloudLight(cshMap, skySamp, xz * 0.001, max(y, 0.0) * 0.001);
+  let rest = mix(0.42, 0.05, dayK);
+  return mix(1.0, rest + (1.0 - rest) * lit, k);
+}
+// How a sample throws the sun. A wide lobe for the soft body, a tighter one for light
+// that has bounced inside, and a rim when the sun is behind a thin skin of cloud.
+// stormK is cover mixed with rain: fair weather keeps a silver edge, a deck goes grey.
+// The floor stays low on purpose. A thundercloud adds a local flash in the march,
+// on top of this, and does not lift the floor or turn the deck white.
+fn cloudEnergy(mu: f32, tau: f32, d: f32, stormK: f32) -> f32 {
+  let p0 = mix(hg(mu, -0.16), hg(mu, 0.7), 0.6);
+  let p1 = mix(hg(mu, -0.06), hg(mu, 0.32), 0.5);
+  let beer = exp(-tau);
+  let multi = exp(-tau * mix(0.24, 0.42, stormK));
+  let body = p0 * beer + 0.42 * p1 * multi;
+  let glow = mix(0.18, 0.06, stormK) / (1.0 + mix(0.28, 0.7, stormK) * tau);
+  let skin = sat(d * 2.4) * exp(-d * 0.85);
+  let rim = pow(sat(mu), 6.0) * exp(-tau * 0.55) * skin * mix(0.8, 0.18, stormK);
+  return body + glow + rim;
 }
 
 struct SkyBake { @location(0) c: vec4<f32> }
@@ -439,14 +515,16 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let az = (uv.x - 0.5) * 6.2831853;
   let el = uv.y * uv.y * (1.5708 + SKY_E0) - SKY_E0;
   let rd = vec3<f32>(cos(el) * cos(az), sin(el), cos(el) * sin(az));
-  let h0 = clamp(F.camPos.y, 2.0, 400.0) * 0.001;
+  // Real eye height, up through the cloud deck and past the cirrus. The old 400 m
+  // cap kept every bake under the cloud base, so the march could assume that.
+  let h0 = clamp(F.camPos.y, 2.0, 16500.0) * 0.001;
   let A = atmosphere(rd, h0);
   // Single scattering goes dark soon after the sun sets. The real sky does not: light that has
   // been scattered more than once keeps the whole dome a deep blue through twilight.
   // After dark what is left is airglow and whatever the moon puts into the air.
   let dusk = smoothstep(0.06, -0.08, F.sunTrue.y);
   let air = A.c + F.amb.rgb * vec3<f32>(0.5, 0.72, 1.1) * dusk * (0.5 + 0.5 * sat(rd.y))
-    + vec3<f32>(0.0035, 0.0055, 0.011) * F.sunTrue.w * (0.35 + 0.65 * F.moon.w) * (1.0 + 0.8 * pow(1.0 - sat(rd.y), 4.0));
+    + vec3<f32>(0.0035, 0.0055, 0.011) * F.sunTrue.w * (0.35 + 0.65 * sat(F.astroB.w * 18.0)) * (1.0 + 0.8 * pow(1.0 - sat(rd.y), 4.0));
   var o: SkyBake;
   o.c = vec4<f32>(air, 1.0);
   // The rows under the horizon hold the air alone: they are the colour of the haze.
@@ -455,85 +533,108 @@ struct SkyBake { @location(0) c: vec4<f32> }
   // The sun lights the clouds until it is well under the horizon, the high ones last. Then the moon does.
   let byMoon = sy < -0.16;
   let ld = select(F.sunTrue.xyz, F.moon.xyz, byMoon);
-  // F.mood.y = cloud cover, F.wx.x = rain. Daytime thunderstorms are charcoal decks, not grey cotton.
+  // F.mood.y = cloud cover, F.wx.x = rain. A storm is a dark cumulonimbus: charcoal
+  // belly, a brighter anvil, billows still visible. Not a black cutout in the sky.
   let stormK = sat(F.mood.y) * (0.45 + 0.55 * sat(F.wx.x));
-  let stormDim = mix(1.0, 0.14, stormK) * mix(1.0, 0.55, sat(F.wx.x));
-  let lightC = select(F.disc.rgb * stormDim, vec3<f32>(0.02, 0.025, 0.035) * F.moon.w, byMoon);
+  let stormDim = mix(1.0, 0.7, stormK) * mix(1.0, 0.9, sat(F.wx.x));
+  let lightC = select(F.disc.rgb * stormDim * mix(vec3<f32>(1.0), vec3<f32>(0.78, 0.84, 0.98), stormK), vec3<f32>(0.62, 0.72, 0.9) * F.astroB.w * 1.7, byMoon);
   let mu = dot(rd, ld);
-  // Cloud scatters mostly forward, which is the bright rim toward the sun, and a little back.
-  let p0 = mix(hg(mu, -0.2), hg(mu, 0.72), 0.55);
-  let p1 = mix(hg(mu, -0.1), hg(mu, 0.36), 0.55);
   let Rc = RE + h0;
   let b = Rc * rd.y;
   let base = F.cldA.z;
+  let top = max(F.cldA.w, base + 0.05);
   let org = F.camPos.xz * 0.001;
   let cq = clamp(F.cloudOct, 1.0, 3.0);
-  let maxIt = i32(64.0 + 32.0 * cq);
-  let nLight = i32(3.0 + cq);
-  let stride = 0.07 - 0.01 * cq;
-  // The march starts just under the base, so the first step is the same kind for every ray.
-  let t0 = shellT(b, Rc, base - 0.01 - h0);
-  let t1 = min(shellT(b, Rc, F.cldA.w - h0), 320.0);
+  // Under the deck the march still starts just under the base, so the first step is
+  // the same kind for every ray. Once the eye is near the base, pad0 hands low cloud
+  // to the per-frame volume pass: a strip bake would lag inside the deck and draw it twice.
+  // F.cloudOwn is that handoff. F.pad0 is the sea disk's ring exponent.
+  // tShaft is how far the upward air is still in cloud shadow, for the shafts below.
+  var t0 = 0.0;
+  var t1 = 0.0;
+  var tShaft = 0.0;
+  if (F.cloudOwn > 0.5 || h0 > top + 0.02) {
+    t0 = 1.0;
+    t1 = 0.0;
+    if (h0 < base - 0.01) { tShaft = shellT(b, Rc, base - h0); }
+  } else if (h0 < base - 0.02) {
+    t0 = shellT(b, Rc, base - 0.01 - h0);
+    t1 = min(shellT(b, Rc, top - h0), 320.0);
+    tShaft = t0;
+  } else {
+    t0 = 0.0;
+    t1 = min(max(shellAhead(b, Rc, top - h0), 0.0), 80.0);
+    tShaft = t0;
+  }
   let span = 1.0 / (1.0 - A.t + 1e-4);
   var C = vec3<f32>(0.0);
   var T = 1.0;
+  // A handful of samples from the base upward. The adaptive march, with a
+  // bisection at every crown, did not finish a full-dome bake once the field
+  // held more cloud. The volume pass still marches finely once the eye is up in it.
+  let nBake = i32(6.0 + 2.0 * cq);
   var t = t0;
-  var tp = t0;
-  var inside = false;
-  for (var i = 0; i < 160; i++) {
-    if (i >= maxIt || t > t1 || T < 0.01) { break; }
+  for (var i = 0; i < 14; i++) {
+    if (i >= nBake || t > t1 || T < 0.02) { break; }
+    let ds = 0.36;
     let p = vec3<f32>(org.x + rd.x * t, h0 + riseAt(b, Rc, t), org.y + rd.z * t);
     let w = wxAt(p.xz);
-    if (!cloudMay(w, p.y)) { inside = false; tp = t; t += clamp(0.1 + stride * t, 0.12, 8.0); continue; }
-    // Where cloud can be, short steps. Where the ray enters one the surface is found by
-    // bisection and the steps are counted from there, so the samples sit at the same depths
-    // under the surface for every texel and leave no banding or grain.
-    let ds = clamp(0.04 + 0.012 * t, 0.06, 2.5);
-    // The fine scale is left out where a texel of the panorama is wider than it.
-    let fine = 1.0 - smoothstep(6.0, 28.0, t);
-    let d = cloudDenW(p, w, fine);
-    if (d <= 0.003) { inside = false; tp = t; t += ds; continue; }
-    if (!inside) {
-      inside = true;
-      var a = tp;
-      var e = t;
-      for (var k = 0; k < 4; k++) {
-        let tm = (a + e) * 0.5;
-        let pm = vec3<f32>(org.x + rd.x * tm, h0 + riseAt(b, Rc, tm), org.y + rd.z * tm);
-        if (cloudDenW(pm, wxAt(pm.xz), fine) > 0.003) { e = tm; } else { a = tm; }
-      }
-      // The first sample sits just under the surface, where the cloud's face gets its light.
-      if (e < t) { t = e + min(ds * 0.5, 0.02); continue; }
+    var d = 0.0;
+    if (cloudMay(w, p.y)) { d = cloudDenW(p, w, 0.35); }
+    if (d > 0.02) {
+      let tau = d * d * mix(10.0, 16.0, stormK);
+      let E = cloudEnergy(mu, tau, d, stormK);
+      let hr = sat((p.y - base) / 2.5);
+      let hRel = sat((p.y - base) / max(F.cldA.w - base, 0.05));
+      let anvilK = smoothstep(0.55, 0.92, hRel);
+      let bellyK = smoothstep(0.4, 0.02, hRel);
+      let grade = mix(1.0, mix(0.82, 1.28, anvilK) * mix(1.0, 0.74, bellyK), stormK);
+      let direct = lightC * select(sunT(p.y, sy), vec3<f32>(1.0), byMoon) * E * 0.62;
+      let ambFair = F.amb.rgb * (0.1 + 0.34 * hr);
+      let ambStorm = vec3<f32>(0.18, 0.21, 0.28) * (0.28 + 0.5 * hr);
+      let L = (direct + mix(ambFair, ambStorm, stormK)) * grade;
+      let al = 1.0 - exp(-d * 6.0);
+      let keep = pathKeep(t, h0, p.y);
+      C += T * al * (L * keep + air * sat3((1.0 - keep) * span));
+      T *= 1.0 - al;
     }
-    // Toward the light: how much cloud the light crossed to get here.
-    var tau = 0.0;
-    var sl = 0.06;
-    var ll = 0.0;
-    for (var k = 0; k < 6; k++) {
-      if (k >= nLight) { break; }
-      tau += cloudDen(p + ld * (ll + sl * 0.5)) * sl;
-      ll += sl;
-      sl *= 2.0;
-    }
-    tau *= C_SIG;
-    // Direct light dies quickly inside a cloud. Storm decks keep a deep multi-scatter floor
-    // so the underside reads as menacing charcoal, not pale overcast.
-    let E = p0 * exp(-tau) + 0.45 * p1 * exp(-0.3 * tau) + mix(0.36, 0.12, stormK) / (1.0 + mix(0.2, 0.55, stormK) * tau);
-    let hr = sat((p.y - base) / 2.5);
-    let ambC = F.amb.rgb * mix(1.0, 0.42, stormK);
-    let L = lightC * select(sunT(p.y, sy), vec3<f32>(1.0), byMoon) * E * mix(0.66, 0.48, stormK) + ambC * (0.22 + 0.55 * hr);
-    let al = 1.0 - exp(-d * C_SIG * mix(1.0, 1.35, stormK) * ds);
-    // The air between here and the cloud: it dims the cloud and adds its own light in front.
-    let keep = pathKeep(t, h0, p.y);
-    C += T * al * (L * keep + air * sat3((1.0 - keep) * span));
-    T *= 1.0 - al;
     t += ds;
+  }
+  // Mid band: three samples where the ray crosses it. The fine march stays with
+  // the cumulus, so a broken deck does not multiply the cost of every strip.
+  if (h0 < 4.15 && T > 0.04) {
+    var tAl = 0.0;
+    if (h0 < 2.7) { tAl = shellT(b, Rc, 2.7 - h0); }
+    if (tAl >= 0.0 && tAl < 90.0) {
+      for (var ia = 0; ia < 3; ia++) {
+        let tm = tAl + f32(ia) * 0.45;
+        let pm = vec3<f32>(org.x + rd.x * tm, h0 + riseAt(b, Rc, tm), org.y + rd.z * tm);
+        let yA = (pm.y - 2.7) / 1.45;
+        if (yA > 0.0 && yA < 1.0) {
+          let wm = wxAt(pm.xz);
+          if (wm.a > 0.12) {
+            let nA = nz(vec3<f32>((pm.x + F.cldC.x) / 22.0, pm.y / 2.2 + 0.2, (pm.z + F.cldC.y) / 22.0));
+            let covA = sat(wm.r * 0.5 + F.cldB.x * 0.4) * sat(6.0 * yA * (1.0 - yA));
+            let fA = sat((nA.r * 0.7 + nA.a * 0.3 - 0.9 + covA) * 3.0);
+            if (fA > 0.04) {
+              let dm = fA * 0.42;
+              let Em = cloudEnergy(mu, dm * 1.4, dm, stormK);
+              let Lm = lightC * select(sunT(pm.y, sy), vec3<f32>(1.0), byMoon) * Em * 0.4 + F.amb.rgb * 0.12;
+              let am = 1.0 - exp(-dm * 3.0);
+              C += T * am * Lm * pathKeep(tm, h0, pm.y);
+              T *= 1.0 - am;
+            }
+          }
+        }
+      }
+    }
   }
   // Cirrus: a sheet of ice far above, combed into streaks along the upper wind.
   var back = air;
   var open = 1.0;
-  if (F.cldB.x > 0.01) {
-    let tc = shellT(b, Rc, C_HIGH - h0);
+  if (F.cldB.x > 0.01 && h0 < C_HIGH - 0.7) {
+    let tc = shellAhead(b, Rc, C_HIGH - h0);
+    if (tc > 0.0) {
     let pc = org + rd.xz * tc;
     let al = dot(pc, vec2<f32>(0.7071)) + F.cldC.x;
     let ac = dot(pc, vec2<f32>(-0.7071, 0.7071)) + F.cldC.y;
@@ -543,19 +644,20 @@ struct SkyBake { @location(0) c: vec4<f32> }
     let bend = ac + (nz(vec3<f32>(al / 144.0 + 0.3, ac / 144.0 + 0.7, 0.63)).a - 0.5) * 22.0;
     let tuft = nz(vec3<f32>(al / 72.0, bend / 24.0, 0.4));
     let fb = mix(0.5, nz(vec3<f32>(al / 36.0, bend / 2.4, 0.8)).g, 1.0 - smoothstep(30.0, 110.0, tc));
-    let cov = sat((field - 1.0 + F.cldB.x * 0.95) * 3.0);
-    let dc = sat((tuft.a * 0.6 + tuft.r * 0.4 - 0.42) * 2.6) * (0.2 + 0.8 * fb * fb) * cov;
-    let aC = 1.0 - exp(-0.5 * dc / max((b + tc) / (Rc + C_HIGH - h0), 0.15));
-    let Lc = lightC * select(sunT(C_HIGH, sy), vec3<f32>(1.0), byMoon) * (0.3 + 0.35 * hg(mu, 0.6)) + F.amb.rgb * 0.45;
+    let cov = sat((field - 0.76 + F.cldB.x * 0.85) * 2.2);
+    let dc = sat((tuft.a * 0.6 + tuft.r * 0.4 - 0.4) * 2.4) * (0.25 + 0.75 * fb * fb) * cov;
+    let aC = 1.0 - exp(-0.42 * dc / max((b + tc) / (Rc + C_HIGH - h0), 0.15));
+    let Lc = lightC * select(sunT(C_HIGH, sy), vec3<f32>(1.0), byMoon) * (0.22 + 0.26 * hg(mu, 0.6)) + F.amb.rgb * 0.28;
     let keep = pathKeep(tc, h0, C_HIGH);
     back = air * (1.0 - aC * (1.0 - sat3((1.0 - keep) * span))) + aC * Lc * keep;
     open = 1.0 - aC;
+    }
   }
   var col = C + T * back;
   // Shafts. Under the clouds the air is lit only where the sun finds a gap, so the light
   // the air sends to the eye is taken away along each stretch of the ray that lies in shadow.
   let shaftK = smoothstep(-0.02, 0.06, sy);
-  let tS = min(t0, 60.0);
+  let tS = min(tShaft, 60.0);
   if (shaftK > 0.0 && tS > 0.4) {
     let grow = pow(tS / 0.3, 1.0 / 20.0);
     var ta = 0.3;
@@ -625,27 +727,101 @@ struct SkyBake { @location(0) c: vec4<f32> }
   let gl = vec3<f32>(0.2, 0.2, 0.17) * (up * k + F.sunCol / max(F.lit.y, 1e-3) * max(F.sunDir.y, 0.0) * (1.0 - 0.7 * sat(F.mood.y)));
   return vec4<f32>(acc * k + gl * (1.0 - ny) * 0.5, 1.0);
 }
-// Lightning is light from inside the cloud, so it is added where the sky is read rather than
-// baked into the panorama: it is there for a tenth of a second and a bake takes many frames.
+// Lightning is light from inside the cloud. A bake takes many frames and a flash does
+// not, so the panorama never holds it. fsBoltVol marches it for the frame it is on.
+// A near-field volume pass (F.cloudOwn) should add boltAt on each of its own samples instead.
 const BOLT_C = vec3<f32>(0.76, 0.84, 1.0);
-// How the flash spreads through the cloud round it: a core where the channel is, a wide
-// glow about that, and a little over the whole sky.
-fn boltGlow(rd: vec3<f32>) -> f32 {
-  let c = dot(rd, normalize(F.bolt.xyz - F.camPos));
-  return 0.045 + 0.27 * pow(sat(c * 0.5 + 0.5), 5.0) + 1.5 * pow(sat(c), 40.0);
+// How much of the flash reaches a point in metres. A ground stroke lights its column;
+// a stroke that stays in the cloud is a point. Nothing past a couple of kilometres.
+fn boltNear(p: vec3<f32>) -> f32 {
+  if (F.bolt.w <= 0.0) { return 0.0; }
+  let r = select(length(p - F.bolt.xyz), length(p.xz - F.bolt.xz), F.boltB.y > 0.5);
+  return F.bolt.w * exp(-r * r / 2.8e6);
 }
-// What it throws on a surface facing n. It is a wide light, so it wraps well round.
-fn boltOn(n: vec3<f32>) -> vec3<f32> {
+// What the flash throws on a surface. gain is higher for leaves, which are then
+// multiplied by a dark albedo, than for water, which is added as a finished colour.
+fn boltOnSurf(world: vec3<f32>, n: vec3<f32>, gain: f32) -> vec3<f32> {
   if (F.bolt.w <= 0.0) { return vec3<f32>(0.0); }
-  let d = F.bolt.xyz - F.camPos;
+  var src = F.bolt.xyz;
+  if (F.boltB.y > 0.5) { src.y = world.y; }
+  let d = src - world;
   let r = length(d);
-  let near = 1.0 / (1.0 + r * r / 1.2e7);
-  return BOLT_C * (F.bolt.w * near * (0.4 + 0.6 * sat(dot(n, d / r) * 0.75 + 0.25)));
+  let ndl = sat(dot(n, d / max(r, 1.0)) * 0.55 + 0.45);
+  let fall = 1.0 / (1.0 + r * r / 6.4e6);
+  return BOLT_C * (F.bolt.w * fall * ndl * gain);
+}
+// Radiance one cloud sample (kilometres, density d) sends from the flash. Empty air
+// is dark. Cloud between the channel and the sample puts the light out. fsCloudVol
+// adds this per step; fsBoltVol integrates it with boltMarch.
+fn boltAt(p: vec3<f32>, d: f32) -> vec3<f32> {
+  if (F.bolt.w <= 0.0 || d <= 0.003) { return vec3<f32>(0.0); }
+  let bp = F.bolt.xyz * 0.001;
+  var src = bp;
+  if (F.boltB.y > 0.5) {
+    src.y = clamp(p.y, min(bp.y, F.cldA.z), max(bp.y, F.cldA.w));
+  }
+  let off = p - src;
+  let r = length(off);
+  let dir = off / max(r, 1e-3);
+  let mid = cloudDen(p - dir * min(r * 0.5, 0.45));
+  let block = exp(-r * (0.28 * d + 0.5 * mid));
+  let reach = exp(-r * 0.42);
+  return BOLT_C * (F.bolt.w * d * block * reach * 0.16);
+}
+// Kilometres by which the view ray misses the channel. A large value is "not this pixel".
+fn boltMiss(rd: vec3<f32>) -> f32 {
+  if (rd.y <= 0.02) { return 1e3; }
+  let h0 = clamp(F.camPos.y, 2.0, 400.0) * 0.001;
+  let org = F.camPos.xz * 0.001;
+  let horiz = rd.xz;
+  let hl2 = max(dot(horiz, horiz), 1e-6);
+  let tc = dot(F.bolt.xz * 0.001 - org, horiz) / hl2;
+  if (tc <= 0.0) { return 1e3; }
+  return length(org + horiz * tc - F.bolt.xz * 0.001);
+}
+// Density march of the flash along one view ray. Eye height matches fsSkyBake, so the
+// glow sits in the same cloud the panorama drew. Steps follow the cloud quality.
+fn boltMarch(rd: vec3<f32>) -> vec3<f32> {
+  if (F.bolt.w <= 0.0 || boltMiss(rd) > 3.2) { return vec3<f32>(0.0); }
+  let h0 = clamp(F.camPos.y, 2.0, 400.0) * 0.001;
+  let org = F.camPos.xz * 0.001;
+  let bp = F.bolt.xyz * 0.001;
+  let Rc = RE + h0;
+  let b = Rc * rd.y;
+  let base = F.cldA.z;
+  let topH = F.cldA.w;
+  let tA = shellT(b, Rc, max(base - h0, 0.0));
+  let tB = min(shellT(b, Rc, topH - h0), 70.0);
+  if (tB <= tA + 0.02) { return vec3<f32>(0.0); }
+  let horiz = rd.xz;
+  let hl2 = max(dot(horiz, horiz), 1e-6);
+  let tc = clamp(dot(bp.xz - org, horiz) / hl2, tA, tB);
+  let cq = clamp(F.cloudOct, 1.0, 3.0);
+  let n = i32(8.0 + 5.0 * cq);
+  let t0 = max(tA, tc - 2.6);
+  let t1 = min(tB, tc + 2.6);
+  if (t1 <= t0) { return vec3<f32>(0.0); }
+  var acc = vec3<f32>(0.0);
+  var Tr = 1.0;
+  let dt = (t1 - t0) / f32(n);
+  for (var i = 0; i < 24; i++) {
+    if (i >= n || Tr < 0.03) { break; }
+    let t = t0 + (f32(i) + 0.5) * dt;
+    let p = vec3<f32>(org.x + rd.x * t, h0 + riseAt(b, Rc, t), org.y + rd.z * t);
+    let w = wxAt(p.xz);
+    if (!cloudMay(w, p.y)) { continue; }
+    let dens = cloudDenW(p, w, 0.7);
+    if (dens <= 0.003) { continue; }
+    let al = 1.0 - exp(-dens * C_SIG * dt);
+    acc += Tr * al * boltAt(p, dens) * pathKeep(t, h0, p.y);
+    Tr *= 1.0 - al;
+  }
+  return acc;
 }
 fn skyIrr(n: vec3<f32>) -> vec3<f32> {
   let u = atan2(n.z, n.x) / 6.2831853 + 0.5;
   let px = vec2<f32>(1.0 + u * 32.0, 0.5 + (clamp(n.y, -1.0, 1.0) + 1.0) * 7.5);
-  return textureSampleLevel(skyMap, skySamp, px / floor(F.skyD.xy / 8.0), 0, 3.0).rgb * max(F.lit.y, 0.0) + boltOn(n);
+  return textureSampleLevel(skyMap, skySamp, px / floor(F.skyD.xy / 8.0), 0, 3.0).rgb * max(F.lit.y, 0.0);
 }
 fn skyDimRaw(rd: vec3<f32>) -> vec3<f32> {
   let uv = skyUV(rd);
@@ -653,8 +829,81 @@ fn skyDimRaw(rd: vec3<f32>) -> vec3<f32> {
   return textureSampleLevel(skyMap, skySamp, vec2<f32>(uv.x, clamp(uv.y, e, 1.0 - e)), 0, 4.0).rgb;
 }
 fn skyDim(rd: vec3<f32>) -> vec3<f32> {
-  var col = skyDimRaw(rd) * max(F.lit.y, 0.0);
-  if (F.bolt.w > 0.0) { col += BOLT_C * (F.bolt.w * 0.3 * boltGlow(rd)); }
+  return skyDimRaw(rd) * max(F.lit.y, 0.0);
+}
+
+// Saint Lucia. Kept in step with ASTRO_LAT in astro.js.
+const ASTRO_LAT: f32 = 0.24276483;
+// A view direction back to the celestial sphere. The same sum as astroDirToRaDec.
+fn astroRaDec(rd: vec3<f32>) -> vec2<f32> {
+  let east = rd.x * F.astroC.x + rd.z * F.astroC.y;
+  let north = rd.x * F.astroC.z + rd.z * F.astroC.w;
+  let alt = asin(clamp(rd.y, -1.0, 1.0));
+  let az = atan2(east, north);
+  let lat = ASTRO_LAT;
+  let sinDec = sin(alt) * sin(lat) + cos(alt) * cos(lat) * cos(az);
+  let dec = asin(clamp(sinDec, -1.0, 1.0));
+  let cosDec = max(cos(dec), 1e-4);
+  let sinH = -sin(az) * cos(alt) / cosDec;
+  let cosH = (sin(alt) - sin(dec) * sin(lat)) / (cosDec * cos(lat));
+  let H = atan2(sinH, cosH);
+  return vec2<f32>(F.astro.x - H, dec);
+}
+fn starUV(rd: vec3<f32>) -> vec2<f32> {
+  let eq = astroRaDec(rd);
+  return vec2<f32>(fract(eq.x * 0.15915494), clamp(eq.y * 0.31830989 + 0.5, 0.001, 0.999));
+}
+// The moon's own face. Phase is the angle between the real sun and the outward normal,
+// so a crescent is a crescent and a full moon is not a flat disc scaled down.
+fn moonDisc(rd: vec3<f32>) -> vec3<f32> {
+  let m = normalize(F.moon.xyz);
+  if (m.y < -0.02) { return vec3<f32>(0.0); }
+  let cosA = dot(rd, m);
+  if (cosA < 0.982) { return vec3<f32>(0.0); }
+  let ang = acos(min(cosA, 1.0));
+  // True radius is about a quarter of a degree. The 60 degree view would draw that as a
+  // few pixels, too small to show a crescent, so the face is enlarged. The centre stays
+  // on the true direction and the terminator is still the real sun.
+  let rad = max(F.astro.z, 0.0042) * 5.5;
+  let night = sat(F.sunTrue.w);
+  let gain = (night * 1.25 + (1.0 - night) * 0.2) * smoothstep(-0.01, 0.05, m.y);
+  // A tight glow. It uses a radius near the true one, so enlarging the face does not
+  // paint a disc of haze around it.
+  let glowR = max(F.astro.z, 0.0042) * 9.0;
+  var col = vec3<f32>(0.72, 0.78, 0.95) * exp(-ang / glowR) * 0.04 * gain;
+  if (ang < rad * 1.2) {
+    let r = ang / rad;
+    let limb = smoothstep(1.04, 0.82, r);
+    var tng = cross(vec3<f32>(0.0, 1.0, 0.0), m);
+    if (length(tng) < 0.05) { tng = cross(vec3<f32>(1.0, 0.0, 0.0), m); }
+    tng = normalize(tng);
+    let bng = normalize(cross(m, tng));
+    let off = rd - m * cosA;
+    let u = dot(off, tng) / rad;
+    let v = dot(off, bng) / rad;
+    let z = sqrt(max(1.0 - r * r, 0.0));
+    // The near face points back at the eye. Full when the sun is behind us, dark when it is with the moon.
+    let N = normalize(tng * u + bng * v - m * z);
+    let ndl = dot(N, normalize(F.astroB.xyz));
+    let lit = smoothstep(-0.03, 0.06, ndl);
+    let maria = 0.62 + 0.38 * n2(vec2<f32>(u, v) * 3.2);
+    let earth = (1.0 - lit) * 0.055;
+    let face = vec3<f32>(0.95, 0.94, 0.88) * maria * (lit + earth);
+    col += face * (0.45 + 0.55 * z) * limb * gain * 3.2;
+  }
+  return col;
+}
+// Stars and the Milky Way live in one map. cover is how much of this view the clouds leave open.
+fn nightSky(rd: vec3<f32>, cover: f32) -> vec3<f32> {
+  var col = vec3<f32>(0.0);
+  let night = sat(F.sunTrue.w);
+  if (night > 0.02 && rd.y > 0.0) {
+    let s = textureSampleLevel(starMap, starSamp, starUV(rd), 0.0).rgb;
+    col += s * s * 4.0 * night * sat(rd.y * 5.0) * cover;
+  }
+  // The iris opens for the dark ground. Divide it back out so the disc keeps its shape
+  // instead of the whole face clipping to white. Same trick as the insects.
+  col += moonDisc(rd) * cover / max(F.exposure, 0.15);
   return col;
 }
 
@@ -671,19 +920,19 @@ fn skyLook(rd: vec3<f32>, disc: f32) -> vec3<f32> {
     col += F.disc.rgb * sunT(max(F.camPos.y, 0.0) * 0.001, F.sunTrue.y) * (16.0 * face + 0.5 * exp(-r * 0.9)) * s.a * disc;
   }
   col *= max(F.lit.y, 0.0);
-  if (F.bolt.w > 0.0) {
-    // Thin cloud lets more of it out than thick, as it does daylight, so the flash shows the
-    // cloud's own shapes. The rain under it is lit as well.
-    let thin = clamp(dot(s.rgb, vec3<f32>(0.3, 0.6, 0.1)) / max(dot(skyDimRaw(rd), vec3<f32>(0.3, 0.6, 0.1)), 1e-5), 0.45, 1.9);
-    col += BOLT_C * (F.bolt.w * boltGlow(rd) * ((1.0 - s.a) * thin + 0.1 + 0.25 * F.wx.x * (1.0 - sat(rd.y * 4.0))));
-  }
+  if (rd.y > 0.0) { col += nightSky(rd, s.a); }
   return col;
 }
 fn skyColor(rd: vec3<f32>) -> vec3<f32> { return skyLook(rd, 1.0); }
 // The air a distant thing is seen through: the glow of the horizon that way. The rows of
 // the panorama just under the horizon hold the air alone, with no cloud drawn across it.
+// Blend a little of the view direction so aerial perspective matches the sky the ray
+// actually faces (coherent with the panorama, not a single fixed dip).
 fn hazeColor(dir: vec3<f32>) -> vec3<f32> {
-  return skyLook(normalize(vec3<f32>(dir.x, -0.03, dir.z) + vec3<f32>(1e-5, 0.0, 0.0)), 0.0);
+  let d = normalize(dir + vec3<f32>(1e-5, 0.0, 0.0));
+  let low = normalize(vec3<f32>(d.x, -0.028, d.z));
+  let toward = normalize(vec3<f32>(d.x, clamp(d.y * 0.35, -0.08, 0.12), d.z));
+  return mix(skyLook(low, 0.0), skyLook(toward, 0.0), 0.35);
 }
 
 // What a tilted piece of water or wet sand mirrors. A ray that dips under the

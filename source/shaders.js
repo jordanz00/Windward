@@ -25,6 +25,7 @@ function shaderCode(res, span, wgrid, samples) {
   camDamp: f32,
   res: vec2<f32>,
   reflOn: f32,
+  // Sea-disk ring exponent. The water mesh reads this as the inner spacing.
   pad0: f32,
   waves: array<vec4<f32>, 8>,
   steep: array<vec4<f32>, 2>,
@@ -68,6 +69,18 @@ function shaderCode(res, span, wgrid, samples) {
   // bright it is now. boltB: its seed, and whether a channel comes down out of the cloud.
   bolt: vec4<f32>,
   boltB: vec4<f32>,
+  // The night sky over Saint Lucia. astro: local sidereal time, illuminated fraction,
+  // the moon's angular radius, and whether the moon is the real one. astroB: where the
+  // real sun is, in this same frame, and how much moonlight the clouds and the sea take.
+  // astroC: east.x, east.z, north.x, north.z, turned with the island like the moon.
+  astro: vec4<f32>,
+  astroB: vec4<f32>,
+  astroC: vec4<f32>,
+  // 0 keeps every blade. Above 1, geometric grass shrinks out by this distance (metres).
+  grassFade: f32,
+  // 1 when the eye is near or inside the cloud deck: the volume pass owns low cloud.
+  // Float 87 (pad0) is the sea-disk exponent, so this flag sits in the tail padding.
+  cloudOwn: f32,
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var htex: texture_2d<f32>;
@@ -98,6 +111,8 @@ struct ShoreU {
 @group(0) @binding(9) var skySamp: sampler;
 @group(0) @binding(10) var shadowNear: texture_depth_2d;
 @group(0) @binding(11) var cshMap: texture_2d<f32>;
+@group(0) @binding(12) var starMap: texture_2d<f32>;
+@group(0) @binding(13) var starSamp: sampler;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_${samples > 1 ? 'multisampled_' : ''}2d;
@@ -107,6 +122,7 @@ struct ShoreU {
 @group(1) @binding(5) var glintTex: texture_2d<f32>;
 @group(1) @binding(6) var chopTex: texture_2d<f32>;
 @group(1) @binding(7) var airTex: texture_2d<f32>;
+@group(1) @binding(13) var cloudTex: texture_2d<f32>;
 // What the sky's own passes read: the noise all cloud is carved from, the weather map,
 // the cloud-shadow map, and the two panoramas for gathering the sky's light.
 @group(1) @binding(8) var noiseTex: texture_3d<f32>;
@@ -269,7 +285,8 @@ fn shoulder(x: vec3<f32>) -> vec3<f32> {
   return s / (1.0 + max(s - 0.94, vec3<f32>(0.0)) * 0.55);
 }
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
-  // Photographic response: soft shoulder, restrained midtone desat — no crushed blacks.
+  // Photographic response: soft shoulder, gentle midtone S-curve, restrained desat —
+  // documentary punch without crushed blacks or clipped highlights.
   let x = max(c, vec3<f32>(0.0)) * F.exposure;
   var soft = shoulder(x);
   // Each channel bent by itself bleaches a bright orange to pale yellow: red is held at the
@@ -281,16 +298,20 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
     soft = mix(soft, x * (shoulder(vec3<f32>(m)).x / m), 0.4 * F.day.w);
   }
   let luma = dot(soft, vec3<f32>(0.2126, 0.7152, 0.0722));
+  // Mild S-curve around mid greys (nature-doc contrast) — shadows stay open.
+  let lift = soft + (soft - vec3<f32>(luma)) * 0.06;
+  let contrast = mix(lift, soft * soft * (3.0 - 2.0 * soft), 0.12);
   let mid = smoothstep(0.05, 0.2, luma) * (1.0 - smoothstep(0.55, 0.92, luma));
-  let photo = mix(soft, vec3<f32>(luma), mid * 0.16);
+  let photo = mix(contrast, vec3<f32>(dot(contrast, vec3<f32>(0.2126, 0.7152, 0.0722))), mid * 0.14);
   return pow(clamp(photo, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.4545));
 }
 
 ${skyWGSL()}
-// Water optical constants (Abyssal-style Beer's law): scatter SIG, absorb KD — turquoise tropical mix.
-const W_SIG = vec3<f32>(0.042, 0.022, 0.018);
-const W_KD = vec3<f32>(0.072, 0.024, 0.015);
-const W_COL = vec3<f32>(0.14, 0.48, 0.72);
+// Water optical constants (Abyssal-style Beer's law): scatter SIG, absorb KD —
+// tropical Caribbean: turquoise shallows, cyan mid, deeper blue far (red dies first).
+const W_SIG = vec3<f32>(0.038, 0.024, 0.021);
+const W_KD = vec3<f32>(0.085, 0.022, 0.013);
+const W_COL = vec3<f32>(0.12, 0.50, 0.70);
 // In-scattered water light along a ray (Beer's law integral + soft forward phase).
 fn waterFogIn(ro: vec3<f32>, rd: vec3<f32>, dist: f32) -> vec3<f32> {
   let a = W_SIG - W_KD * rd.y;
@@ -321,7 +342,10 @@ fn airKeep(dist: f32, dy: f32) -> vec3<f32> {
   let hb = max(F.camPos.y + dy, 0.0) * 0.001;
   let t = dist * 0.001;
   let humid = sat(F.wx.w);
-  let veil = (0.22 * humid * humid + 1.4 * sat(F.wx.z) + 3.0 * F.wx.x) * layerMean(ha, hb, 0.16) * mix(1.0, 0.45, sat(F.sunTrue.w));
+  // Clear dry air: keep distance colour almost pure. Mist/rain/humidity still veil.
+  // Low sun adds a thin coherent veil so far headlands sit in the same air as the sky.
+  let veil = (0.16 * humid * humid + 1.35 * sat(F.wx.z) + 2.9 * F.wx.x + 0.08 * sat(F.day.w))
+    * layerMean(ha, hb, 0.16) * mix(1.0, 0.42, sat(F.sunTrue.w));
   return pathKeep(t, ha, hb) * exp(-t * veil);
 }
 // What replaces the light the air takes is the sky low down in that direction: the same
@@ -339,8 +363,23 @@ fn applyFog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
   let air = airMix(col, rd, dist);
   let uk = underK();
   if (uk < 0.001) { return air; }
-  let keep = exp(-W_SIG * dist * mix(0.85, 1.35, sat(F.camDamp)));
-  let wet = col * keep + waterFogIn(F.camPos, rd, dist) * (0.55 + 0.45 * sat(exp(-dist * 0.02)));
+  // Depth-aware underwater fog: shallows stay clearer; deep basins denser + bluer.
+  let camDeep = max(-F.camPos.y, 0.0);
+  let depthFog = mix(0.85, 1.7, sat(camDeep / 14.0)) * mix(0.9, 1.3, sat(F.camDamp));
+  let keep = exp(-W_SIG * dist * depthFog);
+  var haze = waterFogIn(F.camPos, rd, dist) * (0.55 + 0.45 * sat(exp(-dist * 0.02)));
+  haze = mix(haze, haze * vec3<f32>(0.5, 0.75, 1.2), sat(camDeep / 12.0));
+  // Deep-only biolum veil in the fog integral (abyss band).
+  let bio = smoothstep(8.0, 16.0, camDeep) * uk * (0.025 + 0.04 * n2(rd.xz * 3.0 + F.time * 0.05));
+  haze += vec3<f32>(0.04, 0.2, 0.32) * bio;
+  // Sparse drifting photophore motes along the view ray in the abyss.
+  let mote = smoothstep(11.0, 18.0, camDeep) * uk;
+  if (mote > 0.01) {
+    let cell = floor(F.camPos.xz * 0.08 + rd.xz * dist * 0.04 + F.time * 0.08);
+    let spark = n2(cell + 19.0);
+    haze += vec3<f32>(0.08, 0.35, 0.48) * mote * smoothstep(0.82, 0.96, spark) * (0.4 + 0.6 * n2(cell.yx + F.time * 0.2));
+  }
+  let wet = col * keep + haze;
   return mix(air, wet, uk);
 }
 
@@ -406,9 +445,10 @@ fn caustic(p: vec3<f32>, foot: f32) -> vec3<f32> {
   }
   let lit = cloudShade(p.xz, 0.0);
   let day = smoothstep(0.02, 0.12, F.sunTrue.y);
+  let moon = (1.0 - day) * smoothstep(0.04, 0.25, F.moon.y) * sat(F.astroB.w * 16.0);
   // Brightest in shallow lagoon / shore (fine detail); broader & softer with depth — never gated off near 0.
   let depthK = mix(1.25, 0.4, sat(depth / 10.0)) * exp(-depth * 0.12);
-  return net * (depthK * lit * day * 0.95);
+  return net * (depthK * lit * (day + moon * 0.35) * 0.95);
 }
 
 fn shadowAt(p: vec3<f32>) -> f32 {
@@ -505,20 +545,34 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let forest = smoothstep(1.8, 4.6, fld.x) * smoothstep(-0.65, -0.1, forestNoise(world.xz));
   let roof = forest * (1.0 - smoothstep(3.5, 10.0, world.y - fld.x));
   let skyVis = 1.0 - roof * mix(0.74, 0.5, sat(leaf));
-  let wet = F.wx.y * step(0.05, world.y) * (1.0 - underK());
+  // Contact AO: soft darkening near the floor / against the bed — not a second shadow map.
+  let hAbove = max(world.y - fld.x, 0.0);
+  let contactAO = mix(0.72, 1.0, smoothstep(0.0, 1.35, hAbove)) * mix(0.88, 1.0, sat(n.y * 0.55 + 0.45));
+  let wet = max(F.wx.y * step(0.05, world.y) * (1.0 - underK()), sat(gloss) * (1.0 - underK()) * 0.85);
   // Dry leaves are matte; rain only lifts their gloss a little. Non-leaf wet still goes
   // shiny. Gloss still opens the surface when asked (wet sand, coral).
   let leafK = sat(leaf);
   // Leaves stay matte: roughness up, F0 down — rain only lifts gloss a little.
   // Extra leaf roughness so crowns never read as wet plastic in dry sun.
   let rough = clamp(mix(0.78, 0.44, sat(gloss)) * mix(1.0, 1.48, leafK) * mix(1.0, mix(0.6, 0.92, leafK), wet), 0.12, 0.97);
-  let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.022), leafK);
+  // Dielectric F0: dry ~4%, wet sand/rock lifts toward ~8%; leaves stay lower.
+  let F0 = mix(mix(vec3<f32>(0.04), vec3<f32>(0.07), sat(gloss) * 0.85), vec3<f32>(0.022), leafK);
   // Thickness-aware wrap: thin tips (high leaf) catch more transmitted fill.
   let wrap = mix(0.22, 0.52, leafK);
   let sunDiff = sat((nl + wrap) / (1.0 + wrap));
-  var light = F.sunCol * sunDiff * sh
+  // Cheap ground bounce into the hemisphere (single bounce from average terrain albedo).
+  let gndBounce = vec3<f32>(0.18, 0.16, 0.12) * F.day.rgb * max(-n.y, 0.0) * 0.22
+    + vec3<f32>(0.22, 0.20, 0.14) * F.day.rgb * sat(n.y) * 0.06 * (1.0 - roof);
+  var light = (F.sunCol * sunDiff * sh
     + skyIrr(n) * skyVis
-    + F.sunCol * vec3<f32>(0.3, 0.42, 0.13) * (0.11 * roof * max(L.y, 0.0) * cs);
+    + gndBounce * skyVis
+    + boltOnSurf(world, n, 1.05) * mix(0.62, 1.0, skyVis)
+    + F.sunCol * vec3<f32>(0.3, 0.42, 0.13) * (0.11 * roof * max(L.y, 0.0) * cs)) * contactAO;
+  // A crown gap (fsShadowMesh) prints on the floor. Only under the roof, only near
+  // the ground, and only where the shadow map is actually open: open sand is unchanged.
+  let onFloor = 1.0 - smoothstep(0.35, 2.6, world.y - fld.x);
+  let floorLit = sat((sh - 0.42) * 2.2) * roof * onFloor * max(L.y, 0.03) * (1.0 - 0.55 * sat(F.wx.x));
+  light += F.sunCol * vec3<f32>(1.02, 0.9, 0.58) * floorLit * 0.36;
   if (world.y < 0.08) {
     let depth = max(-world.y, 0.0);
     // Wavelength-dependent Beer: red falls first → turquoise shallow, cyan/blue deep.
@@ -543,6 +597,18 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
       let fill = waterFill(d) * mix(vec3<f32>(1.1, 1.05, 0.9), vec3<f32>(0.7, 0.95, 1.2), sat(d / 8.0));
       let underLit = light * vec3<f32>(0.78, 0.92, 0.96) + fill * (0.65 + 0.35 * (n.y * 0.5 + 0.5));
       light = mix(light, underLit, uk);
+      // Deep bioluminescence on the bed — only below the reef, stronger in the abyss.
+      let deepK = smoothstep(7.5, 14.0, d) * uk;
+      let abyssK = smoothstep(12.0, 18.0, d) * uk;
+      if (deepK > 0.01) {
+        let glow = n3(world * 0.35 + vec3<f32>(0.0, F.time * 0.04, 0.0));
+        let pulse = 0.55 + 0.45 * sin(F.time * 0.7 + glow * 12.0 + world.x * 0.2);
+        light += vec3<f32>(0.05, 0.22, 0.35) * deepK * pulse * smoothstep(0.55, 0.85, glow) * (0.35 + 0.65 * sat(n.y));
+        // Point photophores on soft coral / wreck encrustation (noise peaks).
+        let dots = n3(world * 1.8 + vec3<f32>(F.time * 0.02, 0.0, 3.0));
+        light += vec3<f32>(0.1, 0.45, 0.6) * abyssK * smoothstep(0.78, 0.92, dots)
+          * (0.5 + 0.5 * sin(F.time * 1.6 + dots * 20.0)) * (0.4 + 0.6 * sat(n.y));
+      }
     }
   }
   let alb = albedo * mix(1.0, mix(0.58, 0.84, sat(leaf)), wet);
@@ -554,17 +620,20 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   var col = alb * (1.0 - Fs) * light;
   // The sun's highlight, and the sky mirrored in whatever is smooth enough to mirror it.
   // Leaves take a softer highlight than bark or wet sand, so a crown does not read as wax.
-  col += F.sunCol * microSpec(n, V, L, rough, F0) * sh * mix(1.85, 0.48, leafK);
+  // Under water the highlight follows the refracted sun (Lw), same as diffuse.
+  col += F.sunCol * microSpec(n, V, Lw, rough, F0) * sh * mix(1.85, 0.48, leafK);
   col += skyDim(reflect(-V, n)) * Fs * skyVis * sat(n.y * 1.4 + 0.4) * mix(1.0, 0.28, leafK);
   // Transmission scales with leaf thickness proxy: thin tips glow more, thick bases less.
   // Subtle — green light filters through; never glass-transparent.
   let edge = pow(1.0 - ndv, 2.0);
   let thin = mix(0.5, 1.25, clamp(leaf * 0.55, 0.0, 1.0));
-  let trans = max(-nl, 0.0) * leaf * (0.55 + 0.75 * edge) * thin;
-  col += alb * vec3<f32>(0.82, 1.22, 0.32) * F.sunCol * trans * mix(0.12, 1.05, sh);
+  // Chlorophyll transmission: thin blades pass yellow-green, thick ones stay dark.
+  // The shadowed floor is what you see looking up into a crown with the sun behind it.
+  let trans = max(-nl, 0.0) * leaf * (0.48 + 0.82 * edge) * thin;
+  col += alb * vec3<f32>(0.68, 1.34, 0.26) * F.sunCol * trans * mix(0.24, 0.88, sh);
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let shoreWet = 1.0 - sat(world.y / 0.7);
-    col += F.sunCol * microSpec(n, V, L, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.28;
+    col += F.sunCol * microSpec(n, V, Lw, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.28;
   }
   return applyFog(col, world);
 }
@@ -573,6 +642,19 @@ fn forestNoise(p: vec2<f32>) -> f32 {
   return sin(p.x * 0.031 + 1.3) * sin(p.y * 0.027 + 0.5)
     + 0.6 * sin((p.x + p.y) * 0.053 + 2.1) * sin((p.x - p.y) * 0.047 + 0.4)
     + 0.35 * sin(p.x * 0.11 + 3.0) * sin(p.y * 0.13 + 1.0);
+}
+// Domain-warped cluster field — mirrors JS clusterField; soft lobes, not rings.
+fn clusterField(p: vec2<f32>) -> f32 {
+  let w0 = (n2(p * 0.018 + vec2<f32>(17.1, 3.7)) - 0.5) * 14.0;
+  let w1 = (n2(p * 0.018 + vec2<f32>(9.2, 21.4)) - 0.5) * 14.0;
+  let q = p + vec2<f32>(w0, w1);
+  let w2 = (n2(q * 0.055 + vec2<f32>(2.0, 5.0)) - 0.5) * 4.5;
+  let w3 = (n2(q * 0.055 + vec2<f32>(8.0, 1.0)) - 0.5) * 4.5;
+  let b = q + vec2<f32>(w2, w3);
+  let broad = n2(b * 0.011 + vec2<f32>(1.1, 0.0));
+  let mid = n2(b * 0.038 + vec2<f32>(4.7, 0.0));
+  let fine = n2(b * 0.11 + vec2<f32>(8.3, 0.0));
+  return sat(broad * 0.48 + mid * 0.34 + fine * 0.22);
 }
 // Height the damp sand reaches. It wanders, in long scallops and short tongues.
 fn dampLine(xz: vec2<f32>) -> f32 {
@@ -629,15 +711,35 @@ fn terrainAlbedo(xz: vec2<f32>, y: f32, n: vec3<f32>) -> vec3<f32> {
   grassC = mix(grassC, grassC * 0.72, smoothstep(0.55, 0.85, n2(xz * 1.4)) * 0.45);
   // Pull chroma — tropical turf in photos is duller than game “lush green.”
   grassC = mix(grassC, vec3<f32>(dot(grassC, vec3<f32>(0.3, 0.55, 0.15))), 0.28);
-  // Under the trees the ground is leaf litter in shade, not lawn.
+  // Multi-layer forest floor: soil/debris → moss → litter under canopy (domain-warped).
   let forest = smoothstep(1.9, 4.4, y) * (1.0 - smoothstep(0.12, 0.29, slope)) * smoothstep(-0.62, -0.12, forestNoise(xz));
+  let clump = clusterField(xz);
+  let moist = smoothstep(0.2, 2.2, y) * (1.0 - smoothstep(0.2, 0.7, slope)) * (0.45 + 0.55 * n2(xz * 0.02 + vec2<f32>(3.0, 0.0)));
+  // Bare soil / woody debris under dense cover — base layer before moss and litter.
+  let soil = mix(vec3<f32>(0.055, 0.042, 0.028), vec3<f32>(0.1, 0.078, 0.045), n2(xz * 1.7));
+  let debris = mix(vec3<f32>(0.08, 0.055, 0.03), vec3<f32>(0.14, 0.1, 0.055), n2(xz * 3.2 + vec2<f32>(2.0, 5.0)));
+  let debrisK = forest * smoothstep(0.35, 0.7, clump) * (0.35 + 0.45 * n2(xz * 2.4));
+  grassC = mix(grassC, mix(soil, debris, n2(xz * 0.8)), debrisK * 0.85);
+  // Moss cushions in moist shade — soft green, irregular patches (no ring edges).
+  let mossC = mix(vec3<f32>(0.035, 0.15, 0.03), vec3<f32>(0.09, 0.22, 0.055), n2(xz * 2.1));
+  let mossK = sat(moist * 0.65 + forest * 0.85) * smoothstep(0.18, 0.55, clump)
+    * (0.45 + 0.55 * n2(xz * 0.9 + vec2<f32>(4.0, 1.0))) * (1.0 - smoothstep(0.35, 0.7, slope));
+  grassC = mix(grassC, mossC, mossK * 0.88);
+  // Leaf litter on top of moss/soil in deep canopy.
   let litter = mix(vec3<f32>(0.035, 0.045, 0.022), vec3<f32>(0.075, 0.062, 0.035), n2(xz * 0.9));
-  grassC = mix(grassC, litter, forest * 0.92);
+  grassC = mix(grassC, litter, forest * 0.72 * smoothstep(0.2, 0.6, clump));
+  // Beach→jungle: dry straw fringe gives way to richer turf inland (no hard band).
+  let beachFringe = smoothstep(2.6, 0.4, y) * (1.0 - forest) * smoothstep(0.3, 0.7, n2(xz * 0.05));
+  grassC = mix(grassC, grassC * vec3<f32>(1.15, 1.05, 0.85), beachFringe * 0.22);
   var rockC = mix(vec3<f32>(0.40, 0.38, 0.34), vec3<f32>(0.22, 0.21, 0.19), m);
   rockC *= 0.84 + 0.2 * sin(y * 1.4 + m * 5.0) + 0.08 * (n2(xz * 4.2) - 0.5);
   rockC = mix(rockC, vec3<f32>(0.34, 0.36, 0.22), smoothstep(0.62, 0.86, n2(xz * 0.35)) * (1.0 - slope));
   // Weathered lichen / damp seepage on shaded faces.
   rockC = mix(rockC, rockC * vec3<f32>(0.7, 0.78, 0.62), smoothstep(0.55, 0.2, n.y) * smoothstep(0.45, 0.8, n2(xz * 1.1)) * 0.4);
+  // Structure reclaim: moss blankets on rock crowns and damp ledges.
+  let rockMoss = smoothstep(0.4, 0.9, n.y) * smoothstep(0.3, 0.75, moist + clump * 0.5)
+    * (0.35 + 0.65 * n2(xz * 1.4 + vec2<f32>(6.0, 2.0)));
+  rockC = mix(rockC, mossC * 0.85, rockMoss * 0.55);
   return sandC * sandW + grassC * grassW + rockC * rock;
 }
 
@@ -760,16 +862,19 @@ struct GeoV {
   var washWet = 0.0;
   if (sh.inside > 0.5 && slope < 0.72) {
     // Wet reflective film + residual foam after swash retreats (solver wet/ground channels).
+    // Activity (foam + sheet speed) darkens a longer tongue inland than a still sheet.
     let wetEdge = n2(in.world.xz * 2.8) * 0.045;
-    washWet = max(sh.wet * smoothstep(0.16 + wetEdge, 0.0, sh.h), sh.wet * 0.35 * smoothstep(0.2, 0.0, sh.h));
+    let act = sat(sh.foam * 1.1 + length(sh.vel) * 0.08);
+    washWet = max(sh.wet * smoothstep(0.18 + wetEdge, 0.0, sh.h), sh.wet * (0.4 + 0.35 * act) * smoothstep(0.24, 0.0, sh.h));
+    washWet = max(washWet, sh.wet * 0.55 * act * smoothstep(0.12, 0.0, sh.h));
     let distT = length(in.world - F.camPos);
     let footT = distT * F.tanHalf * 2.0 / max(F.res.y, 1.0) / max(abs(F.camPos.y - in.world.y) / max(distT, 0.1), 0.08);
-    let leave = max(sh.foam, sh.wet * 0.22) * smoothstep(0.1, 0.0, sh.h)
+    let leave = max(sh.foam, sh.wet * (0.22 + 0.2 * act)) * smoothstep(0.12, 0.0, sh.h)
       * (0.5 + 0.5 * n2(in.world.xz * 1.6 + vec2<f32>(F.time * 0.05, 0.0)));
     washFoam = foamCover(in.world.xz, leave * 0.95, footT);
   }
-  // Soft contact under grass and flowering shrubs — complements real shadow-map casters
-  // (blades/flowers now write into near + island maps) so sand still reads planted in soft light.
+  // Soft contact under grass, moss, vines and flowering shrubs — complements shadow-map casters
+  // so sand and litter still read planted in soft light.
   if (in.world.y > 0.12 && in.world.y < 12.0 && slope < 0.55) {
     let gPatch = n2(in.world.xz * 0.028);
     let gFine = n2(in.world.xz * 0.09 + vec2<f32>(4.0, 0.0));
@@ -781,19 +886,24 @@ struct GeoV {
     // Flower belts (open sun behind beach / lagoon / forest edge) share shrub patch noise.
     let flowerBed = shrub * smoothstep(0.7, 2.8, in.world.y) * (1.0 - smoothstep(8.0, 11.0, in.world.y));
     let woodFloor = smoothstep(1.9, 4.4, in.world.y) * smoothstep(-0.62, -0.12, forestNoise(in.world.xz));
-    let plantAO = sat(grassHere * 0.62 + shrub * 0.45 + flowerBed * 0.35 + woodFloor * 0.35)
+    let clumpAO = clusterField(in.world.xz);
+    let mossAO = woodFloor * smoothstep(0.3, 0.7, clumpAO) * (0.5 + 0.5 * n2(in.world.xz * 1.2));
+    let vineAO = woodFloor * smoothstep(0.45, 0.8, clumpAO) * smoothstep(0.55, 0.85, n2(in.world.xz * 0.07 + vec2<f32>(3.0, 8.0)));
+    let plantAO = sat(grassHere * 0.55 + shrub * 0.4 + flowerBed * 0.32 + woodFloor * 0.3 + mossAO * 0.4 + vineAO * 0.22)
       * (0.7 + 0.3 * n2(in.world.xz * 1.7));
-    alb *= 1.0 - plantAO * 0.42;
+    alb *= 1.0 - plantAO * 0.44;
   }
   // Rain wets the ground everywhere, and it stays dark after the shower until it dries.
   let rainWet = F.wx.y * step(0.0, in.world.y) * (0.75 + 0.25 * n2(in.world.xz * 0.6));
   // Dew darkens sand without making a mirror of it; that takes a soaking.
   washWet = max(washWet, rainWet * 0.8 * smoothstep(0.2, 0.7, rainWet));
-  var col = shade(in.world, n, alb, 0.0, 0.0);
+  // Feed wetness into PBR gloss so shade() roughness/F0 match the mirror film below.
+  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * smoothstep(-0.9, -0.35, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
+  // Rock faces keep a faint sheen; dry sand stays matte.
+  let matGloss = max(gloss, smoothstep(0.55, 0.88, slope) * 0.08 * (1.0 - sandy));
+  var col = shade(in.world, n, alb, 0.0, matGloss);
   // Wet sand is a mirror at a low angle. Dry sand never is.
   let Vt = normalize(F.camPos - in.world);
-  // Sand a trough has left bare is as wet as sand gets, though it lies below the waterline.
-  let gloss = max(smoothstep(0.26, 0.02, in.world.y) * smoothstep(-0.9, -0.35, in.world.y), washWet * sandy) * (1.0 - slope * 3.0);
   if (gloss > 0.01 && underK() < 0.5) {
     let nw = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.8));
     let fr = 0.02 + 0.98 * pow5(1.0 - dot(nw, Vt));
@@ -801,10 +911,14 @@ struct GeoV {
   }
   if (washWet > 0.04 || washFoam > 0.02) {
     // Wet sand goes darker and slightly specular; foam is a sparse lace, not a white band.
-    col *= mix(1.0, 0.55, washWet * (1.0 - washFoam * 0.4));
+    col *= mix(1.0, 0.48, washWet * (1.0 - washFoam * 0.35));
     let Vw = normalize(F.camPos - in.world);
-    let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), mix(18.0, 36.0, washWet)) * washWet;
-    col += vec3<f32>(0.2, 0.21, 0.2) * F.sunCol * spec * (0.7 + 0.3 * washWet);
+    let nw = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), 0.55));
+    let frWet = 0.04 + 0.96 * pow5(1.0 - sat(dot(nw, Vw)));
+    let spec = pow(sat(dot(n, normalize(F.sunDir + Vw))), mix(18.0, 42.0, washWet)) * washWet;
+    col += vec3<f32>(0.2, 0.21, 0.2) * F.sunCol * spec * (0.75 + 0.35 * washWet);
+    // Grazing film: a thin sky gleam on the wet strip without bleaching dry sand.
+    col = mix(col, applyFog(skyReflect(reflect(-Vw, nw)), in.world), sat(frWet * washWet * 0.45));
     let sun = 0.58 + 0.55 * max(dot(n, F.sunDir), 0.0);
     let foamTint = mix(vec3<f32>(0.78, 0.82, 0.8), vec3<f32>(0.9, 0.92, 0.9), washFoam);
     col = mix(col, foamTint * F.day.rgb * sun, washFoam * 0.42);
@@ -853,6 +967,29 @@ fn windAt(xz: vec2<f32>) -> f32 {
   let p = xz - F.windOff.zw;
   let g = n2(p * 0.018) * 0.6 + n2(p * 0.07 + vec2<f32>(7.0, 3.0)) * 0.4;
   return F.wind.z * (1.0 + (g * g * 2.6 - 0.7) * F.wind.w);
+}
+// Shared underwater current from trades + a slow wave-driven swirl (m/s-ish, unitless push).
+fn seaCurrent(xz: vec2<f32>) -> vec2<f32> {
+  let trades = F.wind.xy * (0.35 + 0.08 * F.wind.z);
+  let swirl = vec2<f32>(
+    sin(F.time * 0.31 + xz.x * 0.04 + xz.y * 0.02),
+    cos(F.time * 0.27 + xz.y * 0.035 - xz.x * 0.018)
+  );
+  let gust = n2(xz * 0.03 - F.windOff.zw * 0.2) - 0.5;
+  return trades * (0.85 + 0.3 * gust) + swirl * (0.22 + 0.08 * F.wind.z);
+}
+// Soft underwater lean along a stem height — bend grows with length, not base-only rotate.
+fn underSway(at: vec2<f32>, h: f32, soft: f32) -> vec3<f32> {
+  let cur = seaCurrent(at);
+  let t = max(h, 0.0);
+  // Bend grows along the stem; deeper soft fronds take a longer period swell.
+  let along = t * t * (0.55 + 1.15 * soft);
+  let phase = F.time * (0.52 + 0.28 * soft) + at.x * 0.04 + at.y * 0.03 + t * 0.35;
+  let flutter = sin(phase) * 0.38 + sin(phase * 1.7 + 1.1) * 0.2 + sin(phase * 0.37 + 2.2) * 0.12;
+  let push = cur * (along * (0.72 + 0.48 * flutter));
+  let across = vec2<f32>(-cur.y, cur.x) * (along * 0.24 * sin(phase * 0.85 + 0.4));
+  let drop = length(push + across) * (0.12 + 0.12 * soft);
+  return vec3<f32>(push.x + across.x, -drop, push.y + across.y);
 }
 // Where a part of a plant is in the rocking of its boughs, from how far it stands from the
 // foot of the plant on the plan. It turns about a radian in a metre and a half: neighbours
@@ -903,12 +1040,8 @@ fn meshPlaceLean(in: MeshIn) -> vec3<f32> {
   if (in.c.w <= 0.0) { return w; }
   if (in.i0.y < -0.3) {
     let h = max(w.y - in.i0.y, 0.0);
-    let ph = w.x * 0.031 + w.z * 0.017;
-    let a = 0.02 * pow(h + in.c.w, 1.15);
-    let gust = a * sin(F.time * 0.55 + ph + h * 0.09);
-    let gustZ = a * cos(F.time * 0.42 + ph * 1.3 + h * 0.07);
-    w.x += gust; w.z += gustZ;
-    w.y -= (abs(gust) + abs(gustZ)) * in.c.w * 0.15;
+    let sw = underSway(in.i0.xz, h * (0.35 + 0.9 * sat(in.c.w * 4.0)), sat(in.c.w * 5.0));
+    w += sw * (0.55 + 0.45 * sat(in.c.w * 3.0));
     return w;
   }
   let L = plantLean(in.i0.xz, in.i1.x, windExpo(in.i1.z), in.i1.w, boughAt(w.xz - in.i0.xz));
@@ -933,14 +1066,11 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   var w = spinY(in.p * vec3<f32>(in.i1.x, in.i1.x * in.i1.y, in.i1.x), in.i0.w) + in.i0.xyz;
   if (in.c.w <= 0.0) { return w; }
   if (in.i0.y < -0.3) {
+    // Soft fans / kelp / whips: current-driven bend along stem height (shared seaCurrent).
     let h = max(w.y - in.i0.y, 0.0);
-    let ph = w.x * 0.031 + w.z * 0.017;
-    let a = 0.028 * pow(h + in.c.w, 1.2);
-    let gust = a * (sin(F.time * 0.55 + ph + h * 0.09) + 0.35 * sin(F.time * 1.35 + ph * 3.0 + h * 0.3));
-    let gustZ = a * (cos(F.time * 0.42 + ph * 1.3 + h * 0.07) + 0.35 * cos(F.time * 1.15 + ph * 2.0 + h * 0.23));
-    w.x += gust * 1.1;
-    w.z += gustZ * 1.1;
-    w.y -= (abs(gust) + abs(gustZ)) * in.c.w * 0.2;
+    let soft = sat(in.c.w * 5.0);
+    let sw = underSway(in.i0.xz, h * (0.4 + soft), soft);
+    w += sw * (0.65 + 0.55 * soft);
     return w;
   }
   // Fade high-frequency flutter with distance — cheaper + stops distant crown sparkle.
@@ -962,8 +1092,10 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
     let tip = sat(in.uv.y);
     let ph = F.time * (1.55 + 0.45 * v) + id * 19.0 + in.i2.w * 11.0 + in.uv.y * 2.4 + abs(in.uv.x) * 0.15
       + dot(off, vec2<f32>(2.1, 1.6));
+    // Tip flutter only. The crown's lean already moved this vertex with its bough;
+    // a larger term lifted whole leaves off the twigs they belong to.
     let fl = (sin(ph) + 0.32 * sin(ph * 2.15 + 1.1))
-      * (0.005 + 0.009 * v) * tip * tip * nearW * select(1.0, 0.12, in.uv.y < -0.5);
+      * (0.002 + 0.0036 * v) * tip * tip * nearW * select(1.0, 0.12, in.uv.y < -0.5);
     along += fl;
     across += fl * 0.45 * cos(ph * 0.68 + 0.5);
   } else if (k == 3 && nearW > 0.02) {
@@ -1013,23 +1145,66 @@ fn meshPlace(in: MeshIn) -> vec3<f32> {
   return o;
 }
 struct ShadowV { @builtin(position) clip: vec4<f32> }
+struct ShadowMV {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) rest: vec3<f32>,
+  // Kind, seed and scale are the same at every vertex of a triangle.
+  @location(1) kind: f32,
+  @location(2) seed: f32,
+  @location(3) plantSc: f32,
+}
 @vertex fn vsShadowTerrain(@location(0) p: vec3<f32>) -> ShadowV {
   var o: ShadowV;
   o.clip = F.shadowVP * vec4<f32>(p, 1.0);
   return o;
 }
-@vertex fn vsShadowMesh(in: MeshIn) -> ShadowV {
-  var o: ShadowV;
-  // Lean-only placement: avoids tip flicker and heavy flutter in shadow maps.
+// Crown hulls are closed shells. Without a hole, the shadow map is solid under the
+// whole crown and the air march can only light the gaps between trees. These holes
+// are columns along the sun, tested at the leaned point the shadow map actually draws.
+fn crownBlocks(rest: vec3<f32>, seed: f32) -> bool {
+  let s = F.sunDir;
+  let ax = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(s.x) > 0.85);
+  let u = normalize(cross(s, ax));
+  let v = cross(s, u);
+  let q = vec2<f32>(dot(rest, u), dot(rest, v));
+  // One field for every crown the ray meets, so a crack stays a shaft down to the floor.
+  // Cells are several metres across. Narrower cracks vanish under the shadow filter.
+  let bough = leafCells(q * 0.14 + vec2<f32>(5.0, 1.7));
+  let qk = sat((F.cloudOct - 1.0) * 0.5);
+  // Narrower cracks disappear once the shadow filter and the crown's own limbs close them.
+  // Low leaves the thicker shade. High lets a few more columns through.
+  if (bough.x > mix(0.46, 0.40, qk)) { return false; }
+  // Low keeps the wide cracks only. Med and high also open a finer leaf field inside
+  // a mass; it changes along the ray, so some of that light dies in the crown.
+  if (F.cloudOct < 1.5) { return true; }
+  let along = dot(rest, s);
+  let q2 = q + vec2<f32>(seed * 19.0, seed * 7.0);
+  let fine = leafCells(vec2<f32>(q2.x * 0.55, along * 0.16 + q2.y * 0.22) + vec2<f32>(11.0, 4.0));
+  return fine.x < mix(0.98, 0.90, qk);
+}
+@vertex fn vsShadowMesh(in: MeshIn) -> ShadowMV {
+  var o: ShadowMV;
+  o.kind = in.n.w;
+  o.seed = fract(in.i0.x * 0.137 + in.i0.z * 0.291);
+  o.plantSc = in.i1.x;
+  // The crack test has to use the same point the shadow map rasterises. The rest pose
+  // sits a different column once the crown leans, and the enlarged leaves then seal it.
   var w = meshPlaceLean(in);
-  // Leaflets and flower petals are paper-thin — extrude a centimetre toward the light so
-  // they write a depth slab the PCF filter can still see (stems/bark unchanged).
   let kind = in.n.w;
   if (kind > 1.5 && kind < 3.5) {
     w = w - F.sunDir * 0.018;
   }
+  o.rest = w;
   o.clip = F.shadowVP * vec4<f32>(w, 1.0);
   return o;
+}
+// Depth-only. A forest crown is a solid hull plus, up close, enlarged leaf sprays that
+// would cover any hole in the hull. Both use the same sun-aligned cracks, so a shaft
+// stays open. Palms are small in scale and keep every leaflet. Trunks and rocks stay solid.
+@fragment fn fsShadowMesh(in: ShadowMV) {
+  let hull = in.kind > 2.5 && in.kind < 3.5;
+  let crownLeaf = in.kind > 1.5 && in.kind < 2.5 && in.plantSc > 5.0;
+  if ((hull || crownLeaf) && !crownBlocks(in.rest, in.seed)) { discard; }
 }
 // Grass and seaweed into shadow maps: lean only (no tread). Blades are widened for the
 // depth pass so a meadow actually darkens the sand under the soft near-map filter.
@@ -1172,6 +1347,9 @@ struct MeshOut {
       alb *= mix(1.0, 0.5 + 0.75 * smoothstep(0.75, 0.2, C.x), kC * 0.85);
       n = normalize(n + vec3<f32>(C.z - 0.5, 0.9, C.w - 0.5) * (0.9 * kC));
     }
+    // The belly of a pad is in its own shade. The lit skin is the upper shell.
+    let cavity = sat(0.46 - n.y);
+    alb *= mix(1.0, 0.5, cavity);
     if (dot(n, Vv) < 0.0) { n = -n; alb *= 0.5; }
   } else if (kind == 2) {
     // Leaflet: dull upper wax, pale underside, thin-film transmission — not green plastic.
@@ -1214,6 +1392,8 @@ struct MeshOut {
       alb = mix(alb, vec3<f32>(0.40, 0.42, 0.33), smoothstep(0.58, 0.85, blotch) * 0.35);
       alb *= mix(0.62, 1.0, smoothstep(0.0, 1.4, in.uv.y));
       n = normalize(n + vec3<f32>(0.0, (ring - 0.5) * 1.1 * groove + (crack - 0.5) * 0.3, 0.0) + ((fibre - 0.5) * 0.4 + (crack - 0.5) * 0.25) * cross(n, vec3<f32>(0.0, 1.0, 0.0)));
+      // Palm bark: dull plates with a faint wet sheen in rain only.
+      gloss = 0.04 + 0.06 * F.wx.y * groove;
     }
     if (kind == 9) {
       // Bark of a forest tree: furrows running up the trunk, plates between them, lichen in patches.
@@ -1226,6 +1406,8 @@ struct MeshOut {
       alb *= (0.34 + 0.66 * smoothstep(0.26, 0.5, fur)) * (0.7 + 0.6 * plate) * (0.8 + 0.4 * fine);
       alb = mix(alb, vec3<f32>(0.27, 0.28, 0.24), smoothstep(0.6, 0.8, blotch) * 0.4);
       n = normalize(n + ((fur - 0.5) * 1.4 + (fine - 0.5) * 0.35) * cross(n, vec3<f32>(0.0, 1.0, 0.0)) + vec3<f32>(0.0, (plate - 0.5) * 0.35, 0.0));
+      // Plate faces catch a little more than the furrows (still matte).
+      gloss = 0.03 + 0.05 * smoothstep(0.4, 0.7, plate) + 0.04 * F.wx.y;
     }
     if (kind == 8) {
       // Coral. uv.x says which: 0 branches, 1 a boulder with a maze of grooves, 2 a table, 3 soft tissue.
@@ -1312,8 +1494,11 @@ struct MeshOut {
   if (kind == 3) {
     // Sun that has come down through the crown: the green light on its underside and its
     // shaded flank, which the shadow map alone would leave black.
-    let canopyTx = 0.22 + 0.2 * crownLeaf;
-    col += alb * vec3<f32>(0.86, 1.24, 0.34) * F.sunCol * (canopyTx * sat(0.65 - dot(n, F.sunDir) * 0.7) * sat(0.5 - n.y * 1.25) * cloudShade(in.world.xz, in.world.y));
+    let canopyTx = 0.26 + 0.22 * crownLeaf;
+    col += alb * vec3<f32>(0.72, 1.3, 0.3) * F.sunCol * (canopyTx * sat(0.65 - dot(n, F.sunDir) * 0.7) * sat(0.55 - n.y) * cloudShade(in.world.xz, in.world.y));
+    // A thin rim where the pad meets the sky, so the silhouette reads as leaves.
+    let graz = pow(sat(1.0 - abs(dot(n, Vv))), 2.8);
+    col += alb * vec3<f32>(0.9, 1.0, 0.72) * graz * 0.07 * F.day.rgb;
   }
   // Where a trunk or a rock meets the ground, the ground hides the sky from it.
   let above = in.world.y - sampleField(in.world.xz).x;
@@ -1335,12 +1520,26 @@ struct GrassV {
   let weed = select(0.0, 1.0, inst.w < 0.0);
   let s = sin(inst.z); let c = cos(inst.z);
   var lp = vec3<f32>(p.x * sc, p.y * sc, p.z * sc);
+  // Streaming fades tufts before their cell is dropped. 0 leaves the old full set.
+  let fadeEnd = F.grassFade;
+  let gd = length(inst.xy - F.camPos.xz);
+  let keepG = select(1.0, 1.0 - smoothstep(fadeEnd * 0.62, fadeEnd, gd), fadeEnd > 1.0);
+  var o: GrassV;
+  if (keepG < 0.02) {
+    o.world = vec3<f32>(inst.x, 0.0, inst.y);
+    o.nrm = vec3<f32>(0.0, 1.0, 0.0);
+    o.uv = uv;
+    o.kind = weed;
+    o.clip = vec4<f32>(0.0, 0.0, 2.0, 1.0);
+    return o;
+  }
+  lp *= keepG;
   let x = lp.x * c - lp.z * s;
   let z = lp.x * s + lp.z * c;
   let ground = sampleField(vec2<f32>(inst.x, inst.y)).x;
   var w = vec3<f32>(inst.x + x, ground + lp.y, inst.y + z);
-  // Seaweed drifts as it did, by metres. Grass bends by its own height: the tip of a blade
-  // goes furthest and dips as it goes, so a short tuft is not thrown about like a tall one.
+  // Grass bends by blade height. Seaweed/kelp uses shared underwater current with
+  // along-length deformation (tip travels furthest — not a base-only rotate).
   var ph = sin(F.time * 0.5 + inst.x * 0.031 + inst.y * 0.017) * 0.7
     + 0.35 * sin(F.time * 1.3 + inst.x * 0.09 + inst.y * 0.07);
   var dir = vec2<f32>(1.0, 0.35);
@@ -1358,6 +1557,17 @@ struct GrassV {
     dir = normalize(F.wind.xy + vec2<f32>(-F.wind.y, F.wind.x) * (id - 0.5) * 0.5);
     bend = ph * sqrt(max(uv.y, 0.0)) * lp.y;
     w.y -= bend * bend * 0.5 / max(lp.y, 0.02);
+  } else {
+    let cur = seaCurrent(inst.xy);
+    let id = fract(inst.x * 0.731 + inst.y * 0.417);
+    let t = max(uv.y, 0.0);
+    let along = pow(t, 1.55) * lp.y;
+    let phase = F.time * (0.48 + 0.2 * id) + inst.x * 0.05 + t * 2.4;
+    let flutter = sin(phase) * 0.4 + sin(phase * 1.85 + id * 9.0) * 0.2;
+    dir = normalize(cur + vec2<f32>(-cur.y, cur.x) * (id - 0.5) * 0.55 + vec2<f32>(0.001));
+    bend = length(cur) * (0.55 + 0.45 * flutter) * along * 1.15;
+    ph = bend;
+    w.y -= bend * bend * 0.35 / max(lp.y, 0.05);
   }
   w.x += bend * dir.x;
   w.z += bend * dir.y;
@@ -1371,7 +1581,6 @@ struct GrassV {
     w.z += push.y;
     w.y -= tread * 0.5 * lp.y;
   }
-  var o: GrassV;
   o.world = w;
   o.nrm = normalize(vec3<f32>(ph * 0.3, 1.0, 0.1));
   o.uv = uv;
@@ -1401,53 +1610,9 @@ struct GrassV {
   return vec4<f32>(shade(in.world, in.nrm, col, 1.05, 0.0), 1.0);
 }
 
-struct BirdV {
-  @builtin(position) clip: vec4<f32>,
-  @location(0) world: vec3<f32>,
-  @location(1) nrm: vec3<f32>,
-  @location(2) col: vec3<f32>,
-}
-@vertex fn vsBird(@builtin(instance_index) ii: u32, @location(0) p: vec3<f32>, @location(1) wing: f32, @location(2) inst: vec4<f32>) -> BirdV {
-  var lp = p;
-  let id = f32(ii);
-  // A few beats, then a glide on set wings. Each bird keeps its own time.
-  let beat = smoothstep(-0.1, 0.35, sin(F.time * (0.31 + fract(id * 0.37) * 0.22) + id * 2.1));
-  let ph = F.time * (5.4 + fract(id * 0.61) * 1.8) + id * 1.9;
-  // The hand of the wing trails the arm through the beat, so the wing bends instead of hinging like a board.
-  let arm = mix(0.1, sin(ph) * 0.55 + 0.08, beat);
-  let hand = mix(-0.06, sin(ph - 1.1) * 0.6 - 0.1, beat);
-  let a = abs(wing);
-  let d = abs(lp.x) - 0.04;
-  let inner = min(d, 0.21);
-  let outer = max(d - 0.21, 0.0);
-  if (a > 0.5) {
-    lp.y += inner * sin(arm) + outer * sin(arm + hand);
-    lp.x = sign(lp.x) * (0.04 + inner * cos(arm) + outer * cos(arm + hand));
-    // The wing sweeps back a little on the upstroke.
-    lp.z -= outer * 0.25 * beat * sat(cos(ph));
-  }
-  // Lean into the turn.
-  lp.y += lp.x * sin(F.time * 0.19 + id * 1.7) * 0.42;
-  let s = sin(inst.w); let c = cos(inst.w);
-  let x = lp.x * s + lp.z * c;
-  let z = lp.z * s - lp.x * c;
-  var w = vec3<f32>(inst.x + x, inst.y + lp.y, inst.z + z);
-  var o: BirdV;
-  o.world = w;
-  o.nrm = vec3<f32>(0.0, 1.0, 0.0);
-  // White body, grey mantle, black wingtips.
-  o.col = mix(mix(vec3<f32>(0.9, 0.91, 0.89), vec3<f32>(0.6, 0.63, 0.67), sat(a)), vec3<f32>(0.1), smoothstep(0.45, 0.6, abs(p.x)));
-  o.clip = F.viewProj * vec4<f32>(w, 1.0);
-  return o;
-}
-@fragment fn fsBird(in: BirdV) -> @location(0) vec4<f32> {
-  // Seen from below, a bird shows its pale underside, lit by the sea and the sand.
-  let below = step(F.camPos.y, in.world.y);
-  return vec4<f32>(shade(in.world, vec3<f32>(0.0, 1.0, 0.0), mix(in.col, vec3<f32>(0.85, 0.86, 0.85), below * 0.7), 0.0, 0.0) * (1.0 - 0.3 * below), 1.0);
-}
-
 ${FISH_WGSL}
 ${BUG_WGSL}
+${BIRD_WGSL}
 fn steepQ(i: i32) -> f32 {
   let v = F.steep[i >> 2];
   let k = i & 3;
@@ -1487,6 +1652,17 @@ fn seaBands(dist: f32, foot: f32) -> vec4<f32> {
   let midK = sat(1.0 - fine - farK * 0.45);
   let roughLift = sat(farK * 0.7 + smoothstep(0.1, 1.6, foot) * 0.5 + alt * farK * 0.22);
   return vec4<f32>(fine, midK, farK, roughLift);
+}
+
+// Schlick for water against air (F0 ≈ 0.02, IOR 1.333). Mid angles stay a touch
+// softer than pure Schlick so the sea reads as volume, not a chrome plate; roughness
+// still pulls the grazing peak down for far chop.
+fn waterFresnel(ndv: f32, rough: f32) -> f32 {
+  let f0 = 0.02;
+  let grazing = max(1.0 - rough * 1.15, f0);
+  let schlick = f0 + (grazing - f0) * pow5(1.0 - ndv);
+  // Soften facing reflection slightly (documentary ocean, not game mirror).
+  return mix(schlick * 0.88, schlick, smoothstep(0.15, 0.72, 1.0 - ndv));
 }
 
 // The sun's mirror image spread by a rough surface. One lobe serves the body of the sea
@@ -1546,6 +1722,36 @@ struct Sea {
   brk: f32,
 }
 
+// Open-ocean FFT tiles stay on deep-water dispersion. Near shore the Gerstner
+// bands hold that frequency and shorten: ω² = g k tanh(kh). One eased step,
+// not a swept ray. x = k to use, y = tanh(k * depth). Swell bunches; chop does not.
+fn shoreK(k: f32, depth: f32, band: f32) -> vec2<f32> {
+  let kh0 = k * depth;
+  let th0 = tanh(min(kh0, 8.0));
+  let bunch = smoothstep(1.85, 0.32, kh0) * (1.0 - smoothstep(3.5, 4.5, band));
+  let kHold = k / max(th0, 0.32);
+  let kUse = mix(k, min(kHold, k * 1.48), bunch);
+  let th = tanh(min(kUse * depth, 8.0));
+  return vec2<f32>(kUse, max(th, 0.045));
+}
+
+// Along-crest group, 0..1. The lip and the foam wake both read it, so whitewater
+// sits on the sections that trip and not along the whole crest.
+fn crestPack(across: f32, band: f32) -> f32 {
+  return n2(vec2<f32>(across * 0.017 + band * 5.1, F.time * 0.031));
+}
+
+// Amplitude grows as group velocity falls (cg / cg_deep). Never shrinks the
+// offshore swell, and the cap is what stops a bar from spiking.
+fn shoalAmp(kUse: f32, th: f32, depth: f32) -> f32 {
+  let kh = min(kUse * depth, 6.0);
+  let kh2 = min(kh * 2.0, 10.0);
+  let cgFrac = 0.5 * (1.0 + kh2 / max(sinh(kh2), 1e-3));
+  let cgRel = max(sqrt(th) * cgFrac, 0.08) / 0.5;
+  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.42);
+  return mix(1.0, grow, smoothstep(1.7, 0.22, kh));
+}
+
 fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
   var d = vec3<f32>(0.0);
   var n = vec3<f32>(0.0, 1.0, 0.0);
@@ -1586,50 +1792,121 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     As *= 1.0 - collapse * 0.38;
     // The spectral field owns the mid and short waves. These layers were the repeating ripples.
     if (i >= 3 && i < 6) { As *= 0.22; }
-    // Depth-aware dispersion: waves slow and refract as the bottom shoals (nearshore).
-    let shallowSpd = mix(1.0, 0.55 + 0.45 * sat(D / (len * 0.18)), collapse);
-    var omega = sqrt(G * k) * spdK * shallowSpd;
-    if (i == 1) { omega = wP * (k / kP) * spdK * shallowSpd; }
-    // Bend toward shallower water (uphill on the height field = inland) so trains run onshore.
+    // Depth-aware dispersion. Deep water (tanh → 1) matches the old sqrt(gk).
+    // In the surf the same frequency rides a shorter k, so crests bunch and slow.
+    let sk = shoreK(k, D, f32(i));
+    let kUse = sk.x;
+    let thK = sk.y;
+    let slow = sqrt(thK);
+    if (i < 3) { As *= shoalAmp(kUse, thK, D); }
+    let steepShore = kUse * As * Q;
+    if (steepShore > 0.72) { As *= 0.72 / steepShore; }
+    var omega = sqrt(G * kUse) * spdK * slow;
+    if (i == 1) { omega = wP * (kUse / max(kP, 1e-3)) * spdK * slow; }
+    // Snell toward the shore-normal as phase speed drops. Uphill on the bed is
+    // shallower water. Approximate — the crest is turned, not ray-marched.
     var dirN = dir;
-    if (i < 3 && collapse > 0.08) {
-      let gN = normalize(vec2<f32>(
-        sampleField(xz + vec2<f32>(1.2, 0.0)).x - sampleField(xz - vec2<f32>(1.2, 0.0)).x,
-        sampleField(xz + vec2<f32>(0.0, 1.2)).x - sampleField(xz - vec2<f32>(0.0, 1.2)).x
-      ) + vec2<f32>(1e-4));
-      dirN = normalize(mix(dir, gN, collapse * 0.4));
+    if (i < 3 && k * D < 2.15) {
+      let gx = sampleField(xz + vec2<f32>(1.6, 0.0)).x - sampleField(xz - vec2<f32>(1.6, 0.0)).x;
+      let gz = sampleField(xz + vec2<f32>(0.0, 1.6)).x - sampleField(xz - vec2<f32>(0.0, 1.6)).x;
+      let gLen = length(vec2<f32>(gx, gz));
+      if (gLen > 0.03) {
+        let gN = vec2<f32>(gx, gz) / gLen;
+        let turn = sat((1.0 - slow) * 1.25);
+        let coast = dot(dir, gN);
+        let tang = dir - gN * coast;
+        let into = mix(coast, max(coast, 0.04), turn);
+        dirN = normalize(gN * into + tang * mix(1.0, 0.62, turn));
+      }
     }
     // In open water a crest is not a ruled line. Its phase drifts over a few hundred
     // metres, so the lines bend and break. Near the beach they straighten, as they do.
     let drift = (n2(xz * 0.0041 + vec2<f32>(f32(i) * 7.3, 2.0)) + 0.5 * n2(xz * 0.011 + vec2<f32>(3.0, f32(i) * 4.1)) - 0.75) * 4.4 * deepW;
-    let phase = k * dot(dirN, xz) - omega * F.time + drift;
+    let phase = kUse * dot(dirN, xz) - omega * F.time + drift;
     let s = sin(phase);
     let c = cos(phase);
-    let wa = k * As;
+    let wa = kUse * As;
     d.x += Q * As * dirN.x * c;
     d.z += Q * As * dirN.y * c;
     d.y += As * s;
     n.x -= dirN.x * wa * c;
     n.z -= dirN.y * wa * c;
     n.y -= Q * wa * s;
-    // Crest pitches and crashes as the bottom shoals — not a static swell.
-    if (i <= 1 && collapse > 0.05) {
-      let crestS = sat(s * (1.2 + 0.35 * f32(1 - i)) - 0.05);
-      let pitch = collapse * crestS * fade * select(0.55, 1.0, i == 0);
-      d.x += dirN.x * As * pitch * 1.85;
-      d.z += dirN.y * As * pitch * 1.85;
-      d.y -= As * pitch * 0.38;
-      // Plunge: face steepens, then the lip folds.
-      let fold = collapse * sat(s * 1.7 - 0.35) * fade * select(0.4, 1.0, i == 0);
-      d.y -= As * fold * 0.22;
-      d.x += dirN.x * As * fold * 0.55;
-      d.z += dirN.y * As * fold * 0.55;
-      n.x -= dirN.x * (pitch * 1.9 + fold * 1.2);
-      n.z -= dirN.y * (pitch * 1.9 + fold * 1.2);
-      n.y -= pitch * 0.55 + fold * 0.35;
-      let churn = 0.4 + 0.6 * n2(xz * 0.065 + vec2<f32>(F.time * 0.06 + f32(i), 1.7));
-      brk += collapse * crestS * churn * select(0.55, 1.15, i == 0);
-      brk += fold * 0.85 * churn;
+    // Localized depth-limited breaking. Trip only where H/h or steepness crosses a
+    // Miche-like limit AND the along-crest pack is high — patches, not a beach-wide bar.
+    // FFT / Gerstner stay single-valued; overturn is a hinge jet on the crest section
+    // (steepen → pitch → curl → collapse) so the mesh folds into a real lip, then dumps.
+    // Soft Iribarren ξ picks spill / plunge / collapse / surge kinematics.
+    if (i <= 2 && kUse * D < 2.35) {
+      let crestS = sat(s * (1.15 + 0.2 * f32(1 - i)) - 0.12);
+      // Tip-only weight — the crest pitch-over must leave the mid-face behind or it never overhangs.
+      let tip = pow(sat(s), 3.2);
+      let faceHold = sat(0.55 + 0.55 * c) * (1.0 - tip * 0.85);
+      let waveH = max(As * 2.0, 0.02);
+      let gamma = 0.5 * max(thK, 0.22);
+      let depthLim = sat((waveH / D - gamma) / 0.22);
+      let steepLim = sat((kUse * As * Q - 0.32) / 0.24);
+      let across = dot(vec2<f32>(-dir.y, dir.x), xz);
+      let section = smoothstep(0.38, 0.7, crestPack(across, f32(i)));
+      let wxBoost = 1.0 + 0.55 * sat(F.mood.y) + 0.35 * sat(F.wx.x);
+      let excess = sat(max(depthLim, steepLim) * wxBoost);
+      // Nearshore always allows a soft trip on a packed crest so the beach showcase reads.
+      let nearForce = smoothstep(2.6, 0.55, D) * tip * section * 0.55;
+      let trip = sat(max(excess, nearForce) * wxBoost) * section * crestS * fade;
+      let slopeDrop = sampleField(xz + dirN * 2.2).x - sampleField(xz - dirN * 2.2).x;
+      let beta = abs(slopeDrop) / 4.4;
+      let xi = beta / sqrt(max(waveH / max(len, 1.0), 0.003));
+      let spillW = 1.0 - smoothstep(0.18, 0.55, xi);
+      let plungeW = smoothstep(0.18, 0.55, xi) * (1.0 - smoothstep(0.95, 1.65, xi));
+      let crumpleW = smoothstep(0.95, 1.65, xi) * (1.0 - smoothstep(2.4, 3.4, xi));
+      let surgeW = smoothstep(2.4, 3.4, xi);
+      // Prefer plunge/collapse near beach so the curl reads even on moderate foreshores.
+      let plungeBias = 0.35 + 0.65 * smoothstep(2.4, 0.7, D);
+      let spill = trip * spillW * (1.0 - plungeBias * 0.45);
+      let plunge = trip * max(plungeW, plungeBias * 0.55 * (1.0 - surgeW));
+      let crumpleBrk = trip * crumpleW;
+      let surge = trip * surgeW;
+      let face = sat(0.55 + 0.55 * c);
+      let phase = sat(crestS * (0.35 + 0.65 * face) * (0.55 + 0.7 * excess + nearForce));
+      let steepen = smoothstep(0.0, 0.28, phase) * (1.0 - smoothstep(0.28, 0.48, phase));
+      let pitch = smoothstep(0.18, 0.48, phase) * (1.0 - smoothstep(0.48, 0.72, phase));
+      let curl = smoothstep(0.42, 0.72, phase) * (1.0 - smoothstep(0.72, 0.94, phase));
+      let fall = smoothstep(0.68, 1.0, phase);
+      let bandK = select(0.55, select(0.85, 1.45, i == 0), i == 1);
+      // Hinge jet: tip pitches seaward and drops; mid-face holds height → overhanging lip / tube.
+      let ang = (pitch * 1.55 + curl * 3.15) * plunge * bandK;
+      let lipR = As * (2.4 + 1.8 * excess) * bandK;
+      let wLip = tip * (0.5 + 0.5 * section);
+      let ox = sin(ang) * lipR * wLip;
+      let oy = (cos(ang) - 1.0) * lipR * wLip;
+      d.x += dirN.x * ox;
+      d.z += dirN.y * ox;
+      d.y += oy;
+      // Hold the face up while the tip curls — creates the pocket under the lip.
+      d.y += As * faceHold * plunge * (pitch * 0.35 + curl * 0.55) * bandK;
+      // Extra seaward tip throw past hinge (reads as collapse jet).
+      d.x += dirN.x * As * tip * plunge * (curl * 1.8 + fall * 1.2) * bandK;
+      d.z += dirN.y * As * tip * plunge * (curl * 1.8 + fall * 1.2) * bandK;
+      let dump = (crumpleBrk * (0.7 + fall) + plunge * fall * 1.45 + spill * 0.3) * bandK;
+      d.y -= As * dump * (0.7 + 0.55 * tip);
+      d.x += dirN.x * As * (dump * 0.85 + spill * 0.28 + surge * 0.45);
+      d.z += dirN.y * As * (dump * 0.85 + spill * 0.28 + surge * 0.45);
+      d.y -= As * spill * 0.14;
+      d.y += As * surge * crestS * 0.22;
+      let faceTilt = plunge * (steepen * 1.2 + pitch * 3.4 + curl * 4.6) + crumpleBrk * (1.45 + fall * 1.3)
+        + spill * 0.7 + surge * 0.35;
+      n.x -= dirN.x * faceTilt * wLip;
+      n.z -= dirN.y * faceTilt * wLip;
+      n.y -= plunge * (pitch * 0.65 + curl * 1.7) * wLip + dump * 0.8 + spill * 0.22 + surge * 0.1;
+      // Overhanging tip: normal tips seaward/down so the face reads as a wall then a tube.
+      n.x -= dirN.x * tip * plunge * curl * 2.8 * bandK;
+      n.z -= dirN.y * tip * plunge * curl * 2.8 * bandK;
+      n.y -= tip * plunge * curl * 1.6 * bandK;
+      brk += trip * select(0.7, select(1.0, 1.45, i == 0), i == 1);
+      brk += plunge * (curl * 0.95 + fall * 2.15) + crumpleBrk * (0.95 + fall * 1.2) + spill * 1.05;
+      brk += surge * 0.14;
+      jxx += plunge * curl * wLip * 0.95;
+      jzz += plunge * curl * wLip * 0.55;
     }
     jxx += Q * dirN.x * dirN.x * wa * s;
     jzz += Q * dirN.y * dirN.y * wa * s;
@@ -1667,7 +1944,8 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
     + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.05 * (1.0 - calm * 0.45));
   N = normalize(vec3<f32>(N.x * (1.0 - band.z * 0.55), mix(N.y, 1.0, band.z * 0.28), N.z * (1.0 - band.z * 0.55)));
   let ndv = max(dot(N, V), 0.02);
-  let fres = 0.02 + 0.98 * pow5(1.0 - ndv);
+  let rough = clamp(0.022 + sat(F.mat.x) * 0.08 + band.w * 0.06, 0.018, 0.16);
+  let fres = waterFresnel(ndv, rough);
   var reflCol = skyColor(reflect(-V, N));
   let Rd = reflect(-V, N);
   if (Rd.y < 0.02) {
@@ -1675,7 +1953,6 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   }
   // Distant water borrows more sky so it does not read as a flat paint chip.
   reflCol = mix(reflCol, hazeColor(Rd), band.z * 0.22);
-  let rough = clamp(0.022 + sat(F.mat.x) * 0.08 + band.w * 0.06, 0.018, 0.16);
   let crest = smoothstep(0.5, 0.18, S.jac);
   let grain = n2(xz * 0.11 + vec2<f32>(F.time * 0.04, 0.0));
   let foam = sat(crest - 0.55) * smoothstep(0.42, 0.78, grain) * seaFade(distS)
@@ -1689,6 +1966,7 @@ fn farOcean(xz: vec2<f32>) -> vec3<f32> {
   var col = mix(base, reflCol, fres * (1.0 - foam * 0.5) * (1.0 - band.z * 0.15));
   // Soft glints only — hard GGX fireflies shimmer across the horizon.
   col += ggxGlint(N, V, max(rough, 0.032), fres) * mix(0.09, 0.03, band.z) * (1.0 - foam) * cs;
+  col += boltOnSurf(world, N, 0.2);
   return airMix(col, -V, distS);
 }
 
@@ -1739,7 +2017,12 @@ fn boltSeen(rd: vec3<f32>) -> vec3<f32> {
 @fragment fn fsSky(in: SkyV) -> @location(0) vec4<f32> {
   let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
   // From under water, whatever nothing else covers is more water.
-  if (underK() > 0.55) { return vec4<f32>(waterHaze(rd.y), 1.0); }
+  // Looking up: mute cyan haze so the Snell disc is not framed in harsh teal.
+  if (underK() > 0.55) {
+    let haze = waterHaze(rd.y);
+    let up = sat(rd.y * 2.2);
+    return vec4<f32>(haze * mix(1.0, 0.62, up) * mix(vec3<f32>(1.0), vec3<f32>(1.06, 0.94, 0.86), up), 1.0);
+  }
   let seen = boltSeen(rd);
   // Any ray that meets the sea plane is open ocean, so the water does not end at the mesh.
   if (rd.y < -0.0003 && F.camPos.y > 0.2 && F.under < 0.5) {
@@ -1751,21 +2034,6 @@ fn boltSeen(rd: vec3<f32>) -> vec3<f32> {
     }
   }
   var col = skyColor(rd);
-  if (F.sunTrue.w > 0.01) {
-    // Stars and the moon show through whatever part of the sky the clouds leave open.
-    let open = skyBlend(skyMap, skySamp, skyUV(rd)).a * F.sunTrue.w;
-    let sp = rd * 150.0;
-    let cell = floor(sp);
-    let h = hash31(cell);
-    let f = fract(sp) - 0.5 - (vec3<f32>(hash31(cell + 1.7), hash31(cell + 4.3), hash31(cell + 9.1)) - 0.5) * 0.6;
-    let star = smoothstep(0.972, 1.0, h) * exp(-dot(f, f) * 42.0) * (0.25 + 2.5 * fract(h * 77.0));
-    col += mix(vec3<f32>(1.0, 0.85, 0.7), vec3<f32>(0.75, 0.85, 1.0), fract(h * 31.0)) * star * open * sat(rd.y * 5.0) * 0.5;
-    let md = length(cross(rd, F.moon.xyz));
-    if (dot(rd, F.moon.xyz) > 0.0) {
-      let face = 0.8 + 0.3 * n2(rd.xz * 260.0) - 0.25 * n2(rd.zy * 90.0);
-      col += vec3<f32>(0.92, 0.94, 1.0) * (smoothstep(0.0078, 0.0066, md) * face * 0.9 + exp(-md * 26.0) * 0.012) * F.moon.w * open;
-    }
-  }
   return vec4<f32>(col + seen, 1.0);
 }
 
@@ -1803,8 +2071,9 @@ fn oceanSample(tex: texture_2d<f32>, xz: vec2<f32>, size: f32) -> vec3<f32> {
 fn shapeField(xz: vec2<f32>) -> vec3<f32> {
   let a = oceanSample(shapeTex, xz, 220.0);
   let dist = length(xz - F.camPos.xz);
-  // Wide soft blend — abrupt second-tile fade shows as interference facets.
-  let close = smoothstep(480.0, 30.0, dist);
+  // Both periods stay through the shape disk. Ending the second one by a few
+  // hundred metres left a single 220 m square once the view held more than one tile.
+  let close = 1.0 - smoothstep(160.0, 1800.0, dist);
   let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
   let b = oceanSample(shapeTex, r, 151.0);
   // Shared field tracks weather wind/sea energy (same amp that drives Gerstner).
@@ -1851,16 +2120,46 @@ fn seaEta(xz: vec2<f32>, w: vec4<f32>) -> f32 {
   return shapeField(xz).x * w.y + oceanSample(chopTex, xz, 24.0).x * w.z * 0.55;
 }
 const WGRID: f32 = ${(wgrid - 1).toFixed(1)};
-fn warp(t: f32) -> f32 {
-  // Dense under the camera. The outer ring is allowed to be coarse because those
-  // triangles are not asked to hold a wave.
-  let x = t * 2.0 - 1.0;
-  let k = 4.2;
-  let u = (exp(k * abs(x)) - 1.0) / (exp(k) - 1.0);
-  return sign(x) * u * 0.5 + 0.5;
+// Disk around the camera. Inner rings (SEA_SPLIT of the grid) hold the waves out to
+// SEA_INNER metres; the rest carry that same sea out toward the horizon, still
+// inside the projection far plane. F.cover is the outer radius, F.pad0 the inner
+// exponent, F.gridO the snapped centre.
+const SEA_SPLIT: f32 = 0.72;
+const SEA_INNER: f32 = 8000.0;
+fn seaRadius(t: f32) -> f32 {
+  let k = max(F.pad0, 2.0);
+  let reach = max(F.cover, SEA_INNER);
+  if (t <= SEA_SPLIT) {
+    let u = t / SEA_SPLIT;
+    return SEA_INNER * (exp(k * u) - 1.0) / (exp(k) - 1.0);
+  }
+  let u = (t - SEA_SPLIT) / (1.0 - SEA_SPLIT);
+  return SEA_INNER * exp(log(reach / SEA_INNER) * u);
+}
+// Coarse edge of the ring under this point: radial spacing against the arc.
+// The old square used max(cell.x, cell.y), so the level set was a diamond.
+fn seaCell(dist: f32) -> f32 {
+  let k = max(F.pad0, 2.0);
+  let radial = k * (dist + SEA_INNER / (exp(k) - 1.0)) / (SEA_SPLIT * WGRID);
+  let arc = dist * 6.28318530718 / WGRID;
+  return max(radial, arc);
+}
+// Displacement LOD shared with the fragment normal. x = swell, y = shape.
+// One Gerstner / FFT phase at every level — only the amplitude eases, on a long
+// smoothstep, so a grid snap cannot pop a ring.
+fn seaLod(dist: f32, depth: f32) -> vec2<f32> {
+  let elev = max(abs(F.camPos.y), 0.5);
+  let graze = sat(elev / max(dist * 0.35, 1.0));
+  let cell = seaCell(dist);
+  let shallow = 1.0 - smoothstep(0.35, 3.2, depth);
+  let swell = 1.0 - smoothstep(mix(3.4, 5.5, shallow), mix(13.0, 20.0, shallow), cell);
+  let shape = (1.0 - smoothstep(mix(1.6, 2.6, shallow), mix(7.2, 12.0, shallow), cell))
+            * smoothstep(0.01, 0.12, graze);
+  return vec2<f32>(swell, shape);
 }
 @vertex fn vsWater(@location(0) uv: vec2<f32>) -> WaterV {
-  let xz = F.gridO + vec2<f32>(warp(uv.x), warp(uv.y)) * F.cover;
+  let ang = uv.x * 6.28318530718;
+  let xz = F.gridO + vec2<f32>(cos(ang), sin(ang)) * seaRadius(uv.y);
   let field = sampleField(xz);
   let depth = max(-field.x, 0.2);
   let s = seaAt(xz, field.y, depth);
@@ -1870,27 +2169,15 @@ fn warp(t: f32) -> f32 {
   let footLong = pix / max(elev / max(dist, 0.1), 0.01);
   let foot = pix / pow(elev / max(dist, 0.1), 0.6);
   let ww = waveWeights(dist, foot, footLong, field.y);
-  // Large-scale geometry only. Fine FFT detail stays in fragment normals so grazing
-  // views do not reveal triangle facets from high-frequency vertex displacement.
-  // Preserve swell silhouette farther when the eye is high (same ocean, not a flat plate).
+  // Large-scale geometry, then the same radial LOD the fragment applies to normals.
+  // A short per-axis gate left a diamond of ripples; what fades from the mesh fades
+  // from the lighting. Swell still carries the silhouette when the eye is high.
   let geom = smoothstep(mix(1100.0, 2600.0, sat(elev / 200.0)), 140.0, dist);
-  let graze = sat(elev / max(dist * 0.35, 1.0));
-  let hfGeom = ww.y * smoothstep(0.04, 0.18, graze);
-  // The grid is fine under the eye and coarse far along each axis. A vertex is given only
-  // the waves its own cell can hold: one sampled coarser than its length stands up as a row
-  // of teeth against the horizon. What is left out here is still in the fragment normals.
-  let gc = abs(uv * 2.0 - 1.0);
-  let cells = 4.2 * exp(4.2 * gc) / (exp(4.2) - 1.0) * F.cover / WGRID;
-  let cell = max(cells.x, cells.y);
-  // Nearshore (shallow bed): allow longer swell on coarser cells so the beach edge
-  // does not flatten into a faceted plate; still eases out — no hard cutoff.
-  let shallow = smoothstep(3.2, 0.35, depth);
-  let kSwell = 1.0 - smoothstep(mix(1.8, 2.6, shallow), mix(5.0, 7.2, shallow), cell);
-  let kShape = 1.0 - smoothstep(mix(1.3, 1.9, shallow), mix(3.6, 5.2, shallow), cell);
-  let gs = geom * ww.x * kSwell;
-  var w = vec3<f32>(xz.x + s.disp.x * gs, s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x) * kSwell, xz.y + s.disp.z * gs);
-  w.y += ripAt(xz).x * geom * graze * kShape;
-  w.y += shapeField(xz).x * hfGeom * kShape;
+  let lod = seaLod(dist, depth);
+  let gs = geom * ww.x * lod.x;
+  var w = vec3<f32>(xz.x + s.disp.x * gs, s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x) * lod.x, xz.y + s.disp.z * gs);
+  w.y += ripAt(xz).x * geom * lod.y;
+  w.y += shapeField(xz).x * ww.y * lod.y;
   let bedW = sampleField(w.xz).x;
   if (bedW < 0.0) { w.y = max(w.y, min(bedW + 0.05 + dist * 0.008, 0.0)); }
   // Near-plane safety: when the eye sits in the waterline band, keep surface verts
@@ -1936,9 +2223,10 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   let elevSh = max(abs(F.camPos.y), 0.15);
   let footSh = pixSh / pow(elevSh / max(distSh, 0.1), 0.6);
   let wwSh = waveWeights(distSh, footSh, pixSh / max(elevSh / max(distSh, 0.1), 0.01), field.y);
-  // Soft distance LOD on open-water contribution inside the sheet domain — no step cut.
+  // Same radial LOD as the open sea, so the sheet does not keep a crest the mesh dropped.
   let geomSh = smoothstep(420.0, 55.0, distSh) * (1.0 - smoothstep(0.35, 2.4, footSh) * 0.55);
-  var y = s.disp.y * mix(0.12, 1.0, wwSh.x) * geomSh + shapeField(xz).x * wwSh.y * geomSh;
+  let lodSh = seaLod(distSh, depth);
+  var y = s.disp.y * mix(0.12, 1.0, wwSh.x) * geomSh * lodSh.x + shapeField(xz).x * wwSh.y * geomSh * lodSh.y;
   if (sh.inside > 0.5) {
     // Stay on the sand even where the sheet is dry, so a triangle never stretches
     // from the water up across the sky. Dry fragments are discarded later.
@@ -1964,6 +2252,20 @@ fn worldAt(frag: vec2<f32>, depth: f32) -> vec3<f32> {
   let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
   let w = F.invViewProj * ndc;
   return w.xyz / max(w.w, 1e-4);
+}
+
+// The flash, marched through the cloud and added onto the sky. Land already covers
+// those pixels, so anything in front of the sky is left alone. F.cloudOwn means a
+// near-field volume pass owns the low cloud and adds boltAt itself.
+@fragment fn fsBoltVol(in: SkyV) -> @location(0) vec4<f32> {
+  if (F.bolt.w <= 0.0 || F.under > 0.5 || F.cloudOwn > 0.5) { discard; }
+  let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
+  if (boltMiss(rd) > 3.2) { discard; }
+  let uv = vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
+  let px = vec2<i32>(clamp(uv * F.res, vec2<f32>(0.0), F.res - 1.0));
+  let dep = textureLoad(sceneDepth, px, 0);
+  if (dep < 0.9995) { discard; }
+  return vec4<f32>(boltMarch(rd), 1.0);
 }
 
 
@@ -2013,7 +2315,7 @@ const DROP_SPRAY: u32 = 60000u;
   o.seed = h.x;
   var pos = vec3<f32>(0.0);
   var a = 0.0;
-  var light = F.amb.rgb + BOLT_C * (F.bolt.w * 0.55);
+  var light = F.amb.rgb;
   if (ii < DROP_SPLASH) {
     // A streak the length the drop falls while the eye's shutter is open.
     let box = vec3<f32>(22.0, 14.0, 22.0);
@@ -2026,7 +2328,8 @@ const DROP_SPRAY: u32 = 60000u;
     pos = w + vd * c.y * 0.26 + side * c.x * wid;
     let cell = smoothstep(0.25, 0.7, n2(w.xz * 0.0016 + F.windOff.xy * 1.6));
     a = 0.8 * (0.003 / wid) * (0.35 + 0.65 * cell) * step(max(sampleField(w.xz).x, 0.0), w.y) * smoothstep(0.5, 1.6, d);
-    light = F.amb.rgb * 1.3 + F.sunCol * (0.3 + 1.5 * pow(sat(0.5 + 0.5 * dot(normalize(w - F.camPos), F.sunDir)), 6.0));
+    light = F.amb.rgb * 1.3 + F.sunCol * (0.3 + 1.5 * pow(sat(0.5 + 0.5 * dot(normalize(w - F.camPos), F.sunDir)), 6.0))
+      + BOLT_C * boltNear(w) * 0.08;
     o.form = 0.0;
     o.dist = d;
   } else if (ii < DROP_MOTE) {
@@ -2061,11 +2364,11 @@ const DROP_SPRAY: u32 = 60000u;
     o.form = 1.0;
     o.dist = d;
   } else {
-    // Shore spray puff lattice (form≈2). Kept sparse until a better spray model exists —
-    // coarser cells, fewer draws, weaker force/alpha/radius so mist does not veil the shore.
+    // Shore spray from overturn collapse: seaAt.brk (curl/fall) + shore foam/velocity.
     let k = ii - DROP_SPRAY;
-    // Only every 4th lattice slot draws; others collapse to zero alpha.
-    let slotOn = select(0u, 1u, (k % 4u) == 0u);
+    let stormOpen = sat(F.mood.y) * 0.55 + sat(F.wx.x) * 0.35;
+    let slotStride = select(4u, 2u, stormOpen > 0.45);
+    let slotOn = select(0u, 1u, (k % slotStride) == 0u);
     let cellc = floor(F.camPos.xz / 3.6) + vec2<f32>(f32(k % 32u), f32(k / 32u)) - 16.0;
     let hh = hash22(cellc);
     let home = (cellc + hh) * 3.6;
@@ -2073,31 +2376,37 @@ const DROP_SPRAY: u32 = 60000u;
     let deep = max(-fld.x, 0.2);
     var force = 0.0;
     var top = 0.0;
+    var jet = vec2<f32>(0.0);
     if (slotOn > 0u && fld.x < 0.15 && fld.x > -2.2) {
       let S = seaAt(home, fld.y, deep);
-      // seaAt only — spray/drops share the air pipeline (no FFT textures).
-      let focus = sat((1.0 - S.jac) * 0.7) + sat(length(S.nrm.xz) * 1.0) * 0.22;
-      force = sat(S.brk * 1.15 + focus * 0.28) * smoothstep(2.2, 0.45, deep) * 0.42;
+      // Spray force tracks collapse / fold — Jacobian fold + brk from the hinge dump.
+      let focus = sat((1.0 - S.jac) * 1.05) + sat(length(S.nrm.xz) * 1.15) * 0.28;
+      force = sat(S.brk * 1.55 + focus * 0.4) * smoothstep(2.2, 0.45, deep) * (0.5 + 0.25 * stormOpen);
       top = S.disp.y;
+      // Lip jet: puffs leave along the overturn horizontal fold, then fall with gravity.
+      jet = S.disp.xz * sat(S.brk * 1.2) * 0.55;
       let sh = shoreFetch(home);
       if (sh.inside > 0.5) {
-        force = max(force, sat(sh.foam * 0.85) * smoothstep(0.55, 1.9, length(sh.vel)) * 0.35);
-        // Rock wrap splash: raised bed + foam — subdued.
-        force = max(force, smoothstep(-0.25, 0.25, sh.bed) * sat(sh.foam + length(sh.vel) * 0.1) * 0.28);
+        let spd = length(sh.vel);
+        force = max(force, sat(sh.foam * 0.95) * smoothstep(0.45, 1.9, spd) * (0.4 + 0.2 * stormOpen));
+        force = max(force, smoothstep(-0.25, 0.25, sh.bed) * sat(sh.foam + spd * 0.1) * 0.32);
+        force = max(force, smoothstep(0.12, 0.35, sh.h) * smoothstep(0.7, 1.4, spd / max(sqrt(9.81 * max(sh.h, 0.02)), 0.2)) * 0.22);
         top = max(top, sh.eta);
+        jet += sh.vel * 0.12;
       }
     }
     let life = fract(F.time * (0.42 + 0.28 * hh.x) + hh.y * 9.0);
     let local = windAt(home);
     let blow = clamp(local / 5.0, 0.2, 2.2);
     let humid = sat(F.wx.w);
-    // Low throw: rises then falls while drifting on the shared trades — irregular height per puff.
-    let rise = (0.08 + 0.55 * pow(life, 0.5) * (0.7 + 0.5 * hh.y)) * (0.5 + 0.4 * blow) - 0.7 * life * life;
-    let w = vec3<f32>(home.x, max(top, 0.0) + rise, home.y)
+    // Collapse throw: higher arc early in life, then falls; rides the lip jet seaward.
+    let rise = (0.12 + 0.85 * pow(life, 0.42) * (0.65 + 0.55 * hh.y) * (0.55 + 0.7 * force))
+      * (0.5 + 0.4 * blow) - 1.05 * life * life;
+    let w = vec3<f32>(home.x + jet.x * life * 2.2, max(top, 0.0) + rise, home.y + jet.y * life * 2.2)
       + vec3<f32>(F.wind.x, 0.0, F.wind.y) * local * 0.4 * life * 1.4
       + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * 0.025, 0.0);
-    let rad = (0.12 + 0.48 * life) * (0.55 + 0.55 * hh.x) * (0.75 + 0.2 * humid);
-    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.04, force);
+    let rad = (0.12 + 0.48 * life) * (0.55 + 0.55 * hh.x) * (0.75 + 0.2 * humid) * (1.0 + 0.15 * stormOpen);
+    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.035, force);
     let mu = dot(normalize(w - F.camPos), F.sunDir);
     // Backlit spray glows; otherwise a soft grey veil.
     let back = pow(sat(mu), 4.0);
@@ -2105,11 +2414,46 @@ const DROP_SPRAY: u32 = 60000u;
       + F.sunCol * sunVis(w) * cloudShade(w.xz, 0.0)
         * (0.12 + 1.4 * back);
     o.dist = length(w - F.camPos);
-    a = force * sin(life * 3.14159) * (0.07 + 0.06 * humid) * blow
+    a = force * sin(life * 3.14159) * (0.08 + 0.07 * humid + 0.04 * stormOpen) * blow
       * smoothstep(2.0, 10.0, o.dist) * smoothstep(42.0, 14.0, o.dist);
     o.form = 2.0;
   }
-  o.col = vec4<f32>(airMix(light, normalize(pos - F.camPos), o.dist), a * (1.0 - F.under));
+  // Rising underwater bubbles (form≈3): reuse spray lattice slots when submerged.
+  if (F.under > 0.35 && ii >= DROP_SPRAY) {
+    let k = ii - DROP_SPRAY;
+    let bubOn = select(0u, 1u, (k % 5u) == 0u);
+    let cellc = floor(F.camPos.xz / 2.8) + vec2<f32>(f32(k % 28u), f32(k / 28u)) - 14.0;
+    let hh = hash22(cellc + 17.0);
+    let home = (cellc + hh) * 2.8;
+    let fld = sampleField(home);
+    let bed = fld.x;
+    var ba = 0.0;
+    var bpos = vec3<f32>(0.0);
+    if (bubOn > 0u && bed < -0.4 && F.camPos.y < 0.6) {
+      let life = fract(F.time * (0.22 + 0.18 * hh.x) + hh.y * 11.0);
+      let deep = max(-bed, 0.5);
+      let rise = bed + 0.15 + life * min(deep - 0.25, 4.5);
+      let drift = seaCurrent(home) * life * 0.8;
+      // Wreck / reef bubble bias at both 1800s hull sites.
+      let nearWreck = max(
+        exp(-length(home - vec2<f32>(232.0, -45.0)) * 0.08),
+        exp(-length(home - vec2<f32>(240.0, 10.0)) * 0.08)
+      );
+      let rate = 0.35 + 0.55 * nearWreck + 0.25 * sat((-bed - 2.0) / 5.0) + 0.2 * sat((-bed - 10.0) / 8.0);
+      bpos = vec3<f32>(home.x + drift.x, rise, home.y + drift.y);
+      let d = length(bpos - F.camPos);
+      let rad = max(0.008 + 0.02 * hh.x * (1.0 - life * 0.5), d * pxw * 0.55);
+      pos = bpos + (F.right * c.x + F.upv * c.y) * rad;
+      light = F.amb.rgb * 0.8 + F.sunCol * 0.25 * sat(F.sunDir.y + 0.2);
+      ba = rate * (1.0 - life) * life * 4.0 * smoothstep(0.4, 3.0, d) * smoothstep(28.0, 8.0, d)
+        * step(bpos.y, -0.05) * step(bed + 0.08, bpos.y);
+      o.dist = d;
+      o.form = 3.0;
+      a = ba;
+    }
+  }
+  let aboveK = select(1.0 - F.under, 1.0, o.form > 2.5);
+  o.col = vec4<f32>(airMix(light, normalize(pos - F.camPos), o.dist), a * aboveK);
   o.clip = F.viewProj * vec4<f32>(pos, 1.0);
   return o;
 }
@@ -2121,12 +2465,15 @@ const DROP_SPRAY: u32 = 60000u;
     a *= (1.0 - abs(in.uv.x)) * (1.0 - in.uv.y * in.uv.y);
   } else if (in.form < 1.5) {
     a *= smoothstep(1.0, 0.25, r);
-  } else {
+  } else if (in.form < 2.5) {
     // A puff is torn and uneven; softer falloff so sparse spray does not read as a fog wall.
     let n = n2(in.uv * 1.7 + vec2<f32>(in.seed * 31.0, in.seed * 17.0)) * 0.6 + n2(in.uv * 4.3 + vec2<f32>(in.seed * 7.0, 3.0)) * 0.4;
     a *= smoothstep(1.0, 0.28, r) * smoothstep(0.28, 0.82, n) * 0.72;
     let dep = textureLoad(sceneDepth, vec2<i32>(in.clip.xy), 0);
     if (dep < 0.99999) { a *= sat((length(worldAt(in.clip.xy, dep) - F.camPos) - in.dist) / 0.8 + 0.3); }
+  } else {
+    // Rising bubble: bright rim, soft core.
+    a *= smoothstep(1.0, 0.55, r) * (0.35 + 0.65 * smoothstep(0.15, 0.55, r));
   }
   if (a < 0.003) { discard; }
   return vec4<f32>(tonemap(in.col.rgb), a);
@@ -2173,15 +2520,16 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
   // Mist banks in hollows; thicker on humid mornings (wx.z + humidity).
   let mistAmt = sat(F.wx.z + F.wx.w * 0.35);
   var d = mistAmt * 0.034 * smoothstep(0.22, 0.78, n) * (1.0 - smoothstep(12.0, 52.0, g)) * airLayer(2.0 + 10.0 * n, ya, yb, seg);
-  // Damp air near the ground, thickest under forest.
+  // Damp air near the ground, thickest under forest — clear days stay clear (humidity²).
   let wood = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(p.xz));
-  d += F.wx.w * F.wx.w * (0.0007 + 0.0032 * wood) * airLayer(24.0, ya, yb, seg);
+  d += F.wx.w * F.wx.w * (0.00055 + 0.0030 * wood) * airLayer(22.0, ya, yb, seg);
   // The air of a low sun: cooling, it holds a thin haze near the ground and the sea, and that
   // is what the light stands in between the trunks and under the gaps in the cloud.
-  d += F.day.w * 0.0005 * airLayer(40.0, ya, yb, seg);
+  // Slightly denser so golden-hour shafts and headlands read through real air, not a vacuum.
+  d += F.day.w * 0.00072 * airLayer(36.0, ya, yb, seg);
   // Low ocean mist — kept very thin until a realistic spray model replaces the puff cards.
   let sea = smoothstep(-1.8, -0.05, fld.x) * smoothstep(0.9, -0.2, fld.x);
-  d += sea * F.wx.w * 0.00028 * (0.45 + 0.55 * n) * airLayer(3.2, ya, yb, seg) * (1.0 - sat(F.sunTrue.w));
+  d += sea * F.wx.w * 0.00032 * (0.45 + 0.55 * n) * airLayer(3.2, ya, yb, seg) * (1.0 - sat(F.sunTrue.w));
   // Spray optical depth over energetic surf — sparse, low, only right at the break.
   let surf = smoothstep(-1.6, -0.35, fld.x) * smoothstep(0.85, 0.05, fld.x) * fld.y;
   d += surf * surf * 0.00012 * F.wind.z * (0.35 + n) * airLayer(2.2, ya, yb, seg);
@@ -2197,7 +2545,16 @@ fn airTau(p: vec3<f32>, fld: vec2<f32>, y0: f32, y1: f32, seg: f32) -> f32 {
 fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
   let wood = smoothstep(1.9, 4.4, fld.x) * smoothstep(-0.62, -0.12, forestNoise(p.xz));
   let land = smoothstep(-0.3, 0.6, fld.x);
-  return (0.0009 * land + 0.016 * wood) * exp(-max(p.y - max(fld.x, 0.0), 0.0) / 16.0);
+  let h = max(p.y - max(fld.x, 0.0), 0.0);
+  // Open ground: thin dust, strongest low, so a palm shaft still meets the sand.
+  let dust = exp(-h / 16.0);
+  // Under crowns the dust hangs in the volume the gaps light, and thins at the floor
+  // so the beams stay shafts and the ground stays a surface.
+  let beam = smoothstep(0.35, 1.8, h) * exp(-max(h - 2.2, 0.0) / 14.0);
+  let hang = mix(dust, beam, wood);
+  // A low sun stands in them. Rain and a high sun keep them quiet. No extinction.
+  let gleam = mix(0.7, 1.22, sat(F.day.w)) * (1.0 - 0.65 * sat(F.wx.x));
+  return (0.0009 * land + 0.018 * wood * gleam) * hang;
 }
 @fragment fn fsAir(in: SkyV) -> @location(0) vec4<f32> {
   let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
@@ -2232,7 +2589,7 @@ fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
       let absorb = exp(-deep * vec3<f32>(0.22, 0.07, 0.045));
       L += F.sunCol * absorb * ray * ph * lit * exp(-t * 0.065) * (end / 12.0) * 0.095;
     }
-    return vec4<f32>(L, 1.0);
+    return foldCloud(vec4<f32>(L, 1.0), in.clip.xy);
   }
   if (rd.y < -1e-4) { far = min(far, F.camPos.y / -rd.y); }
   // Each stretch of damp air sends on the sunlight that reaches it, past the fronds and past
@@ -2258,6 +2615,7 @@ fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
     let litC = sunVis(p + rd * (dn * 0.28));
     let lit = (litA + litB + litC) * 0.333 * cloudShade(p.xz, p.y);
     L += T * (a * (F.sunCol * (lit * ph * dayK) + amb) + F.sunCol * (lit * phM * motes(p, fld) * dn));
+    L += BOLT_C * boltNear(p) * 0.00045 * dn;
     T *= 1.0 - a;
   }
   if (far > 56.0) {
@@ -2274,11 +2632,147 @@ fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
       // Far off a shaft is narrower than a step and the motes are a veil, not a shaft: they
       // are counted at half strength and let go over the next couple of hundred metres.
       L += T * (a * (F.sunCol * (lit * ph * dayK) + amb) + F.sunCol * (lit * phM * motes(p, fld) * (t1 - t0) * 0.5 * exp(-(t0 - 56.0) / 90.0)));
+      L += BOLT_C * boltNear(p) * 0.00045 * (t1 - t0);
       T *= 1.0 - a;
     }
   }
-  return vec4<f32>(L, T);
+  return foldCloud(vec4<f32>(L, T), in.clip.xy);
 }
+// The cloud buffer is the same size as this pass. Folding it here leaves the water
+// shader at 16 sampled textures: the star map already took the last slot.
+fn foldCloud(air: vec4<f32>, px: vec2<f32>) -> vec4<f32> {
+  let c = textureLoad(cloudTex, vec2<i32>(px), 0);
+  return vec4<f32>(c.rgb * air.a + air.rgb, c.a * air.a);
+}
+// The cloud deck in front of the world, marched every frame once the eye is near it.
+// Distances in metres; cloudDen is in kilometres. rgb is in-scatter, a is transmittance.
+// Quality (F.cloudOct 1..3) is the step count and the light taps.
+fn cloudSlab(y: f32, dy: f32, y0: f32, y1: f32) -> vec2<f32> {
+  if (abs(dy) < 1e-3) {
+    if (y > y0 && y < y1) { return vec2<f32>(0.0, 6000.0); }
+    return vec2<f32>(1.0, 0.0);
+  }
+  let ta = (y0 - y) / dy;
+  let tb = (y1 - y) / dy;
+  return vec2<f32>(min(ta, tb), max(ta, tb));
+}
+// One step of the volume march. rgb is in-scatter, a is the transmittance of the step.
+// An empty step is (0,0,0,1). Bottoms stay darker than tops; the rim is only a skin.
+fn volStep(rd: vec3<f32>, t: f32, dt: f32, nLight: i32, ld: vec3<f32>, mu: f32, stormK: f32, sigK: f32, lightC: vec3<f32>, byMoon: bool, hEye: f32) -> vec4<f32> {
+  let pm = (F.camPos + rd * t) * 0.001;
+  let w = wxAt(pm.xz);
+  var d = 0.0;
+  if (cloudMay(w, pm.y)) {
+    let fine = 1.0 - smoothstep(1.2, 8.0, t * 0.001);
+    d = cloudDenW(pm, w, fine);
+  }
+  let dC = cirrusDen(pm);
+  if (dC > d) { d = dC; }
+  if (d <= 0.003) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+  // Skin first. A full light march only once the sample is thick enough to shadow itself.
+  // Close to the eye there is no air in front to dim this, so the skin is kept
+  // dimmer than the panorama or the first thick step tonemaps to white.
+  var tau = d * mix(4.0, 7.0, stormK);
+  if (d >= 0.42) {
+    var marched = 0.0;
+    var sl = 0.055;
+    var ll = 0.0;
+    for (var k = 0; k < 4; k++) {
+      if (k >= nLight) { break; }
+      marched += cloudDen(pm + ld * (ll + sl * 0.5)) * sl;
+      ll += sl;
+      sl *= 2.1;
+    }
+    tau = mix(tau, marched * sigK, smoothstep(0.42, 0.62, d));
+  }
+  let E = cloudEnergy(mu, tau, d, stormK);
+  let hr = sat((pm.y - F.cldA.z) / 2.5);
+  let ambC = F.amb.rgb * mix(1.0, 0.42, stormK);
+  let Ls = lightC * select(sunT(pm.y, F.sunTrue.y), vec3<f32>(1.0), byMoon) * E * mix(0.34, 0.2, stormK) + ambC * (0.05 + 0.16 * hr);
+  let al = 1.0 - exp(-d * sigK * max(dt, 0.4) * 0.001);
+  let keep = pathKeep(t * 0.001, hEye, pm.y);
+  // The screen bolt pass skips this view once pad0 is set, so the flash is added here.
+  return vec4<f32>(al * (Ls + boltAt(pm, d)) * keep, 1.0 - al);
+}
+// Near window keeps detail at the eye. The rest of a tall column is sampled evenly
+// so a layer at the far end is not stepped over.
+fn volMarch(rd: vec3<f32>, tA: f32, tB: f32, nNear: i32, nFar: i32, nLight: i32, jit: f32, ld: vec3<f32>, mu: f32, stormK: f32, sigK: f32, lightC: vec3<f32>, byMoon: bool, hEye: f32, nearEye: bool) -> vec4<f32> {
+  var C = vec3<f32>(0.0);
+  var Tr = 1.0;
+  let spanAll = max(tB - tA, 0.0);
+  let spanN = min(spanAll, 2800.0);
+  for (var i = 0; i < 32; i++) {
+    if (i >= nNear || Tr < 0.02) { break; }
+    let u0 = f32(i) / f32(max(nNear, 1));
+    let u1 = f32(i + 1) / f32(max(nNear, 1));
+    let u = mix(u0, u1, jit);
+    let uS = select(u, u * u, nearEye);
+    let uS0 = select(u0, u0 * u0, nearEye);
+    let uS1 = select(u1, u1 * u1, nearEye);
+    let bit = volStep(rd, tA + spanN * uS, spanN * max(uS1 - uS0, 0.0), nLight, ld, mu, stormK, sigK, lightC, byMoon, hEye);
+    C += Tr * bit.rgb;
+    Tr *= bit.a;
+  }
+  if (spanAll > spanN + 40.0 && Tr >= 0.02 && nFar > 0) {
+    let tF = tA + spanN;
+    let spanF = spanAll - spanN;
+    for (var j = 0; j < 16; j++) {
+      if (j >= nFar || Tr < 0.02) { break; }
+      let u0 = f32(j) / f32(nFar);
+      let u1 = f32(j + 1) / f32(nFar);
+      let u = mix(u0, u1, jit);
+      let bit = volStep(rd, tF + spanF * u, spanF * (u1 - u0), nLight, ld, mu, stormK, sigK, lightC, byMoon, hEye);
+      C += Tr * bit.rgb;
+      Tr *= bit.a;
+    }
+  }
+  return vec4<f32>(C, Tr);
+}
+@fragment fn fsCloudVol(in: SkyV) -> @location(0) vec4<f32> {
+  if (F.cloudOwn < 0.5 || F.under > 0.45) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+  let rd = normalize(F.fwd + F.right * in.ndc.x * F.tanHalf * F.aspect + F.upv * in.ndc.y * F.tanHalf);
+  let uv = vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
+  let px = vec2<i32>(clamp(uv * F.res, vec2<f32>(0.0), F.res - 1.0));
+  let dep = textureLoad(sceneDepth, px, 0);
+  var farM = 24000.0;
+  if (dep < 0.99999) { farM = length(worldAt(vec2<f32>(px) + 0.5, dep) - F.camPos); }
+  let cq = clamp(F.cloudOct, 1.0, 3.0);
+  let nNear = i32(8.0 + 6.0 * cq);
+  let nFar = i32(4.0 + 2.0 * cq);
+  let nLight = i32(1.0 + cq);
+  let stormK = sat(F.mood.y) * (0.45 + 0.55 * sat(F.wx.x));
+  let sigK = C_SIG * mix(1.0, 1.35, stormK);
+  let byMoon = F.sunTrue.y < -0.16;
+  let ld = select(F.sunTrue.xyz, F.moon.xyz, byMoon);
+  let stormDim = mix(1.0, 0.7, stormK) * mix(1.0, 0.9, sat(F.wx.x));
+  let lightC = select(F.disc.rgb * stormDim * mix(vec3<f32>(1.0), vec3<f32>(0.78, 0.84, 0.98), stormK), vec3<f32>(0.62, 0.72, 0.9) * F.astroB.w * 1.7, byMoon);
+  let mu = dot(rd, ld);
+  let jit = fract(52.9829189 * fract(dot(in.clip.xy, vec2<f32>(0.06711056, 0.00583715))));
+  let hEye = max(F.camPos.y, 0.0) * 0.001;
+  var acc = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  let baseM = F.cldA.z * 1000.0;
+  let topM = max(F.cldA.w, F.cldA.z + 0.05) * 1000.0;
+  let slab = cloudSlab(F.camPos.y, rd.y, baseM, topM);
+  let tA = max(slab.x, 0.0);
+  let tB = min(slab.y, max(farM - 1.0, 0.0));
+  if (slab.y > 0.0 && tB > tA + 3.0) {
+    let eyeIn = F.camPos.y > baseM && F.camPos.y < topM;
+    acc = volMarch(rd, tA, tB, nNear, nFar, nLight, jit, ld, mu, stormK, sigK, lightC, byMoon, hEye, eyeIn);
+  }
+  // Cirrus hands off from the panorama once the eye is within 700 m of the sheet.
+  if (hEye >= C_HIGH - 0.7) {
+    let hi = cloudSlab(F.camPos.y, rd.y, (C_HIGH - 0.2) * 1000.0, (C_HIGH + 0.5) * 1000.0);
+    let hA = max(hi.x, 0.0);
+    let hB = min(hi.y, max(farM - 1.0, 0.0));
+    if (hi.y > 0.0 && hB > hA + 3.0) {
+      let eyeHi = F.camPos.y > (C_HIGH - 0.2) * 1000.0 && F.camPos.y < (C_HIGH + 0.5) * 1000.0;
+      let b = volMarch(rd, hA, hB, nFar, 0, nLight, jit, ld, mu, stormK, sigK, lightC, byMoon, hEye, eyeHi);
+      acc = vec4<f32>(acc.rgb + acc.a * b.rgb, acc.a * b.a);
+    }
+  }
+  return vec4<f32>(acc.rgb * max(F.lit.y, 0.0), acc.a);
+}
+
 // The air pass read back at full resolution. Four taps hide the grain of its jittered steps.
 fn airOver(col: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
   let uv = frag / F.res;
@@ -2287,12 +2781,11 @@ fn airOver(col: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
     + textureSampleLevel(airTex, reflSamp, uv - vec2<f32>(e.x, e.y * 0.4), 0.0) + textureSampleLevel(airTex, reflSamp, uv - vec2<f32>(-e.x * 0.4, e.y), 0.0)) * 0.25;
   return col * a.a + a.rgb;
 }
-
-// The finished scene, with the air over it, to the screen.
+// The finished scene, with the air over it, to the screen. Clouds are already in the air target.
 @fragment fn fsBlit(in: SkyV) -> @location(0) vec4<f32> {
   let px = vec2<i32>(in.clip.xy);
-  // Under water the eye opens up: the same scene is exposed a little brighter.
-  var col = tonemap(airOver(textureLoad(sceneTex, px, 0).rgb, in.clip.xy) * (1.0 + 0.3 * F.under));
+  // Under water the eye opens a little — keep the lift mild so the Snell disc does not blow.
+  var col = tonemap(airOver(textureLoad(sceneTex, px, 0).rgb, in.clip.xy) * (1.0 + 0.14 * F.under));
   let ukB = underK();
   if (ukB > 0.01) {
     col *= mix(1.0, mix(1.0, 0.72, sat(length(in.clip.xy / F.res - 0.5) * 1.35)), ukB);
@@ -2351,24 +2844,31 @@ fn hidden(clip: vec4<f32>) -> bool {
   let footLong = pix / max(elev / max(distS, 0.1), 0.01);
   let ww = waveWeights(distS, foot, footLong, scale);
   let band = seaBands(distS, foot);
+  // Same weights as vsWater (horizontal distance, shared phase). A level that has
+  // left the mesh has left the normal, including the reflection built from it.
+  let distH = length(in.xz0 - F.camPos.xz);
+  let lod = seaLod(distH, depthW);
   // Capillary / chop only where their weight is visible — same normals, less far-field work.
   var cap = vec2<f32>(0.0);
   if (ww.w > 0.015) { cap = capillary(in.xz0, distS); }
   var chop = vec2<f32>(0.0);
   if (ww.z > 0.015) { chop = chopField(in.xz0, foot) * ww.z; }
   // Analytical Gerstner + FFT slopes, weighted the same way as the vertex height.
-  var N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, ww.x)
-    + vec3<f32>(-ocn.y * ww.y + rip.y * ww.y - chop.x + cap.x * ww.w, 0.0,
-                -ocn.z * ww.y + rip.z * ww.y - chop.y + cap.y * ww.w));
+  var N = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), S.nrm, ww.x * lod.x)
+    + vec3<f32>(-ocn.y * ww.y * lod.y + rip.y * ww.y * lod.y - chop.x + cap.x * ww.w, 0.0,
+                -ocn.z * ww.y * lod.y + rip.z * ww.y * lod.y - chop.y + cap.y * ww.w));
   // Finite-difference refine on FFT height — continuous across triangle edges.
+  // Shape amplitude matches the vertex; one lod for the stencil, so the ramp
+  // itself is not a slope.
   let grazeN = sat(elev / max(distS * 0.32, 1.0));
   let fdK = (0.28 + 0.52 * sat(foot * 1.15)) * sat(ww.y + ww.z) * mix(0.55, 1.0, grazeN) * (1.0 - band.z * 0.35);
   if (fdK > 0.02) {
     // Widen the FD stencil with distance so mid/far normals track broad waves, not sparkle.
     let eN = max(mix(0.16, 0.85, sat(foot * 0.65)), pix * mix(2.2, 5.5, band.z));
-    let h0 = seaEta(in.xz0, ww);
-    let hx = seaEta(in.xz0 + vec2<f32>(eN, 0.0), ww);
-    let hz = seaEta(in.xz0 + vec2<f32>(0.0, eN), ww);
+    let wN = vec4<f32>(ww.x, ww.y * lod.y, ww.z, ww.w);
+    let h0 = seaEta(in.xz0, wN);
+    let hx = seaEta(in.xz0 + vec2<f32>(eN, 0.0), wN);
+    let hz = seaEta(in.xz0 + vec2<f32>(0.0, eN), wN);
     let Nfd = normalize(vec3<f32>((h0 - hx) / eN, 1.0, (h0 - hz) / eN));
     // Prefer FD normals when the mesh footprint is large; ease off when looking flat-on.
     N = normalize(mix(N, Nfd, fdK));
@@ -2417,23 +2917,29 @@ fn hidden(clip: vec4<f32>) -> bool {
   }
   let V = normalize(F.camPos - in.world);
   let ndv = max(dot(N, V), 0.02);
-  // Schlick, F0 for water against air (IOR 1.333).
-  let fres = 0.02 + 0.98 * pow5(1.0 - ndv);
   let reflK = sat(F.mat.y);
   // Roughness rises with distance / footprint so distant specular stays soft, not sparkly.
   let rough = clamp(0.012 + sat(F.mat.x) * 0.06 + 0.01 * scale + band.w * 0.055, 0.01, 0.14);
+  let fres = waterFresnel(ndv, rough);
   let dir0 = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
   let alongW = dot(in.xz0, dir0);
   let acrossW = dot(in.xz0, vec2<f32>(-dir0.y, dir0.x));
   let lace = n2(vec2<f32>(alongW * 0.42 - F.time * 0.55, acrossW * 0.16));
-  let lace2 = n2(vec2<f32>(acrossW * 0.85 + 4.0, alongW * 0.2 + F.time * 0.12));
-  let crest = smoothstep(0.62, 0.18, S.jac) * smoothstep(0.15, 0.7, scale);
-  let crestFoam = sat(max(crest * 1.15, S.brk * 0.95) - 0.32) * smoothstep(0.22, 0.7, lace * 0.58 + lace2 * 0.42);
-  // White water on the plunging face as depth shoals — crashing, not a painted stripe.
-  let shoal = smoothstep(3.2, 0.25, max(-bed, 0.0));
-  let breaker = S.brk * shoal * smoothstep(0.28, 0.75, lace) * (0.7 + 0.45 * lace2);
-  let foamDens = sat(max(crestFoam * 0.62, breaker * (0.7 + 0.5 * lace2))) * max(F.mood.w, 0.0)
-    * (1.0 - smoothstep(0.4, 2.2, foot) * 0.85) * (1.0 - band.z * 0.5);
+  let shoal = smoothstep(4.0, 0.35, max(-bed, 0.0));
+  // Lip / collapse mask from seaAt hinge overturn — crest section, not a bar.
+  let lipF = sat(S.brk);
+  // Folded Jacobian marks the overhanging lip; wakes scroll down-wave from that pack.
+  let fold = sat((0.55 - S.jac) * 1.4) * shoal;
+  let packM = max(crestPack(acrossW, 0.0), crestPack(acrossW, 1.0) * 0.85);
+  let sectionF = smoothstep(0.46, 0.78, packM);
+  let wakeN = n2(vec2<f32>(alongW * 0.085 - F.time * 0.16, acrossW * 0.028 + 2.0));
+  let wake = sectionF * shoal * smoothstep(0.4, 0.78, wakeN) * (0.18 + 0.55 * lipF + 0.45 * fold);
+  let crest = smoothstep(0.48, 0.16, S.jac) * smoothstep(0.2, 0.75, scale);
+  let whitecap = sat(crest - 0.55) * (1.0 - shoal * 0.75) * smoothstep(0.35, 0.7, lace);
+  // Whitewater from overturn activity: lip + fold burst + wake + open whitecaps.
+  let stormFoam = 1.0 + 0.45 * sat(F.mood.y) + 0.25 * sat(F.wx.x);
+  let foamDens = sat(max(max(lipF * 1.05 + fold * 0.55, wake), whitecap * 0.45)) * max(F.mood.w, 0.0) * stormFoam
+    * (1.0 - smoothstep(0.45, 2.4, foot) * 0.8) * (1.0 - band.z * 0.55);
   var foam = foamCover(in.xz0, foamDens, foot);
   var onSheet = 0.0;
   var sheetFilm = 0.0;
@@ -2485,25 +2991,31 @@ fn hidden(clip: vec4<f32>) -> bool {
   if (F.under > 0.5) {
     let lit0 = cloudShade(in.xz0, 0.0);
     let I = normalize(in.world - F.camPos);
-    // Snell window (Abyssal): soft open edge, sun glitter in the refracted disc.
+    // Snell window: soft rim, restrained glitter — looking up must not go cyan or blow white.
     let ci = sat(dot(I, -N));
     let kWin = 1.0 - 1.769 * (1.0 - ci * ci);
-    let win = smoothstep(0.0, 0.22, kWin);
+    let win = smoothstep(-0.04, 0.34, kWin);
     let rr = refract(I, -N, 1.333);
     let sd = max(dot(normalize(rr + vec3<f32>(1e-5)), F.sunDir), 0.0);
-    let fr = pow5(1.0 - sqrt(max(kWin, 0.0)));
-    let sky = skyColor(normalize(rr)) * vec3<f32>(0.85, 0.95, 1.05)
-      * (0.85 + 0.35 * lit0)
-      + F.sunCol * (pow(sd, 48.0) * 0.9 + pow(sd, 280.0) * 6.0) * (1.0 - fr) * lit0;
+    // Softer Fresnel at the critical rim (less hard teal ring outside the disc).
+    let fr = pow5(1.0 - sqrt(max(kWin, 0.0))) * 0.7;
+    // Neutral sky through the window — drop the blue push that read as harsh teal.
+    let sky = skyColor(normalize(rr)) * vec3<f32>(0.94, 0.97, 0.98)
+      * (0.76 + 0.26 * lit0)
+      + F.sunCol * (pow(sd, 72.0) * 0.48 + pow(sd, 340.0) * 2.4) * (1.0 - fr) * lit0;
     let down = reflect(I, -N);
     let deep = max(-bed, 0.2);
     let reachB = deep / max(-down.y, 0.05);
-    let sandC = vec3<f32>(0.40, 0.58, 0.52) * F.day.rgb * mix(0.5, 1.0, lit0) * exp(W_KD * (-deep));
-    let refl = waterFogIn(in.world, down, min(reachB, 60.0)) * 1.05;
-    var colU = mix(mix(refl, sandC, exp(-reachB * 0.09) * 0.65), sky, win);
+    // Milder Beer on the TIR seabed bounce so the frame around the disc stays muted.
+    let sandC = vec3<f32>(0.44, 0.52, 0.47) * F.day.rgb * mix(0.5, 1.0, lit0) * exp(W_KD * (-deep) * 0.7);
+    let refl = waterFogIn(in.world, down, min(reachB, 60.0)) * 0.78;
+    var colU = mix(mix(refl, sandC, exp(-reachB * 0.09) * 0.55), sky, win);
+    // Soft bleed of absorbed sky into the TIR side — no hard cyan edge.
+    colU = mix(colU, sky * vec3<f32>(0.58, 0.72, 0.78), (1.0 - win) * fr * 0.2);
     colU = applyFog(colU, in.world);
     colU = mix(colU, vec3<f32>(0.75, 0.78, 0.76) * F.day.rgb, foam * 0.28);
-    return vec4<f32>(tonemap(airOver(colU, in.clip.xy) * 1.25), 1.0);
+    // Mild pre-tonemap gain; fsBlit already lifts underwater slightly.
+    return vec4<f32>(tonemap(airOver(colU, in.clip.xy) * 1.05), 1.0);
   }
 
   let frag = in.clip;
@@ -2515,7 +3027,8 @@ fn hidden(clip: vec4<f32>) -> bool {
   var reflN = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), N, 1.0 - 0.62 * lost)
     + vec3<f32>(toCam.x, 0.0, toCam.y) * 0.05 * lost);
   // Near, a little wind-sea slope; never the capillary glint map (that creates triangular sparkle).
-  let nearRefl = band.x * ww.y;
+  // Shape slope uses the mesh LOD so a reflection does not keep a crest the surface dropped.
+  let nearRefl = band.x * ww.y * lod.y;
   reflN = normalize(reflN + vec3<f32>(-ocn.y, 0.0, -ocn.z) * 0.35 * nearRefl);
   var reflCol = skyReflect(reflect(-V, reflN));
   let Rd = reflect(-V, reflN);
@@ -2593,21 +3106,35 @@ fn hidden(clip: vec4<f32>) -> bool {
         if (rw.y < in.world.y - 0.03 && rw.y < F.camPos.y + 2.0) { look = shifted; sp = rw; d = in.world.y - rw.y; }
       }
       let depth = max(d, 0.02);
-      let sigma = (W_KD * 8.2 + vec3<f32>(0.1, 0.018, 0.01)) * max(F.deepC.w, 0.08);
+      // Stronger red kill in the first metres → turquoise film over sand, not grey-green.
+      let sigma = (W_KD * 8.8 + vec3<f32>(0.12, 0.016, 0.009)) * max(F.deepC.w, 0.08);
       let trans = exp(-depth * sigma);
       let sceneCol = textureLoad(sceneTex, vec2<i32>(look), 0).rgb;
-      let scatter = mix(shalLit, deepLit, sat(depth / 7.0));
+      // Shallow scatter biased warm-turquoise; deep stays the open-sea body colour.
+      let scatter = mix(shalLit * vec3<f32>(0.95, 1.08, 1.02), deepLit, sat(depth / 6.2));
       base = sceneCol * trans + scatter * (1.0 - trans);
     }
   }
   base = mix(deepLit, base, sat(F.mat.w));
-  // Translucent breaking face: green-blue transmission on the pitching crest before whitewater.
+  // Breaking face: Beer transmission through the lip, then a little sun on the steep side.
+  // Plunge/collapse crests keep a greener face; spill is already mostly foam.
   let faceBrk = sat(S.brk * 1.25) * smoothstep(2.8, 0.35, max(-bed, 0.0)) * (1.0 - foam * 0.7);
   if (faceBrk > 0.02) {
-    let faceCol = mix(shalLit * vec3<f32>(0.55, 1.15, 1.05), vec3<f32>(0.2, 0.55, 0.52) * F.day.rgb, 0.45);
-    let sunFace = F.sunCol * sat(1.0 - N.y) * sunLit * 0.35;
-    base = mix(base, faceCol + sunFace, faceBrk * 0.55);
+    let path = 0.35 + 0.85 * sat(S.disp.y);
+    let beer = exp(-W_KD * path * 6.2);
+    // Wavelength-aware face: turquoise through thin water, cooler as the lip thickens.
+    let faceCol = (shalLit * vec3<f32>(0.48, 1.08, 0.92) + F.sunCol * sat(1.0 - N.y) * sunLit * 0.32) * beer;
+    let faceAmt = faceBrk * mix(0.36, 0.52, sat(1.0 - foam * 1.2));
+    base = mix(base, faceCol + shalLit * 0.1, faceAmt);
   }
+  // Crest subsurface when the sun sits behind the wave. A wrap, not a scatter integral.
+  // Green-gold transmission (chlorophyll / shallow scatter), falls off with foam.
+  let crestT = pow(sat(1.0 - N.y), 1.28) * sat(S.disp.y * 1.1 + 0.04);
+  let vxz = V.xz;
+  let vxl = length(vxz);
+  let backL = select(0.0, sat(dot(vxz / max(vxl, 1e-3), -F.sunDir.xz)), vxl > 0.08);
+  let sss = crestT * pow(backL, 1.45) * sunLit * (1.0 - foam * 0.82);
+  base += F.sunCol * vec3<f32>(0.14, 0.58, 0.40) * sss * 0.48;
   let fu = (in.xz0 - vec2<f32>(ORIGIN)) / (SPAN * 2.0) - 0.5;
   base = mix(base, deepLit, smoothstep(0.56, 0.78, max(abs(fu.x), abs(fu.y)) * 2.0));
   // The last few centimetres of water are a film over sand, not a mirror with an edge.
@@ -2615,13 +3142,14 @@ fn hidden(clip: vec4<f32>) -> bool {
   if (dep < 0.99999 && in.sheet < 0.5) {
     film = smoothstep(0.0, 0.09, in.world.y - worldAt(in.clip.xy, dep).y);
   }
-  // Fresh foam is bright and cool; aging lace goes warmer and duller.
-  let foamAge = 0.45 + 0.55 * n2(in.xz0 * 2.8 + vec2<f32>(F.time * 0.09, 3.0));
+  // Fresh lip is bright; the scrolled wake is the duller lace behind it.
+  let foamAge = sat(lipF * 0.82 + wakeN * 0.28 + onSheet * 0.35);
+  let foamN = sat(dot(N, F.sunDir) * 0.5 + 0.5);
   let foamCol = mix(
     vec3<f32>(0.62, 0.7, 0.68),
     mix(vec3<f32>(0.88, 0.9, 0.89), vec3<f32>(0.95, 0.96, 0.94), foamAge),
     sat(foam)
-  ) * F.day.rgb * mix(0.5, 1.0, sunLit);
+  ) * F.day.rgb * mix(0.55, 1.0, sunLit) * mix(0.64, 1.0, foamN);
   base = mix(base, foamCol, foam * mix(0.28, 0.72, onSheet));
   // Clear run-up film tints sand without hiding it.
   if (sheetFilm > 0.02) {
@@ -2657,9 +3185,10 @@ fn hidden(clip: vec4<f32>) -> bool {
   let sheen = pow(sat(dot(N, normalize(F.sunDir + V))), mix(48.0, 18.0, foam))
     * (sheetFilm * 0.55 + onSheet * 0.35 + foam * 0.15) * sat(sheetK * 2.0);
   col += F.sunCol * vec3<f32>(0.85, 0.92, 0.95) * sheen * 0.22 * sunLit;
-  col += spec * foamK * sunLit * mix(0.72, 0.4, band.z);
+  col += spec * foamK * sunLit * mix(0.72, 0.4, band.z) * (1.0 - fresK * 0.25);
   let crestLight = pow(sat(1.0 - N.y), 1.6) * sat(S.disp.y * 0.8) * max(dot(F.sunDir, vec3<f32>(0.0, 1.0, 0.0)), 0.0);
   col += F.sunCol * vec3<f32>(0.4, 0.55, 0.5) * crestLight * 0.07 * sunLit;
+  col += boltOnSurf(in.world, N, 0.22);
 
   col = airMix(col, -V, distS);
   var alpha = clear;

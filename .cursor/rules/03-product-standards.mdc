@@ -1,0 +1,15 @@
+---
+description: Product management and roadmap standards
+globs:
+  - company/product/**
+  - company/ROADMAP.md
+  - company/BUSINESS_MODEL.md
+alwaysApply: false
+---
+
+# Product standards
+
+- Vision and requirements stay traceable.
+- Multi-market validation before locking monetization.
+- Do not invent customers, adoption, or satisfaction scores.
+- Product reviews do not by themselves authorize `source/` edits.

@@ -48,8 +48,35 @@ const FISH_SPECIES = [
   { name: 'gold-line fusilier', len: [0.17, 0.24], sb: 0.76, top: [0.1, 0.42, 0.9], bot: [0.095, 0.45, 0.95], wid: [0.055, 0.38, 0.8], ped: 0.022,
     tail: [0.74, 0.3, 0], dorsal: [0.3, 0.74, 0.036, 0], anal: [0.54, 0.74, 0.03, 0], pect: [0.25, -0.02, 0.15, 0.35], eye: [0.07, 0.03, 0.023, 0.05],
     fin: [[0.30, 0.42, 0.50], [0.12, 0.17, 0.22]],
-    role: 5, cruise: 0.45, burst: 1.8, turn: 3.2, sep: 0.16, clear: 0.4, top_: 0.5, shy: 2.2, wander: 0.2, idle: 0.9, coh: 1, ali: 0.9, wag: 0.9, scull: 0.2, prey: 1 }
+    role: 5, cruise: 0.45, burst: 1.8, turn: 3.2, sep: 0.16, clear: 0.4, top_: 0.5, shy: 2.2, wander: 0.2, idle: 0.9, coh: 1, ali: 0.9, wag: 0.9, scull: 0.2, prey: 1 },
+  // Large animals (approx body-of-revolution meshes) — affordable landmarks in the reef.
+  { name: 'green turtle', len: [0.75, 0.95], sb: 0.88, top: [0.14, 0.38, 0.55], bot: [0.1, 0.4, 0.6], wid: [0.22, 0.4, 0.7], ped: 0.04,
+    tail: [0.0, 0.12, 0.8], dorsal: [0.35, 0.7, 0.02, 3], anal: [0.55, 0.75, 0.015, 3], pect: [0.22, -0.02, 0.28, 0.9], eye: [0.08, 0.05, 0.028, 0.15],
+    fin: [[0.28, 0.42, 0.22], [0.45, 0.52, 0.28]],
+    role: 2, cruise: 0.28, burst: 0.85, turn: 1.4, sep: 1.2, clear: 0.35, top_: 0.55, shy: 2.8, wander: 0.15, idle: 0.7, coh: 0.4, ali: 0.1, wag: 0.25, scull: 1.6, prey: 0, graze: 0.4 },
+  { name: 'spotted eagle ray', len: [0.9, 1.2], sb: 0.82, top: [0.06, 0.35, 0.7], bot: [0.05, 0.38, 0.75], wid: [0.42, 0.32, 0.55], ped: 0.02,
+    tail: [0.2, 0.08, 0.9], dorsal: [0.4, 0.7, 0.02, 3], anal: [0.5, 0.72, 0.015, 3], pect: [0.2, 0.0, 0.35, 1.1], eye: [0.1, 0.04, 0.022, 0.2],
+    fin: [[0.32, 0.28, 0.22], [0.55, 0.48, 0.35]],
+    role: 5, cruise: 0.55, burst: 1.6, turn: 1.8, sep: 1.6, clear: 0.45, top_: 0.7, shy: 3.2, wander: 0.18, idle: 0.85, coh: 0.9, ali: 0.7, wag: 0.35, scull: 0.4, prey: 0 },
+  { name: 'reef blacktip', len: [1.1, 1.45], sb: 0.78, top: [0.12, 0.4, 0.65], bot: [0.1, 0.42, 0.7], wid: [0.07, 0.35, 0.65], ped: 0.025,
+    tail: [0.9, 0.38, 0], dorsal: [0.28, 0.55, 0.16, 2], anal: [0.52, 0.72, 0.06, 2], pect: [0.24, -0.04, 0.32, 0.35], eye: [0.07, 0.04, 0.02, 0.05],
+    fin: [[0.18, 0.2, 0.22], [0.08, 0.08, 0.1]],
+    role: 4, cruise: 0.85, burst: 3.2, turn: 1.3, sep: 1.8, clear: 0.5, top_: 0.65, shy: 4.0, wander: 0.1, idle: 0.75, coh: 0.5, ali: 0.4, wag: 0.7, scull: 0.15, prey: 0 },
+  // Deep lanternfish — small midwater school; skin shader adds a soft belly photophore glow.
+  { name: 'lanternfish', len: [0.055, 0.08], sb: 0.8, top: [0.09, 0.38, 0.7], bot: [0.08, 0.4, 0.75], wid: [0.05, 0.34, 0.65], ped: 0.022,
+    tail: [0.55, 0.28, 0.1], dorsal: [0.32, 0.72, 0.04, 3], anal: [0.5, 0.74, 0.035, 3], pect: [0.26, -0.02, 0.14, 0.4], eye: [0.08, 0.04, 0.024, 0.2],
+    fin: [[0.08, 0.14, 0.22], [0.12, 0.28, 0.38]],
+    role: 5, cruise: 0.18, burst: 0.9, turn: 4.5, sep: 0.07, clear: 0.25, top_: 0.4, shy: 1.8, wander: 0.35, idle: 0.5, coh: 1.3, ali: 0.85, wag: 1.1, scull: 0.35, prey: 1 }
 ];
+
+let FISH_SHAPE_SLOT = null;
+function fishShapeSrc(i) {
+  const s = FISH_SPECIES[i];
+  return s.shapeOf != null ? s.shapeOf : i;
+}
+globalThis.__wwAppendFishSpecies = function (extra) {
+  for (let i = 0; i < extra.length; i++) FISH_SPECIES.push(extra[i]);
+};
 
 function fishProfile(sp, s) {
   const u = Math.min(Math.max(s / sp.sb, 0), 1);
@@ -106,7 +133,8 @@ function faceNormals(m) {
 
 function makeFish(sp, lod) {
   const m = new Mesh();
-  const rings = [24, 11, 5][lod], sides = [14, 8, 4][lod];
+  const rings = (sp.coarse ? [14, 8, 4] : [24, 11, 5])[lod];
+  const sides = (sp.coarse ? [10, 6, 4] : [14, 8, 4])[lod];
   const X = (s) => 0.5 - s;
 
   // Body: rings of a lens-shaped section, closer together toward the head.
@@ -265,35 +293,38 @@ const CORAL_TONES = [
   [0.60, 0.44, 0.30], [0.40, 0.34, 0.40], [0.52, 0.32, 0.26], [0.58, 0.48, 0.28]
 ];
 
-// kind 0: forking branches. form 0 is a thicket of thin antlers, 1 a clump of blunt fingers,
-// 2 a sea fan, which forks in one plane and bends with the surge.
-// kind 1: a boulder with a maze of grooves. 2: a table on a stalk. 3: the mound a head grows on.
+// kind 0: forking branches. form 0 thin antlers, 1 blunt fingers, 2 soft sea fan (surge sway),
+// 3 tall pillar, 4 soft whip/plume.
+// kind 1: boulder with grooves. 2: table on a stalk. 3: mound a head grows on.
 function makeCoral(kind, seed, lod, form) {
   const rnd = seeded(seed * 53 + 7);
   const m = new Mesh();
   // Boulders and tables keep to the browns and ochres; the branching kinds have the whole range.
   let col = CORAL_TONES[(rnd() * (kind ? 7 : CORAL_TONES.length)) | 0];
   if (kind === 0) {
-    const fan = form === 2, finger = form === 1;
+    const fan = form === 2, finger = form === 1, pillar = form === 3, whip = form === 4;
     if (fan) {
       const fans = [[0.50, 0.24, 0.34], [0.58, 0.32, 0.20], [0.44, 0.30, 0.40], [0.54, 0.36, 0.26]];
       col = fans[(rnd() * fans.length) | 0];
     }
-    const sides = [4, 3, 3][lod], segs = finger ? 2 : [3, 2, 1][lod], depth = finger ? [1, 1, 0][lod] : fan ? [4, 3, 2][lod] : [3, 2, 1][lod];
+    const sides = [4, 3, 3][lod];
+    const segs = finger ? 2 : whip ? [5, 3, 2][lod] : pillar ? [4, 3, 2][lod] : [3, 2, 1][lod];
+    const depth = finger ? [1, 1, 0][lod] : fan ? [4, 3, 2][lod] : whip ? [2, 1, 0][lod] : pillar ? [1, 1, 0][lod] : [3, 2, 1][lod];
+    const swayAmt = fan ? 0.16 : whip ? 0.22 : pillar ? 0.04 : 0;
     const grow = (p, d, len, rad, left, t) => {
       const pts = [p];
       let q = p, dir = d;
       for (let i = 1; i <= segs; i++) {
-        dir = [dir[0] + (rnd() - 0.5) * 0.3, dir[1] + 0.12 + (rnd() - 0.5) * 0.2, fan ? dir[2] * 0.5 : dir[2] + (rnd() - 0.5) * 0.3];
+        dir = [dir[0] + (rnd() - 0.5) * (whip ? 0.45 : 0.3), dir[1] + 0.12 + (rnd() - 0.5) * 0.2, fan ? dir[2] * 0.5 : dir[2] + (rnd() - 0.5) * (whip ? 0.45 : 0.3)];
         const l = Math.hypot(dir[0], dir[1], dir[2]);
         dir = [dir[0] / l, dir[1] / l, dir[2] / l];
         q = [q[0] + dir[0] * len / segs, q[1] + dir[1] * len / segs, q[2] + dir[2] * len / segs];
         pts.push(q);
       }
       const t1 = t + (1 - t) / (left + 1);
-      coralTube(m, pts, rad, rad * (left ? 0.72 : finger ? 0.8 : 0.45), sides, col, t, t1, fan ? 0.12 : 0);
-      if (!left) return;
-      const forks = 2 + (!fan && rnd() < 0.45 ? 1 : 0);
+      coralTube(m, pts, rad, rad * (left ? 0.72 : finger ? 0.8 : whip ? 0.35 : pillar ? 0.7 : 0.45), sides, col, t, t1, swayAmt);
+      if (!left || pillar) return;
+      const forks = whip ? 1 + (rnd() < 0.35 ? 1 : 0) : 2 + (!fan && rnd() < 0.45 ? 1 : 0);
       const turn = rnd() * 6.28;
       for (let f = 0; f < forks; f++) {
         const a = fan ? f * 3.1416 : turn + f / forks * 6.28, sp = 0.55 + rnd() * 0.35;
@@ -304,17 +335,32 @@ function makeCoral(kind, seed, lod, form) {
         sx /= sl; sy /= sl;
         const ux = dir[1] * sz - dir[2] * sy, uy = dir[2] * sx - dir[0] * sz, uz = dir[0] * sy - dir[1] * sx;
         const nd = [dir[0] + (sx * Math.cos(a) + ux * Math.sin(a)) * sp, dir[1] + (sy * Math.cos(a) + uy * Math.sin(a)) * sp, dir[2] + (sz * Math.cos(a) + uz * Math.sin(a)) * sp];
-        grow(q, nd, len * (0.66 + rnd() * 0.16), rad * (fan ? 0.8 : 0.72), left - 1, t1);
+        grow(q, nd, len * (0.66 + rnd() * 0.16), rad * (fan ? 0.8 : whip ? 0.65 : 0.72), left - 1, t1);
       }
     };
-    const stems = fan ? 3 : finger ? 13 + ((rnd() * 6) | 0) : 9 + ((rnd() * 5) | 0);
-    for (let i = 0; i < stems; i++) {
-      const a = fan ? (i - 1) * 0.5 + 1.5708 : i / stems * 6.28 + rnd() * 0.6, lean = fan ? 1 : 0.35 + rnd() * 0.5;
-      const off = fan ? 0.01 : finger ? rnd() * 0.16 : 0.03 + rnd() * 0.1;
-      const from = [Math.cos(a) * off, -0.03, fan ? 0 : Math.sin(a) * off];
-      if (fan) grow(from, [Math.cos(a), 1.6, 0], 0.2 + rnd() * 0.06, 0.013, depth, 0);
-      else if (finger) grow(from, [Math.cos(a) * lean * (0.3 + off * 5), 1, Math.sin(a) * lean * (0.3 + off * 5)], 0.09 + rnd() * 0.07, 0.03 + rnd() * 0.012, depth, 0);
-      else grow(from, [Math.cos(a) * lean, 1, Math.sin(a) * lean], 0.13 + rnd() * 0.07, 0.016 + rnd() * 0.006, depth, 0);
+    if (pillar) {
+      const stems = 3 + ((rnd() * 3) | 0);
+      for (let i = 0; i < stems; i++) {
+        const a = i / stems * 6.28 + rnd() * 0.4, off = 0.02 + rnd() * 0.06;
+        grow([Math.cos(a) * off, -0.04, Math.sin(a) * off], [Math.cos(a) * 0.15, 1, Math.sin(a) * 0.15], 0.28 + rnd() * 0.14, 0.04 + rnd() * 0.02, 0, 0);
+      }
+    } else if (whip) {
+      col = [[0.55, 0.22, 0.38], [0.48, 0.28, 0.44], [0.62, 0.30, 0.28]][(rnd() * 3) | 0];
+      const stems = 5 + ((rnd() * 4) | 0);
+      for (let i = 0; i < stems; i++) {
+        const a = rnd() * 6.28, off = rnd() * 0.08;
+        grow([Math.cos(a) * off, -0.03, Math.sin(a) * off], [Math.cos(a) * 0.4, 1, Math.sin(a) * 0.4], 0.22 + rnd() * 0.16, 0.01 + rnd() * 0.006, depth, 0);
+      }
+    } else {
+      const stems = fan ? 3 : finger ? 13 + ((rnd() * 6) | 0) : 9 + ((rnd() * 5) | 0);
+      for (let i = 0; i < stems; i++) {
+        const a = fan ? (i - 1) * 0.5 + 1.5708 : i / stems * 6.28 + rnd() * 0.6, lean = fan ? 1 : 0.35 + rnd() * 0.5;
+        const off = fan ? 0.01 : finger ? rnd() * 0.16 : 0.03 + rnd() * 0.1;
+        const from = [Math.cos(a) * off, -0.03, fan ? 0 : Math.sin(a) * off];
+        if (fan) grow(from, [Math.cos(a), 1.6, 0], 0.2 + rnd() * 0.06, 0.013, depth, 0);
+        else if (finger) grow(from, [Math.cos(a) * lean * (0.3 + off * 5), 1, Math.sin(a) * lean * (0.3 + off * 5)], 0.09 + rnd() * 0.07, 0.03 + rnd() * 0.012, depth, 0);
+        else grow(from, [Math.cos(a) * lean, 1, Math.sin(a) * lean], 0.13 + rnd() * 0.07, 0.016 + rnd() * 0.006, depth, 0);
+      }
     }
   } else if (kind === 1) {
     const s = icosphere([3, 2, 1][lod], 0.5, [1, 1, 1]);
@@ -435,44 +481,162 @@ function makeSeagrass(seed, lod) {
   return m;
 }
 
-// Where the reef grows. Coral gathers into heads on firm ground one to three and a half
-// metres down, thickest along the reef across the bay mouth; seagrass takes the calm
-// sand of the lagoon. Returns the places fish care about and the things they swim around.
+// Tall kelp / vine: stipe + ribbon blades. Vertex sway grows with height (along-length bend
+// is finished in the meshPlace underwater current path).
+function makeKelp(seed, lod) {
+  const rnd = seeded(seed * 91 + 19);
+  const m = new Mesh();
+  const blades = lod ? 2 : 4, segs = lod ? 4 : 8;
+  const h = 1.4 + rnd() * 1.8;
+  // Central stipe.
+  const stipe = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    stipe.push([(rnd() - 0.5) * 0.02 * t, h * t - 0.04, (rnd() - 0.5) * 0.02 * t]);
+  }
+  coralTube(m, stipe, 0.025, 0.012, lod ? 4 : 6, [0.12, 0.28, 0.1], 0, 1, 0.18, 0.4);
+  for (let k = 0; k < m.pos.length / 3; k++) {
+    m.uv[k * 2] = 3;
+    m.sway[k] = Math.max(m.sway[k], Math.max(0, m.pos[k * 3 + 1]) / h * 0.22);
+  }
+  for (let b = 0; b < blades; b++) {
+    const a = b / blades * 6.2832 + rnd() * 0.4, lean = 0.15 + rnd() * 0.35;
+    let prev = null;
+    const bh = h * (0.55 + rnd() * 0.4), w0 = 0.04 + rnd() * 0.03;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const cx = Math.cos(a) * lean * t * t * bh * 0.15, cz = Math.sin(a) * lean * t * t * bh * 0.15;
+      const ww = w0 * (1 - 0.55 * t);
+      const g = 0.7 + rnd() * 0.35;
+      const c = [0.04 * g, (0.22 + 0.28 * t) * g, 0.08 * g];
+      const sw = t * t * 0.28;
+      const fx = Math.cos(a), fz = Math.sin(a);
+      const l = m.v(cx - fz * ww, bh * t - 0.02, cz + fx * ww, fx, 0.2, fz, c[0], c[1], c[2], sw, LEAF, -1, t);
+      const r = m.v(cx + fz * ww, bh * t - 0.02, cz - fx * ww, fx, 0.2, fz, c[0], c[1], c[2], sw, LEAF, 1, t);
+      if (prev) { m.tri(prev[0], l, prev[1]); m.tri(prev[1], l, r); }
+      prev = [l, r];
+    }
+  }
+  return m;
+}
+
+// Aged 1800s shipwreck: broken hull, ribs, deck stubs, bowsprit — partially buried via plant y offset.
+// Soft coral / kelp colonise it at plant time; kind 9 reads as dark timber in the mesh shader.
+function makeWreck(seed, lod) {
+  const rnd = seeded(seed * 113 + 5);
+  const m = new Mesh();
+  const wood = [0.28, 0.2, 0.12], dark = [0.16, 0.12, 0.08], algae = [0.22, 0.32, 0.2];
+  const rust = [0.34, 0.22, 0.12], encrust = [0.3, 0.36, 0.28];
+  const sides = lod ? 6 : 10, rings = lod ? 5 : 9;
+  // Hull shell: elongated half-tube, crushed on one side — brig / schooner silhouette.
+  const grid = [];
+  for (let i = 0; i <= rings; i++) {
+    const u = i / rings, x = (u - 0.5) * 3.6;
+    const row = [];
+    for (let k = 0; k <= sides; k++) {
+      const a = -0.15 + k / sides * (Math.PI + 0.3);
+      let r = 0.55 + 0.12 * Math.sin(u * 6.28) + 0.08 * Math.sin(a * 3 + seed);
+      if (u > 0.72) r *= 1 - (u - 0.72) * 2.2; // broken stern
+      if (u < 0.12) r *= 0.55 + u * 4;
+      const y = Math.sin(a) * r, z = -Math.cos(a) * r * (0.7 + 0.3 * (1 - Math.abs(u - 0.5)));
+      const crush = u > 0.35 && u < 0.55 && a > 1.2 ? 0.55 : 1;
+      const pick = rnd();
+      const col = pick < 0.14 ? algae : pick < 0.22 ? encrust : pick < 0.32 ? rust : pick < 0.55 ? dark : wood;
+      const sh = 0.65 + 0.35 * sat(y + 0.2);
+      row.push(m.v(x, y * crush + 0.15, z, Math.sin(a), Math.cos(a) * 0.4, -Math.cos(a), col[0] * sh, col[1] * sh, col[2] * sh, 0, 9, u, a / Math.PI));
+    }
+    grid.push(row);
+  }
+  for (let i = 0; i < rings; i++) {
+    for (let k = 0; k < sides; k++) {
+      m.tri(grid[i][k], grid[i + 1][k], grid[i][k + 1]);
+      m.tri(grid[i][k + 1], grid[i + 1][k], grid[i + 1][k + 1]);
+    }
+  }
+  // Ribs across the hold.
+  const ribN = lod ? 3 : 6;
+  for (let i = 0; i < ribN; i++) {
+    const u = 0.18 + i / ribN * 0.55, x = (u - 0.5) * 3.2;
+    coralTube(m, [[x, 0.05, -0.35], [x, 0.55, 0], [x, 0.08, 0.35]], 0.04, 0.03, lod ? 4 : 6, dark, 0, 1, 0, 0.2);
+  }
+  // Mast stump + broken bowsprit (near LOD only).
+  if (!lod) {
+    coralTube(m, [[0.1, 0.2, 0], [0.12, 1.1, 0.02], [0.08, 1.6, -0.01]], 0.07, 0.035, 6, wood, 0, 1, 0, 0.5);
+    coralTube(m, [[-1.55, 0.25, 0], [-1.9, 0.55, 0.05], [-2.25, 0.35, 0.02]], 0.045, 0.02, 5, dark, 0, 1, 0, 0.35);
+    // Deck beam stubs along the gunwales.
+    for (let i = 0; i < 4; i++) {
+      const u = 0.2 + i * 0.18, x = (u - 0.5) * 3.0;
+      coralTube(m, [[x, 0.45, -0.4], [x, 0.55, 0], [x, 0.42, 0.38]], 0.03, 0.025, 4, wood, 0, 1, 0, 0.15);
+    }
+  }
+  faceNormals(m);
+  return m;
+}
+
+// Biome weight helpers for underwater planting (0..1). Zones run reef garden → wall →
+// kelp shelf → mid deep → abyss. Depth gates keep life out of the wrong band.
+function reefBiome(x, z, bed) {
+  const crest = Math.exp(-((x - 196) * (x - 196)) / 1100 - ((z + 2) * (z + 2)) / 5200);
+  const wall = Math.exp(-((x - 218) * (x - 218)) / 900 - ((z + 2) * (z + 2)) / 4800);
+  const shelf = Math.exp(-((x + 120) * (x + 120)) / 7000 - ((z - 80) * (z - 80)) / 5200)
+    + Math.exp(-((x - 40) * (x - 40)) / 8000 - ((z - 170) * (z - 170)) / 4200);
+  const basin = Math.exp(-((x - 310) * (x - 310)) / 30000 - ((z + 190) * (z + 190)) / 26000);
+  const mount = Math.exp(-((x - 340) * (x - 340)) / 2800 - ((z + 210) * (z + 210)) / 2400)
+    + Math.exp(-((x - 290) * (x - 290)) / 2200 - ((z + 250) * (z + 250)) / 2000);
+  const shallow = sat((-bed - 0.6) / 2.2) * sat((3.2 + bed) / 2.4);
+  const garden = crest * shallow;
+  const drop = wall * sat((-bed - 2.5) / 4.0);
+  const kelp = sat(shelf) * sat((-bed - 1.8) / 3.5) * sat((8.5 + bed) / 4.0);
+  const deep = sat((-bed - 7.0) / 6.0) * (0.35 + 0.65 * basin) * sat((16 + bed) / 8.0);
+  const abyss = sat((-bed - 12.0) / 8.0) * (0.4 + 0.6 * basin + 0.5 * mount);
+  return { garden: garden, wall: drop, kelp: kelp, deep: deep, abyss: abyss, crest: crest };
+}
+
+// Where the reef grows. Biome zones: shallow coral garden, reef-wall drop-off,
+// kelp rocky shelf, deep basin, abyss soft coral, and 1800s wreck habitats.
+// Returns fish homes + blocks + bubbles + wrecks.
 function plantReef(world, scatter, q) {
   const rnd = seeded(4401);
   const forms = (f, list) => list.map((s) => scatter.proto([makeCoral(0, s, 0, f), makeCoral(0, s, 1, f), makeCoral(0, s, 2, f)], 0.5, [9, 26]));
   const branch = forms(0, [1, 2, 3]), finger = forms(1, [11, 12]), fans = forms(2, [13, 14]);
+  const pillar = forms(3, [21, 22]), whip = forms(4, [23, 24, 25]);
   const dome = [4, 5, 6].map((s) => scatter.proto([makeCoral(1, s, 0), makeCoral(1, s, 1), makeCoral(1, s, 2)], 0.6, [10, 30]));
   const table = [7, 8].map((s) => scatter.proto([makeCoral(2, s, 0), makeCoral(2, s, 1), makeCoral(2, s, 2)], 0.6, [10, 30]));
   const mound = [9, 10].map((s) => scatter.proto([makeCoral(3, s, 0), makeCoral(3, s, 1), makeCoral(3, s, 2)], 1.2, [14, 40]));
   const anem = scatter.proto([makeAnemone(1, 0), makeAnemone(1, 1)], 0.25, [5]);
   const grass = [1, 2, 3].map((s) => scatter.proto([makeSeagrass(s, 0), makeSeagrass(s, 1)], 0.45, [7]));
-  const heads = [], blocks = [], sand = [];
-  const reefW = (x, z) => Math.exp(-((x - 196) * (x - 196)) / 1100 - ((z + 2) * (z + 2)) / 5200);
-  for (let i = 0; i < 9000 && heads.length < q.reef; i++) {
-    const x = 30 + rnd() * 220, z = (rnd() - 0.5) * 230;
+  const kelpN = Math.max(4, Math.round((q.reef || 40) * 0.55));
+  const kelp = [1, 2, 3, 4].map((s) => scatter.proto([makeKelp(s, 0), makeKelp(s, 1)], 1.1, [16, 36]));
+  const wreckA = scatter.proto([makeWreck(1, 0), makeWreck(1, 1)], 3.2, [40, 90]);
+  const wreckB = scatter.proto([makeWreck(7, 0), makeWreck(7, 1)], 3.4, [42, 95]);
+  const heads = [], blocks = [], sand = [], bubbles = [], wrecks = [];
+  const reefBudget = Math.round(q.reef * 1.15);
+  for (let i = 0; i < 11000 && heads.length < reefBudget; i++) {
+    const x = 20 + rnd() * 260, z = (rnd() - 0.5) * 260;
     const bed = fieldSample(world, x, z);
-    if (bed > -0.95 || bed < -3.6 || fieldSlope(world, x, z) > 0.45) continue;
-    if (rnd() > 0.1 + 0.9 * reefW(x, z)) continue;
+    if (bed > -0.85 || bed < -9.5 || fieldSlope(world, x, z) > 0.55) continue;
+    const bio = reefBiome(x, z, bed);
+    const chance = 0.08 + 0.75 * bio.garden + 0.55 * bio.wall + 0.25 * bio.kelp + 0.12 * bio.deep;
+    if (rnd() > chance) continue;
     let ok = true;
-    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < 5.5) { ok = false; break; }
+    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < (bio.wall > 0.4 ? 4.2 : 5.5)) { ok = false; break; }
     if (!ok) continue;
-    const r = 1.1 + rnd() * 1.5;
-    const head = { x: x, z: z, bed: bed, r: r, top: bed + 0.4, anemone: null, branchy: false };
+    const r = 1.0 + rnd() * (bio.wall > 0.35 ? 1.2 : 1.5);
+    const head = { x: x, z: z, bed: bed, r: r, top: bed + 0.4, anemone: null, branchy: false, biome: bio };
     // The mound first, no taller than the water allows; the living coral grows over it and around its foot.
-    const mr = r * 0.8, mh = Math.min(0.5 * mr, -bed - 0.6), msy = mh / (0.5 * mr), br = mr * 1.12;
+    const mr = r * 0.8, mh = Math.min(0.5 * mr, -bed - 0.55), msy = mh / Math.max(0.5 * mr, 0.05), br = mr * 1.12;
     const mg = 0.75 + rnd() * 0.3;
     scatter.add(mound[(rnd() * 2) | 0], x, bed - 0.03, z, rnd() * 6.28, mr, [mg, mg, mg], msy);
-    const ms = (br * br + mh * mh) / (2 * mh);
+    const ms = (br * br + mh * mh) / (2 * Math.max(mh, 0.05));
     blocks.push(x, bed + mh * 1.06 - ms, z, ms);
     head.top = bed + mh;
-    const pieces = 16 + ((rnd() * 14) | 0);
+    const pieces = 12 + ((rnd() * (bio.garden > 0.4 ? 16 : 10)) | 0);
     for (let k = 0; k < pieces; k++) {
-      const a = rnd() * 6.2832, d = Math.sqrt(rnd()) * r, dn = d / mr;
+      const a = rnd() * 6.2832, d = Math.sqrt(rnd()) * r, dn = d / Math.max(mr, 0.1);
       const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
       let pb = fieldSample(world, px, pz);
-      if (dn < 0.97) pb = Math.max(pb, bed + mh * Math.sqrt(1 - dn * dn) * 0.82 - 0.03);
-      if (pb > -0.5) continue;
+      if (dn < 0.97) pb = Math.max(pb, bed + mh * Math.sqrt(Math.max(0, 1 - dn * dn)) * 0.82 - 0.03);
+      if (pb > -0.45) continue;
       const pick = rnd();
       // Nothing grows up through the surface: the shallower the bed, the smaller the piece.
       const room = Math.min(1, (-pb - 0.25) / 0.9);
@@ -483,14 +647,24 @@ function plantReef(world, scatter, q) {
         0.68 + rnd() * 0.26 - warm * 0.04,
         0.62 + rnd() * 0.28 - warm * 0.1
       ];
-      if (pick < 0.5) {
+      if (bio.wall > 0.45 && pick < 0.35) {
+        const sc = (0.7 + rnd() * 0.8) * room;
+        scatter.add(pillar[(rnd() * 2) | 0], px, pb, pz, rnd() * 6.28, sc, tint, 1.1 + rnd() * 0.5);
+        blocks.push(px, pb + 0.35 * sc, pz, 0.22 * sc);
+        head.top = Math.max(head.top, pb + 0.7 * sc);
+        head.branchy = true;
+      } else if (pick < 0.48) {
         const sc = (0.6 + rnd() * 0.7) * room;
-        const which = pick < 0.26 ? branch[(rnd() * 3) | 0] : pick < 0.42 ? finger[(rnd() * 2) | 0] : fans[(rnd() * 2) | 0];
+        let which;
+        if (pick < 0.14) which = branch[(rnd() * 3) | 0];
+        else if (pick < 0.26) which = finger[(rnd() * 2) | 0];
+        else if (pick < 0.38) which = fans[(rnd() * 2) | 0];
+        else which = whip[(rnd() * 3) | 0];
         scatter.add(which, px, pb, pz, rnd() * 6.28, sc, tint, 0.8 + rnd() * 0.4);
         blocks.push(px, pb + 0.2 * sc, pz, 0.26 * sc);
         head.top = Math.max(head.top, pb + 0.45 * sc);
-        if (pick < 0.26) head.branchy = true;
-      } else if (pick < 0.84) {
+        if (pick < 0.14 || pick >= 0.38) head.branchy = true;
+      } else if (pick < 0.82) {
         const sc = (0.35 + rnd() * 0.75) * room;
         scatter.add(dome[(rnd() * 3) | 0], px, pb - 0.03 * sc, pz, rnd() * 6.28, sc, tint, 0.8 + rnd() * 0.5);
         blocks.push(px, pb + 0.1 * sc, pz, 0.46 * sc);
@@ -511,7 +685,72 @@ function plantReef(world, scatter, q) {
         head.anemone = [px, pb + 0.15 * sc, pz];
       }
     }
+    if (rnd() < 0.2 + 0.35 * bio.garden) bubbles.push(x, Math.min(head.top + 0.15, -0.35), z);
     heads.push(head);
+  }
+  // Kelp forest on rocky shelves (current-driven sway via mesh sway weights).
+  let kelps = 0;
+  for (let i = 0; i < kelpN * 18 && kelps < kelpN; i++) {
+    const x = -180 + rnd() * 220, z = -40 + rnd() * 240;
+    const bed = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+    const bio = reefBiome(x, z, bed);
+    if (bio.kelp < 0.18 || bed > -1.6 || bed < -7.5 || sl > 0.55) continue;
+    let near = false;
+    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < h.r + 1.2) { near = true; break; }
+    if (near) continue;
+    const sc = 0.85 + rnd() * 0.7;
+    scatter.add(kelp[(rnd() * 4) | 0], x, bed, z, rnd() * 6.28, sc, [0.85 + rnd() * 0.25, 1, 0.8 + rnd() * 0.2], 1);
+    blocks.push(x, bed + 0.7 * sc, z, 0.18 * sc);
+    if (rnd() < 0.35) bubbles.push(x, bed + 1.1 * sc, z);
+    kelps++;
+  }
+  // 1800s wreck habitats — partially buried hulls colonised by soft coral, whip, kelp, fish.
+  const placeWreck = (proto, wx, wz, yaw, scale) => {
+    const bed = fieldSample(world, wx, wz);
+    if (bed > -1.0) return;
+    const wy = Math.min(bed + 0.35, -1.2);
+    scatter.add(proto, wx, wy - 0.55, wz, yaw, scale, [0.95, 0.9, 0.85], 1);
+    blocks.push(wx, wy + 0.4, wz, 1.8 * scale);
+    wrecks.push({ x: wx, y: wy, z: wz, r: 2.4 * scale });
+    bubbles.push(wx - 0.6, wy + 0.2, wz, wx + 0.8, wy + 0.5, wz + 0.4, wx, wy + 1.0, wz - 0.3);
+    for (let k = 0; k < 9; k++) {
+      const a = rnd() * 6.28, d = 0.5 + rnd() * 1.9;
+      const px = wx + Math.cos(a) * d, pz = wz + Math.sin(a) * d;
+      const pb = fieldSample(world, px, pz);
+      if (pb > -0.8) continue;
+      const sc = 0.4 + rnd() * 0.6;
+      const which = rnd() < 0.55 ? fans[(rnd() * 2) | 0] : whip[(rnd() * 3) | 0];
+      scatter.add(which, px, pb, pz, rnd() * 6.28, sc, [0.75 + rnd() * 0.3, 0.7 + rnd() * 0.25, 0.65 + rnd() * 0.25], 0.85 + rnd() * 0.25);
+      blocks.push(px, pb + 0.15 * sc, pz, 0.2 * sc);
+    }
+    for (let k = 0; k < 2; k++) {
+      const a = rnd() * 6.28, d = 1.2 + rnd() * 1.4;
+      const px = wx + Math.cos(a) * d, pz = wz + Math.sin(a) * d;
+      const pb = fieldSample(world, px, pz);
+      if (pb < -1.4 && pb > -8) scatter.add(kelp[(rnd() * 4) | 0], px, pb, pz, rnd() * 6.28, 0.8 + rnd() * 0.35, [0.85, 1, 0.85], 1);
+    }
+  };
+  placeWreck(wreckA, 232, -45, 0.35, 1.15);
+  placeWreck(wreckB, 240, 10, 1.1, 1.05);
+  // Abyss soft coral on deep seamounts / basin floor — sparse whip and fans, no garden coral.
+  let abyssN = 0;
+  const abyssBudget = Math.max(6, Math.round((q.reef || 40) * 0.35));
+  for (let i = 0; i < abyssBudget * 40 && abyssN < abyssBudget; i++) {
+    const x = 240 + rnd() * 140, z = -280 + rnd() * 200;
+    const bed = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+    const bio = reefBiome(x, z, bed);
+    if (bio.abyss < 0.2 || bed > -11 || bed < -22 || sl > 0.65) continue;
+    let near = false;
+    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < 6) { near = true; break; }
+    for (const w of wrecks) if (Math.hypot(w.x - x, w.z - z) < 5) { near = true; break; }
+    if (near) continue;
+    const sc = 0.55 + rnd() * 0.7;
+    const tint = [0.45 + rnd() * 0.25, 0.55 + rnd() * 0.3, 0.7 + rnd() * 0.25];
+    const which = rnd() < 0.55 ? whip[(rnd() * 3) | 0] : fans[(rnd() * 2) | 0];
+    scatter.add(which, x, bed, z, rnd() * 6.28, sc, tint, 0.9 + rnd() * 0.35);
+    blocks.push(x, bed + 0.25 * sc, z, 0.18 * sc);
+    if (rnd() < 0.4) bubbles.push(x, bed + 0.6 * sc, z);
+    abyssN++;
   }
   // Seagrass in meadows on the lagoon sand, away from the coral and out of the surf.
   let tufts = 0;
@@ -528,7 +767,7 @@ function plantReef(world, scatter, q) {
     scatter.add(grass[(rnd() * 3) | 0], x, bed, z, rnd() * 6.28, 0.8 + rnd() * 0.7, [g, g, g * 0.9], 0.8 + rnd() * 0.5);
     tufts++;
   }
-  return { heads: heads, blocks: blocks, sand: sand };
+  return { heads: heads, blocks: blocks, sand: sand, bubbles: bubbles, wrecks: wrecks };
 }
 
 // ---- Behaviour.
@@ -639,6 +878,64 @@ function FishLife(world, reef, q, stacks) {
     const pts = ring(420, 9, 9, -5.5);
     if (pts.length > 2) { school(6, 1, pts[0], 1, pts, 0); S[S.length - 1].big = true; }
   }
+  // Green turtles graze lagoon seagrass / shallow gardens.
+  for (let i = 0; i < Math.round(1 + f); i++) {
+    const h = heads[(rnd() * heads.length) | 0];
+    if (!h) break;
+    const home = [h.x + (rnd() - 0.5) * 8, Math.min(h.top + 0.2, -0.7), h.z + (rnd() - 0.5) * 8];
+    if (bedAt(home[0], home[2]) > -1.0) continue;
+    school(8, 1, home, 2.2, tour(h, 40, 4, 1.0, 0.2), 14);
+  }
+  // Eagle rays cruise the mid shelf / wall face.
+  for (let i = 0; i < Math.round(1 + 0.8 * f); i++) {
+    const pts = [];
+    for (let j = 0; j < 6; j++) {
+      const p = [180 + rnd() * 90, -2.2 - rnd() * 2.5, -90 + rnd() * 160];
+      if (bedAt(p[0], p[2]) > -2.0) continue;
+      p[1] = Math.max(p[1], bedAt(p[0], p[2]) + 1.0);
+      if (pts.length && !open(pts[pts.length - 1], p, 1.6)) continue;
+      pts.push(p);
+    }
+    if (pts.length > 2) school(9, 2 + ((rnd() * 2) | 0), pts[0], 2.8, pts, 0);
+  }
+  // Reef blacktip patrols wreck / outer wall — feared by small fish.
+  if (reef.wrecks && reef.wrecks.length) {
+    const w = reef.wrecks[0];
+    const route = [
+      [w.x, Math.min(w.y + 1.2, -1.0), w.z],
+      [w.x + 18, -2.4, w.z + 12],
+      [w.x + 28, -3.2, w.z - 8],
+      [w.x - 10, -2.0, w.z - 16]
+    ].filter((p) => bedAt(p[0], p[2]) < -1.8);
+    if (route.length > 2) school(10, 1, route[0], 2.5, route, 0);
+  } else {
+    const pts = ring(260, 7, 4, -2.8);
+    if (pts.length > 2) school(10, 1, pts[0], 2.2, pts, 0);
+  }
+  if (globalThis.__wwSeedDeepSharks) globalThis.__wwSeedDeepSharks({ S: S, school: school, bedAt: bedAt, open: open, rnd: rnd, f: f, reef: reef });
+  // Chromis / grazers colonising each wreck habitat.
+  if (reef.wrecks) {
+    for (const w of reef.wrecks) {
+      school(0, (14 + rnd() * 16) * Math.min(f + 0.2, 1.3), [w.x, Math.min(w.y + 0.9, -0.6), w.z], 1.4, null, 0);
+      school(2, 2, [w.x + 1.2, Math.min(w.y + 0.6, -0.55), w.z], 0.6, null, 0);
+      // Extra soft-school around the deeper wreck.
+      if (w.y < -3.5) school(7, (10 + rnd() * 12) * Math.min(f, 1.2), [w.x, Math.min(w.y + 1.4, -2.5), w.z], 1.8, null, 0);
+    }
+  }
+  // Lanternfish schools in the abyss / deep midwater — biolum belly glow in fishSkin.
+  for (let i = 0; i < Math.round(2 + 1.5 * f); i++) {
+    const pts = [];
+    for (let j = 0; j < 5; j++) {
+      const p = [260 + rnd() * 100, -8 - rnd() * 6, -220 + rnd() * 160];
+      const b = bedAt(p[0], p[2]);
+      if (b > -10) continue;
+      p[1] = Math.max(p[1], b + 1.5);
+      p[1] = Math.min(p[1], -6.5);
+      if (pts.length && !open(pts[pts.length - 1], p, 3.5)) continue;
+      pts.push(p);
+    }
+    if (pts.length > 2) school(11, (28 + rnd() * 36) * Math.min(f + 0.15, 1.35), pts[0], 2.6, pts, 0);
+  }
   // The rocky side: chromis and a few grazers around the submerged stacks.
   for (let i = 0; i + 3 < stacks.length; i += 4) {
     const x = stacks[i], y = stacks[i + 1], z = stacks[i + 2], r = stacks[i + 3];
@@ -688,7 +985,9 @@ function FishLife(world, reef, q, stacks) {
   }
   this.feared = [];
   this.frame = 0;
-  this.slots = FISH_SPECIES.length * 3;
+  // Slots follow unique shape LODs (see fishMeshes / FISH_SHAPE_SLOT).
+  if (!FISH_SHAPE_SLOT) fishMeshes();
+  this.slots = FISH_SHAPE_SLOT._n * 3;
   this.counts = new Int32Array(this.slots);
   this.starts = new Int32Array(this.slots);
   this.slotOf = new Int8Array(N);
@@ -802,11 +1101,12 @@ FishLife.prototype.stepFish = function (i, s, sp, dt, time, level, ex, ey, ez) {
   ax += -hz * wn * sp.wander * a0; az += hx * wn * sp.wander * a0;
   ay += Math.sin(time * (0.5 + sd) + sd * 12) * sp.wander * a0 * 0.25;
 
-  // The bottom ahead and the surface above.
+  // The bottom ahead and the surface above. Schools may loosen the ceiling for a wreck emerge.
   const look = 0.25 + spd * 0.9;
   const bedH = fieldSample(world, x, z), bedA = fieldSample(world, x + hx * look, z + hz * look);
   const clear = sp.clear + L * 0.45;
-  const floor = Math.max(bedH, bedA) + clear, ceil = -(sp.top_ + L * 0.35);
+  const topClear = s.top_ != null ? s.top_ : sp.top_;
+  const floor = Math.max(bedH, bedA) + clear, ceil = -(topClear + L * 0.35);
   if (ceil - floor < L * 0.6) {
     // Too shallow to swim in. Home is where the water was deep enough.
     const bx = s.hx - x, bz = s.hz - z, bl = Math.hypot(bx, bz) + 1e-5;
@@ -946,7 +1246,8 @@ FishLife.prototype.collect = function (out, vp, ex, ey, ez, reach, ranges) {
       const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
       const cv = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
       if (cw < -L || Math.abs(cx) > cw + L * 2 || Math.abs(cv) > cw + L * 2) continue;
-      const slot = s.sp * 3 + (L > dist * 0.045 ? 0 : L > dist * 0.011 ? 1 : 2);
+      const shape = FISH_SHAPE_SLOT[s.sp];
+      const slot = shape * 3 + (L > dist * 0.045 ? 0 : L > dist * 0.011 ? 1 : 2);
       slotOf[i] = slot;
       counts[slot]++;
     }
@@ -982,8 +1283,20 @@ FishLife.prototype.find = function (sp, nth) {
 };
 
 function fishMeshes() {
+  // Pack one LOD trio per unique shape; shapeOf twins share the same slot.
   const list = [];
-  for (const sp of FISH_SPECIES) for (let lod = 0; lod < 3; lod++) list.push(makeFish(sp, lod));
+  const slotOf = new Int32Array(FISH_SPECIES.length);
+  const seen = new Map();
+  for (let i = 0; i < FISH_SPECIES.length; i++) {
+    const src = fishShapeSrc(i);
+    if (!seen.has(src)) {
+      seen.set(src, list.length / 3);
+      for (let lod = 0; lod < 3; lod++) list.push(makeFish(FISH_SPECIES[src], lod));
+    }
+    slotOf[i] = seen.get(src);
+  }
+  FISH_SHAPE_SLOT = slotOf;
+  FISH_SHAPE_SLOT._n = seen.size;
   return list;
 }
 
@@ -1015,7 +1328,7 @@ fn fishPlace(in: MeshIn) -> FishAt {
   }
   // A wave runs from the head to the tail, growing as it goes. A turn bends the whole body.
   let amp = in.i1.w;
-  let k = 5.6;
+  let k = select(5.6, 4.2, i32(in.i2.y + 0.5) >= 12);
   let ang = k * s - in.i1.z;
   let env = amp * (0.1 + 0.9 * s * s);
   let lat = env * sin(ang) + in.i2.x * s * s * 0.4;
@@ -1098,12 +1411,41 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
     c = mix(c, vec3<f32>(0.80, 0.81, 0.78), belly);
     c = mix(c, vec3<f32>(0.04), smoothstep(0.03, 0.018, length(vec2<f32>(u - 0.24, (v - 0.3) * 0.16))) * 0.8);
     silver = 0.8;
-  } else {
+  } else if (sp == 7) {
     c = mix(vec3<f32>(0.62, 0.72, 0.78), vec3<f32>(0.14, 0.34, 0.56), smoothstep(-0.05, 0.3, v));
     c = mix(c, vec3<f32>(0.82, 0.66, 0.09), smoothstep(0.14, 0.07, abs(v - 0.44 + u * 0.08)) * smoothstep(0.12, 0.2, u));
     c = mix(c, vec3<f32>(0.07, 0.19, 0.40), smoothstep(0.66, 0.92, v));
     c = mix(c, vec3<f32>(0.84, 0.85, 0.83), belly);
     silver = 0.55;
+  } else if (sp == 8) {
+    // Green turtle — olive carapace, pale plastron.
+    c = mix(vec3<f32>(0.42, 0.48, 0.22), vec3<f32>(0.18, 0.28, 0.14), back);
+    c = mix(c, vec3<f32>(0.72, 0.68, 0.48), belly);
+    let scute = abs(fract((u + v * 0.2) * 6.0) - 0.5);
+    c = mix(c, c * 0.72, smoothstep(0.12, 0.04, scute) * back * 0.55);
+  } else if (sp == 9) {
+    // Spotted eagle ray — dark dorsum with pale spots.
+    c = mix(vec3<f32>(0.22, 0.18, 0.16), vec3<f32>(0.08, 0.07, 0.08), back);
+    c = mix(c, vec3<f32>(0.78, 0.74, 0.68), belly);
+    let spot = n2(vec2<f32>(u * 18.0 + seed * 4.0, v * 10.0));
+    c = mix(c, vec3<f32>(0.72, 0.68, 0.58), smoothstep(0.62, 0.78, spot) * back * 0.85);
+  } else if (sp == 10) {
+    // Reef blacktip — grey countershade, dark fin tips.
+    c = mix(vec3<f32>(0.55, 0.58, 0.60), vec3<f32>(0.22, 0.24, 0.28), back);
+    c = mix(c, vec3<f32>(0.82, 0.82, 0.80), belly);
+    c = mix(c, vec3<f32>(0.05), smoothstep(0.82, 0.95, u) * 0.7);
+    silver = 0.35;
+  } else if (sp == 11) {
+    // Lanternfish — dark midwater body; silver rides high so photophore glow reads in fsFish.
+    c = mix(vec3<f32>(0.08, 0.12, 0.18), vec3<f32>(0.03, 0.05, 0.09), back);
+    c = mix(c, vec3<f32>(0.18, 0.28, 0.32), belly * 0.55);
+    let row = smoothstep(0.05, 0.02, abs(v + 0.55 - u * 0.08));
+    c = mix(c, vec3<f32>(0.25, 0.85, 0.95), row * belly * 0.85);
+    silver = 0.15 + 0.55 * row;
+  } else {
+    c = mix(vec3<f32>(0.32, 0.25, 0.19), vec3<f32>(0.13, 0.1, 0.08), back);
+    c = mix(c, vec3<f32>(0.5, 0.44, 0.38), belly);
+    silver = 0.06;
   }
   return vec4<f32>(c, silver);
 }
@@ -1130,8 +1472,8 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
     silver = skin.a;
     // Scales: rows of overlapping plates, each catching the light at its own tilt. Parrotfish
     // scales are large enough to count; the others only show close up.
-    let counts = array<f32, 8>(46.0, 40.0, 58.0, 62.0, 17.0, 70.0, 90.0, 60.0);
-    let nu = counts[sp];
+    let counts = array<f32, 12>(46., 40., 58., 62., 17., 70., 90., 60., 22., 28., 70., 52.);
+    let nu = counts[min(sp, 11)];
     let cell = vec2<f32>(u * nu, v * nu * 0.34);
     let row = floor(cell.y);
     let q = vec2<f32>(fract(cell.x + 0.5 * (row - 2.0 * floor(row * 0.5))), fract(cell.y));
@@ -1149,8 +1491,8 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
     alb *= 1.0 - 0.12 * smoothstep(0.03, 0.01, abs(v - 0.22 + (u - 0.5) * 0.1)) * body;
     shine = 0.3 + 0.9 * silver;
     let hue = 0.5 + 0.5 * cos(6.2831853 * (dot(n, V) * 1.3 + q.x * 0.1 * show) + vec3<f32>(0.0, 2.1, 4.2));
-    let irid = array<f32, 8>(0.3, 0.04, 0.05, 0.1, 0.22, 0.0, 0.12, 0.22);
-    alb = mix(alb, alb * (0.6 + 0.8 * hue), irid[sp]);
+    let irid = array<f32, 12>(0.3, 0.04, 0.05, 0.1, 0.22, 0., 0.12, 0.22, 0.02, 0.05, 0.18, 0.08);
+    alb = mix(alb, alb * (0.6 + 0.8 * hue), irid[min(sp, 11)]);
   } else if (kind == 6) {
     if (dot(n, V) < 0.0) { n = -n; }
     alb = in.col * (0.9 + 0.2 * fract(seed * 5.3));
@@ -1171,11 +1513,12 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
   } else {
     // An eye: dark pupil, a bright iris ring, a wet highlight.
     let r = in.uv.x;
-    let iris = array<vec3<f32>, 8>(vec3<f32>(0.55, 0.60, 0.50), vec3<f32>(0.50, 0.24, 0.08), vec3<f32>(0.06, 0.05, 0.04), vec3<f32>(0.55, 0.42, 0.12),
-      vec3<f32>(0.62, 0.42, 0.20), vec3<f32>(0.45, 0.38, 0.22), vec3<f32>(0.62, 0.62, 0.56), vec3<f32>(0.60, 0.58, 0.45));
+    let iris = array<vec3<f32>, 12>(vec3<f32>(0.55, 0.60, 0.50), vec3<f32>(0.50, 0.24, 0.08), vec3<f32>(0.06, 0.05, 0.04), vec3<f32>(0.55, 0.42, 0.12),
+      vec3<f32>(0.62, 0.42, 0.20), vec3<f32>(0.45, 0.38, 0.22), vec3<f32>(0.62, 0.62, 0.56), vec3<f32>(0.60, 0.58, 0.45),
+      vec3<f32>(0.35, 0.42, 0.22), vec3<f32>(0.55, 0.48, 0.30), vec3<f32>(0.50, 0.52, 0.48), vec3<f32>(0.35, 0.55, 0.62));
     // A wide pupil, a thin bright ring round it, and an iris the colour of the head it is set in.
-    alb = mix(vec3<f32>(0.012), iris[sp] * 0.4, smoothstep(0.6, 0.7, r));
-    alb += iris[sp] * 0.35 * smoothstep(0.1, 0.0, abs(r - 0.72));
+    alb = mix(vec3<f32>(0.012), iris[min(sp, 11)] * 0.4, smoothstep(0.6, 0.7, r));
+    alb += iris[min(sp, 11)] * 0.35 * smoothstep(0.1, 0.0, abs(r - 0.72));
     alb *= 1.0 - 0.5 * smoothstep(0.86, 1.0, r);
     shine = 2.2;
   }
@@ -1204,6 +1547,12 @@ fn fishSkin(sp: i32, u: f32, v: f32, seed: f32) -> vec4<f32> {
   col = mix(col, env * (0.75 + 0.5 * alb), silver * (0.3 + 0.7 * fr));
   col += sun * pow(max(dot(n, H), 0.0), mix(28.0, 150.0, silver)) * step(0.0, nl) * shine * 0.5;
   col = mix(col, waterHaze(-V.y) * 0.8 + col * 0.4, through * 0.55);
+  // Lanternfish photophores — self-lit belly row, only meaningful deeper than the reef.
+  if (sp == 11 && kind == 5) {
+    let photo = smoothstep(0.05, 0.015, abs(in.uv.y + 0.55 - in.uv.x * 0.08)) * sat((-in.world.y - 6.0) / 5.0);
+    let pulse = 0.65 + 0.35 * sin(F.time * 2.4 + seed * 17.0 + in.world.x * 0.3);
+    col += vec3<f32>(0.12, 0.55, 0.72) * photo * pulse * (0.45 + 0.55 * underK());
+  }
   // Seen through water, red goes first and everything drifts toward the colour of the water.
   if (F.under > 0.5) { col *= exp(-dist * vec3<f32>(0.11, 0.02, 0.012)); }
   return vec4<f32>(applyFog(col, in.world), 1.0);
