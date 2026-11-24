@@ -1,0 +1,15 @@
+---
+description: Security, secrets, and approval boundaries
+globs:
+  - company/**
+  - .windward/**
+  - tools/company-os/**
+alwaysApply: false
+---
+
+# Security and approvals
+
+- Four permission levels (Read → Prepare → Execute → Restricted).
+- Secrets never in company docs or git.
+- Contracts, spend, ownership, production deploy = human/founder.
+- Agents cannot approve their own high-risk PRs.

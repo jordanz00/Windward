@@ -29,10 +29,23 @@ AI may analyze, draft docs, run safe tests, and implement **bounded approved tas
 - Secrets or credential use  
 - License / distribution changes  
 - Any Windward `source/` or `index.html` change not already in an approved task  
+- Editing protected AEI baselines or weakening tests  
+
+## AEI evidence bar (engineering)
+
+Per [AEI/CHARTER.md](AEI/CHARTER.md):
+
+1. **Evidence before approval** — baseline, reproducible test, measured result.  
+2. **Independent verification** — independently assigned verifier re-runs checks; implementers do not self-approve.  
+3. **Reversible autonomy** — branch experiments OK; production and protected baselines need human authorization.  
+4. **Versioned contracts** — tasks / evidence / responses declare `schemaVersion` (`AEI/contracts/`).  
+5. **Immutable evidence** — corrections create new records; never overwrite history.  
+
+Model-independent: Cursor, Claude, GPT, and others share the same contracts and [agent ledger](AEI/AGENT_LEDGER.md).
 
 ## Done means
 
-Implemented (when code was in scope) **and** tested/verified as required by the project **and** docs/portfolio/register updated. Unverified work stays labeled.
+Implemented (when code was in scope) **and** tested/verified as required by the project **and** docs/portfolio/register updated. Unverified work stays labeled. Significant engineering claims need evidence under `AEI/evidence/` before they count as verified improvements.
 
 ## Windward-specific
 

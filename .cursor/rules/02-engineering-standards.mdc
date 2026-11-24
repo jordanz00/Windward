@@ -1,0 +1,17 @@
+---
+description: Engineering standards for Windward product work
+globs:
+  - source/**
+  - index.html
+  - company/engineering/**
+alwaysApply: false
+---
+
+# Engineering standards
+
+- Follow `AEI/CHARTER.md` (evidence, independent verification, model independence).
+- Zero-tolerance: successful load + WebGPU shader/pipeline success when product code changes.
+- `node source/build.mjs` and `node source/wgsl-gate.mjs` as required by `DEVELOPMENT_STANDARDS.md`.
+- No invented gate passes; do not weaken tests or edit protected baselines to force a pass.
+- Isolated branches + PR prep OK; production deploy requires founder approval.
+- Company OS tooling must remain independent of the graphics app loading.

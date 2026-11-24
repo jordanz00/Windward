@@ -10,9 +10,11 @@ const ENV_OPEN = 17.65;
 // how much of the air holds cumulus, the stratocumulus deck, how unstable the air is (which is
 // how deep cumulus grows and how many towers stand), and cirrus.
 const WEATHER = {
-  clear: ['Clear', 0, 0, 0, 0.25, 4.5, 0.35, 0.16, 0, 0.25, 0.35],
-  clouds: ['Passing clouds', 0.26, 0, 0, 0.35, 6, 0.5, 0.36, 0, 0.45, 0.3],
-  gusts: ['Wind gusts', 0.3, 0, 0, 0.3, 11, 1, 0.32, 0, 0.4, 0.55],
+  // Cumulus, deck, instability and cirrus are the coverage. Storm and shower stay dark
+  // and dense for the thundercloud march; this row does not brighten them.
+  clear: ['Clear', 0.08, 0, 0, 0.25, 4.5, 0.35, 0.24, 0, 0.3, 0.52],
+  clouds: ['Passing clouds', 0.38, 0, 0, 0.35, 6, 0.5, 0.48, 0.26, 0.55, 0.46],
+  gusts: ['Wind gusts', 0.34, 0, 0, 0.3, 11, 1, 0.4, 0.12, 0.42, 0.55],
   overcast: ['Overcast', 0.8, 0, 0, 0.55, 5, 0.4, 0.35, 0.92, 0.3, 0.1],
   drizzle: ['Light rain', 0.86, 0.3, 0.06, 0.8, 4, 0.35, 0.3, 1, 0.35, 0],
   shower: ['Tropical shower', 0.95, 1, 0.05, 1, 9, 0.9, 0.55, 0.85, 1, 0.2],
@@ -35,7 +37,10 @@ const env = {
   ang: 0.36, angGoal: 0.36, wx0: 1, wz0: 0, speed: 4.5, gust: 0.35, cloud: [0, 0], gustOff: [0, 0],
   sun: [0, 1, 0], moon: [0, -1, 0], key: [0, 1, 0], keyCol: [1, 1, 1], amb: [0.34, 0.48, 0.7], disc: [1, 1, 1],
   gnd: 1, expo: 0.92, expoSmooth: null, night: 0, moonUp: 0, mist: 0, humid: 0.25, haze: 0, cover: 0, dew: 0,
+  realMoon: true, astroDay: 0, spaceId: 0,
   day: [1, 1, 1], airMass: 1, low: 0,
+  // A cinematic space, while one is held: the hour and weather row it eases toward.
+  spacePick: -1, pin: null, _cine: null,
   // The sky. Heights in km. Each layer of air has carried its clouds its own distance.
   sky: { cum: 0.16, conv: 0.25, base: 1, top: 3, cirrus: 0.35, deck: 0, deckBase: 1.5, deckThick: 0.45, depth: 1.2, lean: [0, 0], evo: 0, rise: 0, high: [0, 0], deckOff: [0, 0], tower: [0, 0] }
 };
@@ -72,7 +77,8 @@ function envSunT(sy, haze) {
 }
 function envLight(cover) {
   const sun = envSunAt(env.hour), sy = sun[1];
-  const moon = envSunAt(env.hour + 12.6);
+  astroSync(env);
+  const moon = env.moon;
   // Sunlight reddens with the length of its path: blue is scattered out of the beam first.
   // The sun above the air is one fixed colour; everything warm about a low sun is what the
   // air has taken out of it. It is set so the framed afternoon is lit as it was drawn.
@@ -86,12 +92,18 @@ function envLight(cover) {
   const day = sy > -0.06, src = day ? sun : moon, ky = Math.max(src[1], day ? 0.12 : 0.2);
   const f = src[1] >= ky ? 1 : Math.sqrt(1 - ky * ky) / (Math.hypot(src[0], src[2]) || 1);
   env.key = [src[0] * f, f === 1 ? src[1] : ky, src[2] * f];
-  const mk = 0.035 * smooth01(-0.08, -0.2, sy) * moonUp;
+  // Moonlight is the same air path as sunlight, scaled by how much of the disc is lit.
+  // The colour is the zenith moon dimmed and reddened by the path it actually takes.
+  const phaseK = Math.max(env.astro.illum, 0.02);
+  const trM = envSunT(Math.max(moon[1], 0.02), env.haze), trZ = envSunT(1, 0);
+  const colM = trM.map((t, i) => t / Math.max(trZ[i], 1e-4));
+  const mk = 0.062 * smooth01(-0.08, -0.2, sy) * moonUp * phaseK;
   const dayK = smooth01(-0.1, 0.4, sy), low = 1 - smooth01(0, 0.35, sy);
   // The sky's own light turns bluer as the sun gets low and its direct light warms.
   const gold = smooth01(0.42, 0.04, sy) * smooth01(-0.18, -0.02, sy);
-  env.keyCol = day ? env.space.map((c, i) => c * tr[i] * up) : [0.55 * mk, 0.7 * mk, mk];
-  const tw = smooth01(-0.24, -0.04, sy) * (1 - smooth01(-0.04, 0.2, sy)), nk = night * (0.5 + 0.5 * moonUp);
+  env.keyCol = day ? env.space.map((c, i) => c * tr[i] * up) : [0.78 * mk * colM[0], 0.86 * mk * colM[1], mk * colM[2]];
+  const tw = smooth01(-0.24, -0.04, sy) * (1 - smooth01(-0.04, 0.2, sy)), nk = night * (0.35 + 0.65 * moonUp * phaseK);
+  env.astro.moonK = 0.048 * moonUp * phaseK * colM[1];
   // Ambient carries shade detail; keep contrast via key strength, not by crushing fill.
   const amb = [
     dayK * (0.32 + 0.04 * low) * (1 - 0.2 * gold) + tw * 0.045 + nk * 0.004,
@@ -132,11 +144,11 @@ function envLight(cover) {
   const Lc = envLum(env.keyCol) * (env.key[1] + 1.5 * glare * up) + glow * (0.5 + 4 * glare) + envLum(env.amb);
   let expo = 0.74 * Math.min(4.8, Math.pow(env.L0 / Math.max(Lc, 1e-4), 0.47))
     * Math.pow(Lc / Math.max(L, 1e-4), 0.22);
-  // Hold the iris nearly shut for a daytime thunderstorm — keep the gloom.
-  expo *= mix(1, 0.38, stormK * dayK);
+  // A daytime storm stays gloomy, but not so shut that the cloud deck becomes a hole.
+  expo *= mix(1, 0.52, stormK * dayK);
   env.expo = expo;
-  // Dim the solar disc colour that lights the cloud bake — daytime storms go near-black.
-  const discK = mix(1, 0.12, stormK * dayK);
+  // The bake's sun. Enough remains that an anvil and its billows read as cloud.
+  const discK = mix(1, 0.55, stormK * dayK);
   env.disc = env.space.map((c) => c * discK);
   env.sun = sun; env.moon = moon; env.night = night; env.moonUp = moonUp;
 }
@@ -144,6 +156,74 @@ function envSet(wx, snap) {
   if (!WEATHER[wx]) return;
   env.wx = wx; env.hold = 150 + Math.random() * 240;
   if (snap) { env.v = WEATHER[wx].slice(1); env.wet = wx === 'after' ? 0.85 : env.v[1] > 0 ? 1 : 0; }
+}
+// A cinematic space is one hour and one weather row, eased in over a few seconds and then
+// held. The island is not rebuilt. Letting the hour or the weather go releases the hold,
+// and the clock and the weather chase carry on from wherever the ease had reached.
+function envCineSpec(spec) {
+  const d = spec.dur < 2 ? 2 : spec.dur > 4 ? 4 : spec.dur;
+  const v = spec.v.slice();
+  return {
+    pin: { hour: spec.hour, wx: spec.wx, v: v, wet: spec.wet },
+    dur: d
+  };
+}
+function envCineBegin(spec) {
+  const s = envCineSpec(spec);
+  env.pin = s.pin;
+  env._cine = {
+    t: 0, dur: s.dur, wx: spec.wx,
+    h0: env.hour, h1: spec.hour,
+    v0: env.v.slice(), v1: s.pin.v.slice(),
+    wet0: env.wet, wet1: spec.wet
+  };
+  env.wx = spec.wx;
+  env.auto = false;
+  env.run = false;
+  env.goal = null;
+  env.hold = 1e9;
+  env.spacePick = spec.id;
+  if (spec.astroDay != null) env.astroDay = spec.astroDay;
+  env.spaceId = spec.spaceId || 0;
+}
+function envCineSnap(spec) {
+  const s = envCineSpec(spec);
+  env._cine = null;
+  env.pin = s.pin;
+  env.hour = spec.hour;
+  env.wx = spec.wx;
+  for (let i = 0; i < 10; i++) env.v[i] = s.pin.v[i];
+  env.wet = spec.wet;
+  env.auto = false;
+  env.run = false;
+  env.goal = null;
+  env.hold = 1e9;
+  env.spacePick = spec.id;
+  if (spec.astroDay != null) env.astroDay = spec.astroDay;
+  env.spaceId = spec.spaceId || 0;
+}
+function envCineRelease() {
+  env._cine = null;
+  env.pin = null;
+  env.spacePick = -1;
+  env.spaceId = 0;
+}
+// One step of the ease. Returns true while the ease still owns the hour and the weather row.
+function envCineAdvance(dt) {
+  const c = env._cine;
+  if (!c) return false;
+  c.t += dt;
+  const x = c.t / c.dur;
+  const u = x >= 1 ? 1 : x * x * (3 - 2 * x);
+  let dh = c.h1 - c.h0;
+  if (dh > 12) dh -= 24;
+  if (dh < -12) dh += 24;
+  env.hour = ((c.h0 + dh * u) % 24 + 24) % 24;
+  for (let i = 0; i < 10; i++) env.v[i] = c.v0[i] + (c.v1[i] - c.v0[i]) * u;
+  env.wet = c.wet0 + (c.wet1 - c.wet0) * u;
+  env.wx = c.wx;
+  if (x >= 1) env._cine = null;
+  return true;
 }
 // Lightning. A flash is a few return strokes down one channel, each a sharp rise and a fast
 // decay some tens of milliseconds after the last, which is why it flickers. Six in ten reach
@@ -192,24 +272,39 @@ function boltStep(dt, cx, cz, fx, fz) {
   return heard;
 }
 function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
-  if (env.goal != null) {
-    let d = (env.goal - env.hour + 24) % 24;
-    const st = Math.min(d, dt * 1.6);
-    env.hour += st;
-    if (d - st < 1e-3) env.goal = null;
-  } else if (env.run) env.hour += dt * env.rate;
-  env.hour = (env.hour + 24) % 24;
-  if (env.auto) {
-    env.hold -= dt;
-    if (env.hold < 0) { const n = WX_NEXT[env.wx]; envSet(n[(Math.random() * n.length) | 0], false); }
+  // A space ease owns the hour and the weather row until it arrives, and a held space
+  // keeps them there. Otherwise the clock and the slow weather chase run as before.
+  const blending = envCineAdvance(dt);
+  if (!blending && env.pin) {
+    env.hour = env.pin.hour;
+    env.wx = env.pin.wx;
+    env.wet = env.pin.wet;
+    for (let i = 0; i < 10; i++) env.v[i] = env.pin.v[i];
+    env.auto = false;
+    env.run = false;
+    env.goal = null;
+  } else if (!blending) {
+    if (env.goal != null) {
+      let d = (env.goal - env.hour + 24) % 24;
+      const st = Math.min(d, dt * 1.6);
+      env.hour += st;
+      if (d - st < 1e-3) env.goal = null;
+    } else if (env.run) env.hour += dt * env.rate;
+    if (env.auto) {
+      env.hold -= dt;
+      if (env.hold < 0) { const n = WX_NEXT[env.wx]; envSet(n[(Math.random() * n.length) | 0], false); }
+    }
+    // Rain starts in seconds. A sky takes minutes to build and longer to clear.
+    const T = WEATHER[env.wx], tau = [30, 14, 40, 30, 12, 12, 60, 60, 120, 150];
+    for (let i = 0; i < 10; i++) env.v[i] += (T[i + 1] - env.v[i]) * (1 - Math.exp(-dt / tau[i]));
   }
-  // Rain starts in seconds. A sky takes minutes to build and longer to clear.
-  const T = WEATHER[env.wx], v = env.v, tau = [30, 14, 40, 30, 12, 12, 60, 60, 120, 150];
-  for (let i = 0; i < 10; i++) v[i] += (T[i + 1] - v[i]) * (1 - Math.exp(-dt / tau[i]));
+  env.hour = (env.hour + 24) % 24;
+  const v = env.v;
   const sy0 = envSunAt(env.hour)[1];
   env.cover = Math.max(placeCover, v[0]);
   // Rain wets everything in half a minute. The sun and the wind take minutes to dry it.
-  env.wet = Math.max(0, Math.min(1, env.wet + dt * (v[1] * 0.05 - 0.004 * (1 + 2 * Math.max(sy0, 0) * (1 - env.cover)))));
+  // A space sets wet itself, so the dryer does not pull against the ease.
+  if (!blending && !env.pin) env.wet = Math.max(0, Math.min(1, env.wet + dt * (v[1] * 0.05 - 0.004 * (1 + 2 * Math.max(sy0, 0) * (1 - env.cover)))));
   // Cool still air at first light holds mist in the hollows; the climbing sun burns it off.
   const dawn = smooth01(4.5, 6, env.hour) * (1 - smooth01(7, 9.5, env.hour));
   const heat = smooth01(0.12, 0.6, sy0) * (1 - env.cover);
@@ -231,8 +326,10 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   // Night and still weather ease the trades; showers and gusts lift them.
   const nightCalm = 1 - 0.35 * smooth01(0.08, -0.1, sy0);
   const wxBoost = 0.55 + 0.45 * Math.min(seaAmp, 1.5) + 0.15 * v[1] + 0.1 * v[5];
-  env.speed += (v[4] * wxBoost * nightCalm - env.speed) * (1 - Math.exp(-dt / 3.5));
-  env.gust += (v[5] - env.gust) * (1 - Math.exp(-dt / 4));
+  // During a space ease the wind arrives with the light. Afterwards it keeps its slow chase.
+  const windTau = blending ? 0.85 : 3.5, gustTau = blending ? 0.85 : 4;
+  env.speed += (v[4] * wxBoost * nightCalm - env.speed) * (1 - Math.exp(-dt / windTau));
+  env.gust += (v[5] - env.gust) * (1 - Math.exp(-dt / gustTau));
   // Live sea scale: trades set the base; thunderstorms / heavy rain push swell + breakers up.
   const stormSea = Math.min(1, env.cover * (0.35 + 0.65 * v[1]));
   env.sea = (0.72 + 0.28 * (env.speed / 4.5)) * (1 + 0.75 * stormSea);
@@ -243,7 +340,7 @@ function envStep(dt, time, placeCover, placeHaze, seaDir, seaAmp) {
   // Gradual exposure adaptation: forest shade vs bright lagoon should feel like one eye opening.
   const target = env.expo;
   if (env.expoSmooth == null) env.expoSmooth = target;
-  const tauE = target > env.expoSmooth ? 0.9 : 1.8;
+  const tauE = blending ? 0.45 : (target > env.expoSmooth ? 0.9 : 1.8);
   env.expoSmooth += (target - env.expoSmooth) * (1 - Math.exp(-Math.max(dt, 1e-3) / tauE));
   env.expo = env.expoSmooth;
 }
@@ -257,11 +354,13 @@ function envSky(dt, placeCover) {
   const heat = smooth01(0.02, 0.42, env.sun ? env.sun[1] : 0.5);
   k.cum = v[6] * (0.62 + 0.38 * heat); k.conv = v[8]; k.cirrus = v[9];
   k.deck = Math.max(v[7], 0.9 * smooth01(0.35, 0.85, placeCover));
-  k.base = 1.2 - 0.62 * env.humid;
-  k.depth = (0.7 + 1.1 * k.conv) * (0.75 + 0.25 * heat);
-  k.deckBase = k.base + 0.55 * (1 - 0.6 * v[1]);
-  k.deckThick = 0.45 + 0.8 * v[1];
-  k.top = k.base + Math.max(k.depth * 1.6, smooth01(0.24, 0.34, k.conv) * (3.5 + 8.5 * k.conv), k.deckBase - k.base + k.deckThick) + 0.1;
+  k.base = 1.15 - 0.7 * env.humid;
+  k.depth = (0.85 + 1.25 * k.conv) * (0.72 + 0.28 * heat);
+  k.deckBase = k.base + 0.7 * (1 - 0.45 * v[1]);
+  k.deckThick = 0.4 + 0.85 * v[1];
+  // The floor leaves room for a mid layer on a fair day. Unstable air still
+  // pushes the towers well above it; a thunderstorm is the tall case.
+  k.top = k.base + Math.max(k.depth * 1.7, smooth01(0.22, 0.32, k.conv) * (4.2 + 9.5 * k.conv), k.deckBase - k.base + k.deckThick, 3.4) + 0.12;
   // Wind grows with height, so cloud leans downwind. The low cloud goes with the trades, the
   // deck a little faster and veered, the towers with the slower steering flow, and the cirrus
   // with the upper wind, which keeps its own heading whatever the trades do.
@@ -302,6 +401,7 @@ function envNextStop(back) {
   if (i < 0) i = 0;
   if (back) i = (i - 2 + n * 2) % n;
   env.goal = DAY_STOPS[i][0];
+  env.astroDay = 0;
 }
 // Shown in the uniform block as eight vec4 after the shadow matrices.
 function envWrite(arr, o, sunAng, sunK) {
@@ -325,4 +425,14 @@ function envWrite(arr, o, sunAng, sunK) {
   arr.set([k.lean[0], k.lean[1], k.deckThick, k.rise], o + 52);
   // The flash is given in what the eye is opened to, so it dazzles by night and by day alike.
   arr.set([bolt.pos[0], bolt.pos[1], bolt.pos[2], bolt.now * 2.7 / Math.max(env.expo, 0.05), bolt.seed, bolt.show, 0, 0], o + 56);
+  // The night sky. astro: sidereal time, illuminated fraction, angular radius, real-moon flag.
+  // astroB: the real sun, turned with the island, and how much moonlight the clouds take.
+  // astroC: east and north in the same frame, so a view direction becomes right ascension.
+  const A = env.astro || { lst: 0, illum: 1, rad: 0.0045, real: 1, sun: [0, -1, 0], moonK: 0, ex: 1, ez: 0, nx: 0, nz: 1 };
+  arr[o + 64] = A.lst; arr[o + 65] = A.illum; arr[o + 66] = A.rad; arr[o + 67] = A.real;
+  rot(A.sun, o + 68, A.moonK);
+  arr[o + 72] = A.ex * ca - A.ez * sa;
+  arr[o + 73] = A.ex * sa + A.ez * ca;
+  arr[o + 74] = A.nx * ca - A.nz * sa;
+  arr[o + 75] = A.nx * sa + A.nz * ca;
 }

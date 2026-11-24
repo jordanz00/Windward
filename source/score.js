@@ -68,12 +68,13 @@ const SCORE_INTRO = [
   { at: 48, n: 73, d: 8, v: 0.28 }
 ];
 
+// Pluck/arp off: the triangle hit every ~3 s read as a metallic clank over the tropical bed.
 const SCORE_FORM = [
   { chords: 'open', bars: 8, melody: 'intro', arp: false, pluck: false },
-  { chords: 'open', bars: 16, melody: 'theme', arp: false, pluck: true },
-  { chords: 'open', bars: 16, melody: 'glass', arp: true, pluck: true },
-  { chords: 'deep', bars: 16, melody: null, arp: true, pluck: true },
-  { chords: 'open', bars: 16, melody: 'return', arp: false, pluck: true }
+  { chords: 'open', bars: 16, melody: 'theme', arp: false, pluck: false },
+  { chords: 'open', bars: 16, melody: 'glass', arp: false, pluck: false },
+  { chords: 'deep', bars: 16, melody: null, arp: false, pluck: false },
+  { chords: 'open', bars: 16, melody: 'return', arp: false, pluck: false }
 ];
 
 function scoreHz(midi) {
@@ -227,30 +228,35 @@ function createScore(ac, destination) {
     endNodes(nodes, t + span + 0.7);
   }
 
+  // Soft sine lead — no FM metal (the old 2.01-ratio modulator read as a synth metal hit).
   function playBell(midi, t, velocity, durEighths) {
     const freq = scoreHz(midi);
     const dur = Math.max(1.4, durEighths * SCORE_EIGHTH);
-    const g = envGain(t, 0.018, 0.02, dur, 0.07 * velocity);
+    const g = envGain(t, 0.08, 0.05, dur, 0.055 * velocity);
     const car = ac.createOscillator();
-    const mod = ac.createOscillator();
-    const idx = ac.createGain();
+    const soft = ac.createOscillator();
+    const softG = ac.createGain();
     car.type = 'sine';
-    mod.type = 'sine';
+    soft.type = 'sine';
     car.frequency.value = freq;
-    mod.frequency.value = freq * 2.01;
-    idx.gain.setValueAtTime(freq * 1.15, t);
-    idx.gain.exponentialRampToValueAtTime(0.8, t + 0.42);
-    mod.connect(idx);
-    idx.connect(car.frequency);
+    soft.frequency.value = freq * 2;
+    softG.gain.value = 0.12;
+    soft.connect(softG);
+    softG.connect(g);
     const pan = ac.createStereoPanner();
     pan.pan.value = ((midi % 5) - 2) * 0.16;
-    car.connect(g);
+    const tone = ac.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = Math.min(2400, freq * 3.2);
+    tone.Q.value = 0.4;
+    car.connect(tone);
+    tone.connect(g);
     g.connect(pan);
     pan.connect(dry);
     pan.connect(send);
-    const nodes = [car, mod, idx, g, pan];
+    const nodes = [car, soft, softG, tone, g, pan];
     car.start(t);
-    mod.start(t);
+    soft.start(t);
     endNodes(nodes, t + dur + 0.1);
   }
 

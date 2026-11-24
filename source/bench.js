@@ -147,7 +147,7 @@ const WW_BENCH = (() => {
             if (api.show) api.show(bench ? 'Benchmark running…' : 'Fly-through…');
             return true;
           }
-          if (/Digit[1-6]/.test(code) && flying) { stop(); return false; }
+          if (/Digit[1-7]/.test(code) && flying) { stop(); return false; }
           return false;
         });
       }

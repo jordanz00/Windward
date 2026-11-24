@@ -50,7 +50,7 @@ const RESERVED = new Set([
   'where', 'with', 'writeonly', 'yield', 'input', 'output', 'filter'
 ]);
 
-const parts = ['gpu.js', 'island.js', 'sky.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'env.js', 'insects.js', 'bench.js', 'app.js'];
+const parts = ['gpu.js', 'island.js', 'sky.js', 'shaders.js', 'ocean.js', 'shore.js', 'score.js', 'fish.js', 'astro-data.js', 'astro.js', 'env.js', 'insects.js', 'birds.js', 'bench.js', 'stream.js', 'app.js'];
 
 function stripComments(body) {
   return body.replace(/\/\/.*?$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
