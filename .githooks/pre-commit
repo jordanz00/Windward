@@ -1,0 +1,6 @@
+#!/bin/sh
+# Windward: block commits that introduce WGSL reserved identifiers or ?: in shader templates.
+# Enable: git config core.hooksPath .githooks
+set -e
+cd "$(git rev-parse --show-toplevel)"
+node source/wgsl-gate.mjs --static-only

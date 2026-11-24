@@ -40,6 +40,8 @@ const env = {
   sky: { cum: 0.16, conv: 0.25, base: 1, top: 3, cirrus: 0.35, deck: 0, deckBase: 1.5, deckThick: 0.45, depth: 1.2, lean: [0, 0], evo: 0, rise: 0, high: [0, 0], deckOff: [0, 0], tower: [0, 0] }
 };
 const envLum = (c) => c[0] * 0.3 + c[1] * 0.6 + c[2] * 0.1;
+// Linear blend (same as WGSL mix). Storm polish used mix() without defining it in JS.
+const mix = (a, b, t) => a + (b - a) * t;
 function envSunAt(h) {
   if (!env.basis) {
     // A tilted circle through the framed afternoon sun: overhead-ish at noon, on the horizon at six.
