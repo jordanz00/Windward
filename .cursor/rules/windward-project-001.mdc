@@ -1,0 +1,16 @@
+---
+description: Windward as studio Project 001 — profile, don't rewrite by default
+globs:
+  - PROJECTS/001-WINDWARD/**
+  - source/**
+  - index.html
+alwaysApply: false
+---
+
+# Project 001 — Windward
+
+- Portfolio experiment: open-source WebGPU tropical island.
+- Live: https://jordanz00.github.io/Windward/
+- GitHub: https://github.com/jordanz00/Windward
+- Default agent work on this project: update `PROJECT_PROFILE.md` / `SHOWCASE.md` / OPERATIONS — **not** drive-by refactors of `source/`.
+- If engineering is approved: follow existing build (`node source/build.mjs`), zero-tolerance load/WebGPU verification, and founder publish gates.

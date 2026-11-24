@@ -1,0 +1,30 @@
+---
+description: AI Creative Studio OS — lab/portfolio stance and approval gates
+alwaysApply: true
+---
+
+# Studio OS
+
+This repository hosts **AI Creative Studio** docs and (for Project 001) the Windward experiment.
+
+## Identity
+
+- Independent **creative lab / portfolio of experiments** — not a Windward business, startup, or commercial org chart.
+- Discard BUSINESS / DEPARTMENTS / company-charter framing. Use `STUDIO.md`, `OPERATIONS/`, `TEMPLATES/`, `PROJECTS/`.
+- Founder = creative director. AI implements under gates in `AI_WORKFLOW.md`.
+
+## Docs vs app
+
+- Studio structure is docs/management. Prefer editing studio markdown and `.cursor/` over rewriting the app.
+- Do **not** rewrite Windward `source/` or shipped `index.html` unless the founder approved a brief/plan that explicitly allows it.
+- Windward = Project 001 — profile and showcase only unless engineering is approved.
+
+## Workflow
+
+Brief → research → achievable v1 → tasks → **approved** build → test → document → present.
+
+**Ask before:** destructive changes, architecture rewrites, deploy/publish, secrets, license/distribution changes.
+
+## Honesty
+
+No invented test passes. Unverified work labeled. For live Windward graphics: load + WebGPU success matter when code changes are in scope.
