@@ -768,8 +768,8 @@ struct GeoV {
       * (0.5 + 0.5 * n2(in.world.xz * 1.6 + vec2<f32>(F.time * 0.05, 0.0)));
     washFoam = foamCover(in.world.xz, leave * 0.95, footT);
   }
-  // Soft contact under grass and low shrubs. Same patch noise the sow uses, so darkening
-  // sits where the blades stand — not a ring under every stem, and not a shadow map of each.
+  // Soft contact under grass and flowering shrubs — complements real shadow-map casters
+  // (blades/flowers now write into near + island maps) so sand still reads planted in soft light.
   if (in.world.y > 0.12 && in.world.y < 12.0 && slope < 0.55) {
     let gPatch = n2(in.world.xz * 0.028);
     let gFine = n2(in.world.xz * 0.09 + vec2<f32>(4.0, 0.0));
@@ -778,10 +778,12 @@ struct GeoV {
     let grassHere = sat(gPatch - 0.28) * (0.55 + 0.45 * gFine) * max(meadow, dune * 0.85);
     let shrub = smoothstep(0.55, 0.9, n2(in.world.xz * 0.045 + vec2<f32>(2.0, 0.0)))
       * smoothstep(0.8, 2.4, in.world.y) * (1.0 - smoothstep(7.0, 12.0, in.world.y));
+    // Flower belts (open sun behind beach / lagoon / forest edge) share shrub patch noise.
+    let flowerBed = shrub * smoothstep(0.7, 2.8, in.world.y) * (1.0 - smoothstep(8.0, 11.0, in.world.y));
     let woodFloor = smoothstep(1.9, 4.4, in.world.y) * smoothstep(-0.62, -0.12, forestNoise(in.world.xz));
-    let plantAO = sat(grassHere * 0.55 + shrub * 0.4 + woodFloor * 0.35)
+    let plantAO = sat(grassHere * 0.62 + shrub * 0.45 + flowerBed * 0.35 + woodFloor * 0.35)
       * (0.7 + 0.3 * n2(in.world.xz * 1.7));
-    alb *= 1.0 - plantAO * 0.38;
+    alb *= 1.0 - plantAO * 0.42;
   }
   // Rain wets the ground everywhere, and it stays dark after the shower until it dries.
   let rainWet = F.wx.y * step(0.0, in.world.y) * (0.75 + 0.25 * n2(in.world.xz * 0.6));
@@ -1019,15 +1021,25 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
 @vertex fn vsShadowMesh(in: MeshIn) -> ShadowV {
   var o: ShadowV;
   // Lean-only placement: avoids tip flicker and heavy flutter in shadow maps.
-  o.clip = F.shadowVP * vec4<f32>(meshPlaceLean(in), 1.0);
+  var w = meshPlaceLean(in);
+  // Leaflets and flower petals are paper-thin — extrude a centimetre toward the light so
+  // they write a depth slab the PCF filter can still see (stems/bark unchanged).
+  let kind = in.n.w;
+  if (kind > 1.5 && kind < 3.5) {
+    w = w - F.sunDir * 0.018;
+  }
+  o.clip = F.shadowVP * vec4<f32>(w, 1.0);
   return o;
 }
-// Grass and seaweed into the near shadow map: lean only (no tread), so a meadow grounds itself.
+// Grass and seaweed into shadow maps: lean only (no tread). Blades are widened for the
+// depth pass so a meadow actually darkens the sand under the soft near-map filter.
 @vertex fn vsShadowGrass(@location(0) p: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) inst: vec4<f32>) -> ShadowV {
   let sc = abs(inst.w);
   let weed = select(0.0, 1.0, inst.w < 0.0);
   let s = sin(inst.z); let c = cos(inst.z);
-  var lp = vec3<f32>(p.x * sc, p.y * sc, p.z * sc);
+  // Widen blades ~2.4× in the shadow caster only (kept skinny in the colour pass).
+  let fat = select(2.4, 1.6, weed > 0.5);
+  var lp = vec3<f32>(p.x * sc * fat, p.y * sc, p.z * sc * fat);
   let x = lp.x * c - lp.z * s;
   let z = lp.x * s + lp.z * c;
   let ground = sampleField(vec2<f32>(inst.x, inst.y)).x;
@@ -1049,6 +1061,8 @@ struct ShadowV { @builtin(position) clip: vec4<f32> }
     let bend = sin(F.time * 0.5 + inst.x * 0.031) * 0.5 * pow(max(uv.y, 0.0), 1.25) * 0.6;
     w.x += bend; w.z += bend * 0.35;
   }
+  // Slight light-axis slab so sparse tufts still punch through compare filtering.
+  w = w - F.sunDir * (0.012 * (1.0 - weed));
   var o: ShadowV;
   o.clip = F.shadowVP * vec4<f32>(w, 1.0);
   return o;

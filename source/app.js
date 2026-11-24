@@ -1176,9 +1176,9 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
           const dy = y - ey;
           const dist = Math.hypot(distXZ, dy);
           if (dist - r < reachI) {
-            // The near shadow map (no view, coarser): a small plant's shadow is lost in the
-            // map's filter past the middle of the box, so it is not drawn into it there.
-            let ok = vp || !coarser || r > 1.2 || dist < reach * 0.42;
+            // Shadow maps (no view, coarser): keep flowers and low shrubs — their r is often
+            // under a metre after scale, and skipping them left blossom clumps unshadowed.
+            let ok = vp || !coarser || r > 0.55 || dist < reach * 0.55;
             if (vp) {
               const hr = Math.max(r, sc * 0.55);
               const cy = y + hr * 0.55;
@@ -2676,6 +2676,10 @@ async function main() {
     pipe('mesh', geoPL, 'vsMesh', 'fsMesh', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowTerrain', skyPL, 'vsShadowTerrain', null, { buffers: posBuf, cull: 'back', depth: shadowZ });
     pipe('shadowMesh', skyPL, 'vsShadowMesh', null, { buffers: meshBuffers, depth: shadowZ });
+    // Grass/flower casters must be ready with the first shadow bake — late compile left meadows
+    // unshadowed until a sun-move rebuild, and island maps never drew grass at all.
+    const shadowZGrass = { ...shadowZ, depthBias: 0, depthBiasSlopeScale: 0.55, depthBiasClamp: 0.001 };
+    pipe('shadowGrass', skyPL, 'vsShadowGrass', null, { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: shadowZGrass });
     // The finished scene goes to the screen through the water's own two groups.
     pipe('blit', waterPL, 'vsSky', 'fsBlit', { format: format, depth: noZ });
     const oceanLayout = layoutOf(device, GPUShaderStage.COMPUTE, 'rwuo');
@@ -2690,7 +2694,6 @@ async function main() {
     pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
     pipe('air', airPL, 'vsSky', 'fsAir', {});
     pipe('grass', geoPL, 'vsGrass', 'fsGrass', { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: sceneZ });
-    pipe('shadowGrass', skyPL, 'vsShadowGrass', null, { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: shadowZ });
     pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: [vbuf(16, [[0, 0, 3], [1, 12, 1]]), oneVec4], depth: sceneZ });
     pipe('fish', geoPL, 'vsFish', 'fsFish', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowFish', skyPL, 'vsShadowFish', null, { buffers: meshBuffers, depth: shadowZ });
@@ -2854,7 +2857,8 @@ async function main() {
     // Flowering shrubs, in the open where the sun reaches: behind the beach, by the lagoon,
     // and along the edge of the forest. Every blossom is somewhere a bee or a butterfly can go.
     const blooms = [], perch = [];
-    const flowerIds = [0, 1, 2, 3, 4, 5].map((sd) => { const f = makeFlowerShrub(sd + 1, 0); return { id: scatter.proto([f.mesh, makeFlowerShrub(sd + 1, 1).mesh], 1.8, [55]), blooms: f.blooms }; });
+    // Bounding radius ≥2 so flower shrubs always pass shadow collect (r = radius × scale).
+    const flowerIds = [0, 1, 2, 3, 4, 5].map((sd) => { const f = makeFlowerShrub(sd + 1, 0); return { id: scatter.proto([f.mesh, makeFlowerShrub(sd + 1, 1).mesh], 2.4, [55]), blooms: f.blooms }; });
     const plantFlower = (x, z) => {
       const h = fieldSample(world, x, z);
       if (h < 0.7 || h > 9 || fieldSlope(world, x, z) > 0.35) return false;
@@ -4010,6 +4014,13 @@ async function main() {
         spass.setVertexBuffer(0, terrainVB); spass.setIndexBuffer(terrainIB, 'uint32');
         spass.drawIndexed(terrain.idx.length);
         drawMeshes(spass, pipes.shadowMesh, bgUB, meshVB, meshIB, instFarB, farDraws);
+        // Meadows + flower shrubs: island map is coarse, but dense grass still darkens sand.
+        if (pipes.shadowGrass && grassCount && !NO.grass) {
+          spass.setPipeline(pipes.shadowGrass); spass.setBindGroup(0, bgUB);
+          spass.setVertexBuffer(0, grassVB); spass.setVertexBuffer(1, grassInstB);
+          spass.setIndexBuffer(grassIB, 'uint16');
+          spass.drawIndexed(g.idx.length, grassCount);
+        }
         spass.end();
       }
       // Near cascade: redraw when the eye or sun moved enough; adopt candidate VP then bake.

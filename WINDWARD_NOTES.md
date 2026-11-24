@@ -122,7 +122,7 @@ Compact working notes. Update, do not grow.
 ## Visual polish (foliage, grounding, water LOD, shore rocks)
 
 - Leaf shade: dry leaves are rougher (`*1.48`) and take a softer specular (`0.48` vs `1.85`); wet weather only lifts leaf gloss a little while non-leaf wet stays shinier. Leaflets use tip/midrib/blotch thickness → variable transmission. Crown hulls derive leaf/gloss from `leafCells` so thin clump edges filter green light.
-- Terrain contact AO under grass/shrub/wood-floor patches (same patch frequencies as the sow), mottled, no per-blade shadows.
+- Grass + flower shrubs cast into near and island shadow maps (`shadowGrass` early-compile; blades widened/extruded in the depth pass; flower petals extruded toward the light). Contact AO still mottles sand under meadow/flower patches as a soft fill.
 - Grass blade feet darkened via `uv.y`.
 - Water: `seaBands` fine fade widened 28→260 m; chop fades on its own distance/footprint with band.x only softening; capillary and chopField keep ranges widened.
 - Shore rock clusters on the wet-sand strip left/right of the skiff (budget from `q.rocks`, seaward axis from `downhillYaw`), partially buried.
