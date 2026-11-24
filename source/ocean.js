@@ -222,18 +222,20 @@ function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed, tilt) {
       const lambda = Math.PI * 2 / k;
       if (lambda < band[0] || lambda > band[1]) { h0[o] = 0; h0[o + 1] = 0; continue; }
       const kd = (kx * wdx + kz * wdz) / k;
-      // A wind sea with a wide spread, plus a narrower swell from another heading.
-      // cos^2 alone lines every crest up with the wind.
+      // Wind sea + cross swell (Tessendorf/Phillips base).
       const spread = (c, s) => Math.pow(Math.max(0, 0.5 * (1 + c)), s);
       const sdx = wdx * 0.41 - wdz * 0.91;
       const sdz = wdx * 0.91 + wdz * 0.41;
       const swell = (kx * sdx + kz * sdz) / k;
       const longW = Math.max(0, Math.min(1, (lambda - 12) / 30));
-      // The second heading stays broad. A tile holds only a handful of long modes, and
-      // a narrow lobe of them is a ruled grid from the air.
       const dir = spread(kd, 2) * 0.8 + spread(swell, 3) * (0.3 + longW * 0.15);
-      // tilt lifts the short end of the band. Wind chop keeps its slope there.
-      const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * dir * (tilt ? Math.pow(k, tilt) : 1);
+      // JONSWAP peak: concentrates energy near the wind-sea peak so swell is not white noise.
+      const omega = Math.sqrt(g * k);
+      const wp = Math.sqrt(g / Math.max(L * 0.85, 1e-3)); // peak ~ wind-sea
+      const sigma = omega <= wp ? 0.07 : 0.09;
+      const jr = Math.exp(-0.5 * Math.pow((omega - wp) / (sigma * wp), 2));
+      const jonswap = Math.pow(3.3, jr);
+      const phillips = A * Math.exp(-1 / (k2 * L * L)) / (k2 * k2) * dir * jonswap * (tilt ? Math.pow(k, tilt) : 1);
       // Phillips puts nearly all the energy in the longest waves the band allows, and
       // a tile has only a few of those. Rolling them off moves the peak to wavelengths
       // the tile holds dozens of, in many directions, so no single train is visible.

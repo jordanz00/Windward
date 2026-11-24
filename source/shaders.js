@@ -378,20 +378,25 @@ fn caustic(p: vec3<f32>, foot: f32) -> vec3<f32> {
     let L = sunUnder();
     let surf = p.xz - L.xz * (depth / max(L.y, 0.2));
     let fld = sampleField(surf);
-    let S = seaAt(surf, fld.y, max(-fld.x, 0.25));
     let ocn = shapeField(surf);
-    // Focus proxy: converging surface (low jac) + steep FFT slopes + break energy.
-    let slopeLen = length(vec2<f32>(S.nrm.x + ocn.y * 0.55, S.nrm.z + ocn.z * 0.55));
-    let focus = sat((1.0 - S.jac) * 1.35) * (0.45 + 0.9 * sat(slopeLen * 2.4))
-      + S.brk * 0.55;
+    // High/Med: full shared Gerstner+FFT focus. Low: FFT slopes only (same textures, cheaper).
+    var focus = sat(length(ocn.yz) * 2.2) * 0.85;
+    var Sdisp = vec3<f32>(0.0);
+    var Snrm = vec3<f32>(0.0, 1.0, 0.0);
+    if (F.cloudOct >= 1.5) {
+      let S = seaAt(surf, fld.y, max(-fld.x, 0.25));
+      let slopeLen = length(vec2<f32>(S.nrm.x + ocn.y * 0.55, S.nrm.z + ocn.z * 0.55));
+      focus = sat((1.0 - S.jac) * 1.35) * (0.45 + 0.9 * sat(slopeLen * 2.4)) + S.brk * 0.55;
+      Sdisp = S.disp; Snrm = S.nrm;
+    }
     let t = F.time * (0.32 + 0.28 * max(F.mood.w, 0.35));
     let dir = vec2<f32>(cos(F.ctrl.w), sin(F.ctrl.w));
     // Domain warped by the live surface normal so cells dance with the waves.
-    let warp = vec2<f32>(S.nrm.x + ocn.y * 0.4, S.nrm.z + ocn.z * 0.4) * (1.8 + depth * 0.15);
+    let warp = vec2<f32>(Snrm.x + ocn.y * 0.4, Snrm.z + ocn.z * 0.4) * (1.8 + depth * 0.15);
     let q = vec2<f32>(dot(surf + warp, dir), dot(surf + warp, vec2<f32>(-dir.y, dir.x)));
     let uv = q / (5.2 * cell);
     let uv2 = vec2<f32>(uv.x * 0.78 + uv.y * 0.62, uv.y * 0.78 - uv.x * 0.62) * 0.7 + vec2<f32>(0.37, 0.11);
-    let uv3 = uv * 1.65 + vec2<f32>(S.disp.x, S.disp.z) * 0.08;
+    let uv3 = uv * 1.65 + vec2<f32>(Sdisp.x, Sdisp.z) * 0.08;
     let split = vec2<f32>(0.007, 0.0045) * (1.0 + focus);
     let a = vec3<f32>(causWave(uv + split, t + 23.0), causWave(uv, t + 23.0), causWave(uv - split, t + 23.0));
     let b = causWave(uv2, t * 0.85 + 5.0);
@@ -1549,43 +1554,55 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     As *= 1.0 - collapse * 0.38;
     // The spectral field owns the mid and short waves. These layers were the repeating ripples.
     if (i >= 3 && i < 6) { As *= 0.22; }
-    var omega = sqrt(G * k) * spdK;
-    if (i == 1) { omega = wP * (k / kP) * spdK; }
+    // Depth-aware dispersion: waves slow and refract as the bottom shoals (nearshore).
+    let shallowSpd = mix(1.0, 0.55 + 0.45 * sat(D / (len * 0.18)), collapse);
+    var omega = sqrt(G * k) * spdK * shallowSpd;
+    if (i == 1) { omega = wP * (k / kP) * spdK * shallowSpd; }
+    // Bend ray toward the shore-normal (approximated by depth gradient via collapse direction).
+    var dirN = dir;
+    if (i < 3 && collapse > 0.08) {
+      let gN = normalize(vec2<f32>(
+        sampleField(xz + vec2<f32>(1.2, 0.0)).x - sampleField(xz - vec2<f32>(1.2, 0.0)).x,
+        sampleField(xz + vec2<f32>(0.0, 1.2)).x - sampleField(xz - vec2<f32>(0.0, 1.2)).x
+      ) + vec2<f32>(1e-4));
+      // Refract toward shallower water (uphill of bed = -gN in heightfield).
+      dirN = normalize(mix(dir, -gN, collapse * 0.35));
+    }
     // In open water a crest is not a ruled line. Its phase drifts over a few hundred
     // metres, so the lines bend and break. Near the beach they straighten, as they do.
     let drift = (n2(xz * 0.0041 + vec2<f32>(f32(i) * 7.3, 2.0)) + 0.5 * n2(xz * 0.011 + vec2<f32>(3.0, f32(i) * 4.1)) - 0.75) * 4.4 * deepW;
-    let phase = k * dot(dir, xz) - omega * F.time + drift;
+    let phase = k * dot(dirN, xz) - omega * F.time + drift;
     let s = sin(phase);
     let c = cos(phase);
     let wa = k * As;
-    d.x += Q * As * dir.x * c;
-    d.z += Q * As * dir.y * c;
+    d.x += Q * As * dirN.x * c;
+    d.z += Q * As * dirN.y * c;
     d.y += As * s;
-    n.x -= dir.x * wa * c;
-    n.z -= dir.y * wa * c;
+    n.x -= dirN.x * wa * c;
+    n.z -= dirN.y * wa * c;
     n.y -= Q * wa * s;
     // Crest pitches and crashes as the bottom shoals — not a static swell.
     if (i <= 1 && collapse > 0.05) {
       let crestS = sat(s * (1.2 + 0.35 * f32(1 - i)) - 0.05);
       let pitch = collapse * crestS * fade * (i == 0 ? 1.0 : 0.55);
-      d.x += dir.x * As * pitch * 1.85;
-      d.z += dir.y * As * pitch * 1.85;
+      d.x += dirN.x * As * pitch * 1.85;
+      d.z += dirN.y * As * pitch * 1.85;
       d.y -= As * pitch * 0.38;
       // Plunge: face steepens, then the lip folds.
       let fold = collapse * sat(s * 1.7 - 0.35) * fade * (i == 0 ? 1.0 : 0.4);
       d.y -= As * fold * 0.22;
-      d.x += dir.x * As * fold * 0.55;
-      d.z += dir.y * As * fold * 0.55;
-      n.x -= dir.x * (pitch * 1.9 + fold * 1.2);
-      n.z -= dir.y * (pitch * 1.9 + fold * 1.2);
+      d.x += dirN.x * As * fold * 0.55;
+      d.z += dirN.y * As * fold * 0.55;
+      n.x -= dirN.x * (pitch * 1.9 + fold * 1.2);
+      n.z -= dirN.y * (pitch * 1.9 + fold * 1.2);
       n.y -= pitch * 0.55 + fold * 0.35;
       let churn = 0.4 + 0.6 * n2(xz * 0.065 + vec2<f32>(F.time * 0.06 + f32(i), 1.7));
       brk += collapse * crestS * churn * (i == 0 ? 1.15 : 0.55);
       brk += fold * 0.85 * churn;
     }
-    jxx += Q * dir.x * dir.x * wa * s;
-    jzz += Q * dir.y * dir.y * wa * s;
-    jxz += Q * dir.x * dir.y * wa * s;
+    jxx += Q * dirN.x * dirN.x * wa * s;
+    jzz += Q * dirN.y * dirN.y * wa * s;
+    jxz += Q * dirN.x * dirN.y * wa * s;
   }
   let flatten = seaFade(dist);
   n.x *= flatten;
@@ -1759,7 +1776,9 @@ fn shapeField(xz: vec2<f32>) -> vec3<f32> {
   let close = smoothstep(480.0, 30.0, dist);
   let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
   let b = oceanSample(shapeTex, r, 151.0);
-  return a + b * 0.26 * close;
+  // Shared field tracks weather wind/sea energy (same amp that drives Gerstner).
+  let seaE = mix(0.35, 1.15, sat(F.ctrl.x));
+  return (a + b * 0.26 * close) * seaE;
 }
 // Wind chop between the swell and the capillaries, 0.45 to 5 m. This is the
 // texture a person actually sees on water from a beach or a boat. Two scales of
@@ -1768,11 +1787,12 @@ fn chopField(xz: vec2<f32>, pix: f32) -> vec2<f32> {
   // Soft screen-space cutoff — hard steps read as triangular patches at grazing angles.
   let keep = 1.0 - smoothstep(0.14, 3.4, pix);
   if (keep <= 0.001) { return vec2<f32>(0.0); }
+  let seaE = mix(0.4, 1.2, sat(F.ctrl.x));
   let a = oceanSample(chopTex, xz, 24.0);
   let r = vec2<f32>(xz.x * 0.94 + xz.y * 0.34, -xz.x * 0.34 + xz.y * 0.94);
   let b = oceanSample(chopTex, r + vec2<f32>(11.0, 5.0), 15.5);
   let bs = vec2<f32>(b.y * 0.94 - b.z * 0.34, b.y * 0.34 + b.z * 0.94);
-  return (a.yz + bs * 0.6) * keep;
+  return (a.yz + bs * 0.6) * keep * seaE;
 }
 // Shared cascade weights for vertex displacement and fragment normals so the lit
 // surface never disagrees with the mesh at grazing views.
@@ -2151,9 +2171,12 @@ fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
       let deep = max(-p.y, 0.0);
       let sxz = p.xz + sr.xz * (deep / max(sr.y, 0.2));
       let fldS = sampleField(sxz);
-      let SS = seaAt(sxz, fldS.y, max(-fldS.x, 0.25));
       let ocnS = shapeField(sxz);
-      let focus = sat((1.0 - SS.jac) * 1.2) + sat(length(vec2<f32>(SS.nrm.x + ocnS.y, SS.nrm.z + ocnS.z)) * 1.8) * 0.45 + SS.brk * 0.4;
+      var focus = sat(length(ocnS.yz) * 2.0);
+      if (F.cloudOct >= 1.5) {
+        let SS = seaAt(sxz, fldS.y, max(-fldS.x, 0.25));
+        focus = sat((1.0 - SS.jac) * 1.2) + sat(length(vec2<f32>(SS.nrm.x + ocnS.y, SS.nrm.z + ocnS.z)) * 1.8) * 0.45 + SS.brk * 0.4;
+      }
       // Fine particulate flicker rides the same focus — suspended scatter, not flat haze.
       let mote = 0.55 + 0.45 * n2(p.xz * 3.2 + vec2<f32>(F.time * 0.15, deep));
       let ray = smoothstep(0.25, 0.85, focus) * mote;
