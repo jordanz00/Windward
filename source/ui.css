@@ -101,22 +101,29 @@ body.playing #menubtn { opacity: 1; pointer-events: auto; }
   .keys { grid-template-columns: auto 1fr; }
 }
 #chrome, #places, #hourmenu, #weathermenu, #caption { display: none; }
+/* Bottom dock: chrome bar on the ground; hour/weather options sit directly above it. */
 body.studio.playing #chrome {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start;
+  display: flex; flex-direction: column-reverse; align-items: stretch; justify-content: flex-start;
   position: fixed; z-index: 5;
   left: max(10px, env(safe-area-inset-left, 0px));
   right: max(10px, env(safe-area-inset-right, 0px));
   bottom: max(10px, env(safe-area-inset-bottom, 0px));
-  gap: 6px 8px;
+  gap: 6px;
   max-width: none;
   box-sizing: border-box;
   opacity: 1; transition: opacity 0.6s ease;
+  pointer-events: none;
+}
+#chromebar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start;
+  gap: 6px 8px;
+  pointer-events: auto;
 }
 #chrome button, #places .card {
   font-family: "Iowan Old Style", Palatino, Georgia, serif;
   color: var(--ink); cursor: pointer;
 }
-#chrome button {
+#chromebar button {
   background: rgba(8, 16, 20, 0.38);
   border: 1px solid rgba(243, 239, 228, 0.28);
   border-radius: 999px; padding: 8px 14px; font-size: 15px;
@@ -125,8 +132,8 @@ body.studio.playing #chrome {
   white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
-#chrome button:hover { background: rgba(8, 16, 20, 0.55); }
-#chrome button[aria-pressed="true"] {
+#chromebar button:hover { background: rgba(8, 16, 20, 0.55); }
+#chromebar button[aria-pressed="true"] {
   background: rgba(243, 239, 228, 0.88); color: #142026; border-color: transparent;
 }
 body.playing.locked #chrome { opacity: 0.28; }
@@ -134,12 +141,13 @@ body.playing.locked:hover #chrome { opacity: 1; }
 /* Narrow phones (iPhone portrait ~390): wrap into two rows, compact chips, clear home indicator. */
 @media (max-width: 480px) {
   body.studio.playing #chrome {
-    gap: 5px 6px;
+    gap: 5px;
     left: max(8px, env(safe-area-inset-left, 0px));
     right: max(8px, env(safe-area-inset-right, 0px));
     bottom: max(8px, env(safe-area-inset-bottom, 0px));
   }
-  #chrome button {
+  #chromebar { gap: 5px 6px; }
+  #chromebar button {
     padding: 6px 10px;
     font-size: 12.5px;
   }
@@ -169,13 +177,11 @@ body.places-open #places {
 }
 body.hour-open #hourmenu,
 body.weather-open #weathermenu {
-  display: flex; flex-wrap: wrap; position: fixed; z-index: 5;
-  left: max(10px, env(safe-area-inset-left, 0px));
-  right: max(10px, env(safe-area-inset-right, 0px));
-  bottom: calc(62px + env(safe-area-inset-bottom, 0px));
-  gap: 6px; padding: 8px 0 6px;
-  max-height: min(42vh, 280px); overflow-y: auto;
+  display: flex; flex-wrap: wrap;
+  gap: 6px;
+  max-height: min(36vh, 240px); overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  pointer-events: auto;
 }
 #hourmenu button,
 #weathermenu button {
@@ -234,5 +240,8 @@ body.cinema #places,
 body.cinema #hint,
 body.cinema #menubtn,
 body.cinema #caption { opacity: 0; pointer-events: none; }
-body.cinema.cinema-peek #chrome { opacity: 1; pointer-events: auto; }
+body.cinema.cinema-peek #chrome { opacity: 1; }
+body.cinema.cinema-peek #chromebar,
+body.cinema.cinema-peek #hourmenu,
+body.cinema.cinema-peek #weathermenu { pointer-events: auto; }
 body.studio.playing #menubtn { top: 12px; }

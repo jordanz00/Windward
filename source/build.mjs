@@ -188,9 +188,10 @@ const html = `<!DOCTYPE html>
 <p class="fine">Best in Chrome. On a phone, drag to look while walking; tap the water. One HTML file, MIT licensed.</p>
 </div>
 <nav id="places" aria-label="Places"></nav>
+<div id="chrome">
 <nav id="hourmenu" aria-label="Time of day"></nav>
 <nav id="weathermenu" aria-label="Weather"></nav>
-<div id="chrome">
+<div id="chromebar">
 <button id="placebtn" type="button">Places</button>
 <button id="walkbtn" type="button" aria-pressed="true">Walk</button>
 <button id="flybtn" type="button" aria-pressed="false">Fly</button>
@@ -199,6 +200,7 @@ const html = `<!DOCTYPE html>
 <button id="skybtn" type="button">Weather</button>
 <button id="musicbtn" type="button" aria-pressed="true">Music</button>
 <button id="sfxbtn" type="button" aria-pressed="true">SFX On</button>
+</div>
 </div>
 <div id="caption"></div>
 <button id="menubtn" type="button">Menu</button>

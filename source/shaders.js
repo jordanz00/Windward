@@ -1882,8 +1882,11 @@ fn warp(t: f32) -> f32 {
   let gc = abs(uv * 2.0 - 1.0);
   let cells = 4.2 * exp(4.2 * gc) / (exp(4.2) - 1.0) * F.cover / WGRID;
   let cell = max(cells.x, cells.y);
-  let kSwell = 1.0 - smoothstep(1.8, 5.0, cell);
-  let kShape = 1.0 - smoothstep(1.3, 3.6, cell);
+  // Nearshore (shallow bed): allow longer swell on coarser cells so the beach edge
+  // does not flatten into a faceted plate; still eases out — no hard cutoff.
+  let shallow = smoothstep(3.2, 0.35, depth);
+  let kSwell = 1.0 - smoothstep(mix(1.8, 2.6, shallow), mix(5.0, 7.2, shallow), cell);
+  let kShape = 1.0 - smoothstep(mix(1.3, 1.9, shallow), mix(3.6, 5.2, shallow), cell);
   let gs = geom * ww.x * kSwell;
   var w = vec3<f32>(xz.x + s.disp.x * gs, s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x) * kSwell, xz.y + s.disp.z * gs);
   w.y += ripAt(xz).x * geom * graze * kShape;
@@ -1909,18 +1912,33 @@ fn warp(t: f32) -> f32 {
   return o;
 }
 
+// Pack shore-sheet UVs toward the beach (uv.y→0) and lightly under the camera along-shore
+// so run-up and breakers keep short edges; far seaward cells stay coarse without a hard cut.
+fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
+  let v = 1.0 - pow(max(1.0 - uv.y, 0.0), 1.55);
+  let along = uv.x * 2.0 - 1.0;
+  let k = 1.35;
+  let uAbs = (exp(k * abs(along)) - 1.0) / (exp(k) - 1.0);
+  let u = sign(along) * uAbs * 0.5 + 0.5;
+  return vec2<f32>(mix(uv.x, u, 0.55), v);
+}
 // The surf is its own surface, one vertex per stretch of the shoreline grid,
 // so the sheet can climb the sand instead of being painted onto the sea plane.
 @vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
-  let xz = SH.origin + SH.along * (uv.x * SH.nx * SH.dx) + SH.sea * (uv.y * SH.nz * SH.dx);
+  let suv = shoreWarp(uv);
+  let xz = SH.origin + SH.along * (suv.x * SH.nx * SH.dx) + SH.sea * (suv.y * SH.nz * SH.dx);
   let sh = shoreFetch(xz);
   let field = sampleField(xz);
-  let s = seaAt(xz, field.y, max(-field.x, 0.2));
+  let depth = max(-field.x, 0.2);
+  let s = seaAt(xz, field.y, depth);
   let distSh = length(xz - F.camPos.xz);
   let pixSh = max(distSh * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
   let elevSh = max(abs(F.camPos.y), 0.15);
-  let wwSh = waveWeights(distSh, pixSh / pow(elevSh / max(distSh, 0.1), 0.6), pixSh / max(elevSh / max(distSh, 0.1), 0.01), field.y);
-  var y = s.disp.y * mix(0.2, 1.0, wwSh.x) + shapeField(xz).x * wwSh.y;
+  let footSh = pixSh / pow(elevSh / max(distSh, 0.1), 0.6);
+  let wwSh = waveWeights(distSh, footSh, pixSh / max(elevSh / max(distSh, 0.1), 0.01), field.y);
+  // Soft distance LOD on open-water contribution inside the sheet domain — no step cut.
+  let geomSh = smoothstep(420.0, 55.0, distSh) * (1.0 - smoothstep(0.35, 2.4, footSh) * 0.55);
+  var y = s.disp.y * mix(0.12, 1.0, wwSh.x) * geomSh + shapeField(xz).x * wwSh.y * geomSh;
   if (sh.inside > 0.5) {
     // Stay on the sand even where the sheet is dry, so a triangle never stretches
     // from the water up across the sky. Dry fragments are discarded later.
@@ -2356,10 +2374,12 @@ fn hidden(clip: vec4<f32>) -> bool {
     N = normalize(mix(N, Nfd, fdK));
   }
   // Distance-aware normal filter: drop fine slope energy toward the horizon / from cliffs.
+  // Keep more micro-slope energy in shallow nearshore so the beach does not go plastic-smooth.
+  let nearShoreKeep = 1.0 - 0.55 * smoothstep(2.8, 0.4, depthW) * band.x;
   N = normalize(vec3<f32>(
-    N.x * (1.0 - band.z * 0.48),
-    mix(N.y, 1.0, band.z * 0.24),
-    N.z * (1.0 - band.z * 0.48)
+    N.x * (1.0 - band.z * 0.48 * nearShoreKeep),
+    mix(N.y, 1.0, band.z * 0.24 * nearShoreKeep),
+    N.z * (1.0 - band.z * 0.48 * nearShoreKeep)
   ));
   if (F.wx.x > 0.01 && pix < 0.05 && band.x > 0.2) {
     let rr = rainRings(in.xz0) * (1.0 - smoothstep(0.02, 0.05, pix));
@@ -2369,7 +2389,8 @@ fn hidden(clip: vec4<f32>) -> bool {
   let sh = sh0;
   var bore = 0.0;
   if (sh.inside > 0.5 && sh.bed > -1.5 && (in.sheet > 0.5 || sh.bed < 0.05)) {
-    let e = 0.48;
+    // Footprint-aware stencil: fine near the eye, wider far — soft LOD, no step cut.
+    let e = max(mix(0.28, 0.72, sat(foot * 0.9)), pix * 2.4);
     let spx = shoreFetch(in.xz0 + vec2<f32>(e, 0.0));
     let smx = shoreFetch(in.xz0 - vec2<f32>(e, 0.0));
     let spz = shoreFetch(in.xz0 + vec2<f32>(0.0, e));
@@ -2382,8 +2403,8 @@ fn hidden(clip: vec4<f32>) -> bool {
       let onBeach = smoothstep(-0.15, 0.1, sh.bed) * in.sheet;
       let slopeLen = length(vec2<f32>(spx.eta - smx.eta, spz.eta - smz.eta)) / (e * 2.0);
       // Tilt only where the simulated surface is actually sloped, and fade out
-      // along the grid, not along a contour of the beach.
-      let take = smoothstep(0.012, 0.1, slopeLen) * (1.0 - smoothstep(0.58, 0.82, shoreOff)) * brim;
+      // along the grid, not along a contour of the beach. Wider soft edge than before.
+      let take = smoothstep(0.012, 0.1, slopeLen) * (1.0 - smoothstep(0.48, 0.92, shoreOff)) * brim;
       let dhx = mix(spx.eta - smx.eta, spx.h - smx.h, onBeach);
       let dhz = mix(spz.eta - smz.eta, spz.h - smz.h, onBeach);
       // The surge keeps the wind ripples on its back. Without them it is a sheet of glass.
@@ -2391,7 +2412,7 @@ fn hidden(clip: vec4<f32>) -> bool {
       N = normalize(mix(N, sn, take));
       // A front this steep in water this shallow has already broken: it is a wall of
       // air and water, not a clear face.
-      bore = smoothstep(0.16, 0.42, slopeLen) * smoothstep(-1.6, -0.5, sh.bed) * (1.0 - smoothstep(0.58, 0.82, shoreOff)) * brim;
+      bore = smoothstep(0.16, 0.42, slopeLen) * smoothstep(-1.6, -0.5, sh.bed) * (1.0 - smoothstep(0.48, 0.92, shoreOff)) * brim;
     }
   }
   let V = normalize(F.camPos - in.world);

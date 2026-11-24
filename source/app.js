@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 1600, weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 4800, weed: 520, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 9200, weed: 1000, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, shore: 176, grass: 1600, weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, shore: 224, grass: 4800, weed: 520, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, shore: 288, grass: 9200, weed: 1000, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -1580,7 +1580,8 @@ function bindStudio() {
     line.textContent = p.line;
     b.append(sw, name, line);
     b.addEventListener('click', () => {
-      document.body.classList.remove('places-open', 'hour-open', 'weather-open');
+      // Keep the Places strip open so another place can be picked without reopening.
+      document.body.classList.remove('hour-open', 'weather-open');
       goPlace(id, false);
     });
     nav.append(b);
@@ -2078,7 +2079,9 @@ function stepWeather(back) {
 function pickHour(stopH) {
   env.goal = stopH;
   if (!qstr.has('shot')) env.run = true;
-  document.body.classList.remove('hour-open', 'weather-open', 'places-open');
+  // Leave the Hour menu open next to the chrome so another stop can be chosen.
+  document.body.classList.remove('weather-open', 'places-open');
+  document.body.classList.add('hour-open');
   showCaption(envLabel());
   paintPickMenus();
 }
@@ -2091,7 +2094,9 @@ function pickWeather(wx) {
     envSet(wx, true);
     env.hold = 1e9;
   }
-  document.body.classList.remove('hour-open', 'weather-open', 'places-open');
+  // Leave the Weather menu open next to the chrome so another kind can be chosen.
+  document.body.classList.remove('hour-open', 'places-open');
+  document.body.classList.add('weather-open');
   showCaption(envLabel());
   paintPickMenus();
 }
@@ -2924,8 +2929,8 @@ async function main() {
       if (vnoise(x * 0.04, z * 0.04) < 0.58) continue;
       const sc = 0.35 + rnd() * 1.1;
       scatter.add(pick(rockIds, x, z), x, h - sc * 0.28, z, rnd() * 6, sc, [0.8 + rnd() * 0.25, 0.75 + rnd() * 0.2, 0.68 + rnd() * 0.18], 0.45 + rnd() * 0.55);
-      // A boulder lower than the knee is stepped over.
-      if (sc > 0.75) walkHits.push(x, z, 0.6 * sc);
+      // A boulder lower than the knee is stepped over; damp foreshore stones stay passable.
+      if (sc > 0.75 && h > 0.45) walkHits.push(x, z, 0.6 * sc);
       rocks++;
     }
     // Coastal rocks: denser headland pockets, size/tint variety; stamped into SWE bed for wrap.
@@ -2974,7 +2979,9 @@ async function main() {
         if (rnd() < 0.22) { tint[0] *= 0.85; tint[2] *= 1.1; }
         else if (rnd() < 0.2) { tint[0] *= 1.12; tint[1] *= 1.05; }
         scatter.add(pick(rockIds, xx, zz), xx, hh - bury, zz, rnd() * 6, sc, tint, sy);
-        if (sc > 0.55) walkHits.push(xx, zz, 0.5 * sc);
+        // Visuals + SWE bed stamps stay for every shore stone. Walk collision only for
+        // clearly dry-beach boulders — wet / intertidal rocks must not wall off the water.
+        if (sc > 0.55 && hh > 0.55) walkHits.push(xx, zz, 0.5 * sc);
         const peak = hh - bury + sc * sy * 0.55;
         const rad = sc * (0.55 + 0.25 * sy);
         if (hh < 1.2 && rad > 0.25) shoreObstacles.push(xx, zz, peak, rad);
@@ -3174,7 +3181,9 @@ async function main() {
     let landLo = 0, landHi = 0;
     for (let i = 1; i < terrain.pos.length; i += 3) { landLo = Math.min(landLo, terrain.pos[i]); landHi = Math.max(landHi, terrain.pos[i]); }
     const water = gridMesh(q.water, null);
-    const shoreMesh = gridMesh(112, null);
+    // Shore sheet used to be a fixed 112² grid (~0.9 m cells) over a 0.32 m sim — facets
+    // on the beach. Match quality so nearshore triangles stay under ~0.4 m.
+    const shoreMesh = gridMesh(q.shore || 224, null);
     const packed = scatter.packed;
     const g = grassGeom();
     const grassVert = packInterleaved(g.pos, g.uv);
