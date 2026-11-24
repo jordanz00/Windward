@@ -258,7 +258,12 @@ function coralTube(m, pts, r0, r1, sides, col, t0, t1, sw, cap) {
   for (let k = 0; k < sides; k++) m.tri(ring + k, tip, ring + (k + 1) % sides);
 }
 
-const CORAL_TONES = [[0.74, 0.42, 0.17], [0.70, 0.31, 0.30], [0.78, 0.55, 0.18], [0.62, 0.30, 0.14], [0.50, 0.42, 0.16], [0.50, 0.34, 0.56]];
+const CORAL_TONES = [
+  // Muted underwater reef: ochre, rose, coral, olive, mauve, dusty peach — never neon.
+  [0.62, 0.38, 0.22], [0.58, 0.30, 0.28], [0.66, 0.46, 0.24], [0.52, 0.28, 0.18],
+  [0.44, 0.40, 0.22], [0.46, 0.34, 0.48], [0.55, 0.36, 0.34], [0.48, 0.42, 0.36],
+  [0.60, 0.44, 0.30], [0.40, 0.34, 0.40], [0.52, 0.32, 0.26], [0.58, 0.48, 0.28]
+];
 
 // kind 0: forking branches. form 0 is a thicket of thin antlers, 1 a clump of blunt fingers,
 // 2 a sea fan, which forks in one plane and bends with the surge.
@@ -267,10 +272,13 @@ function makeCoral(kind, seed, lod, form) {
   const rnd = seeded(seed * 53 + 7);
   const m = new Mesh();
   // Boulders and tables keep to the browns and ochres; the branching kinds have the whole range.
-  let col = CORAL_TONES[(rnd() * (kind ? 4 : CORAL_TONES.length)) | 0];
+  let col = CORAL_TONES[(rnd() * (kind ? 7 : CORAL_TONES.length)) | 0];
   if (kind === 0) {
     const fan = form === 2, finger = form === 1;
-    if (fan) col = rnd() < 0.5 ? [0.56, 0.20, 0.38] : [0.72, 0.33, 0.13];
+    if (fan) {
+      const fans = [[0.50, 0.24, 0.34], [0.58, 0.32, 0.20], [0.44, 0.30, 0.40], [0.54, 0.36, 0.26]];
+      col = fans[(rnd() * fans.length) | 0];
+    }
     const sides = [4, 3, 3][lod], segs = finger ? 2 : [3, 2, 1][lod], depth = finger ? [1, 1, 0][lod] : fan ? [4, 3, 2][lod] : [3, 2, 1][lod];
     const grow = (p, d, len, rad, left, t) => {
       const pts = [p];
@@ -468,7 +476,13 @@ function plantReef(world, scatter, q) {
       const pick = rnd();
       // Nothing grows up through the surface: the shallower the bed, the smaller the piece.
       const room = Math.min(1, (-pb - 0.25) / 0.9);
-      const tint = [0.85 + rnd() * 0.3, 0.85 + rnd() * 0.3, 0.85 + rnd() * 0.3];
+      // Per-piece tint: warm/cool shift within a muted band so heads read as mixed colonies.
+      const warm = rnd();
+      const tint = [
+        0.72 + rnd() * 0.28 + warm * 0.08,
+        0.68 + rnd() * 0.26 - warm * 0.04,
+        0.62 + rnd() * 0.28 - warm * 0.1
+      ];
       if (pick < 0.5) {
         const sc = (0.6 + rnd() * 0.7) * room;
         const which = pick < 0.26 ? branch[(rnd() * 3) | 0] : pick < 0.42 ? finger[(rnd() * 2) | 0] : fans[(rnd() * 2) | 0];

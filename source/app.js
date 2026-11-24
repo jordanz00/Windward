@@ -1,7 +1,7 @@
 const PRESETS = {
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 900,  weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 2800, weed: 420, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 5600, weed: 800, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, grass: 1600, weed: 0,   palms: 48,  broad: 36,  forest: 380,  rocks: 40, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 420,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, grass: 4800, weed: 520, palms: 100, broad: 80,  forest: 950,  rocks: 70, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1000, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, grass: 9200, weed: 1000, palms: 160, broad: 130, forest: 1700, rocks: 100, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 1800, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -1201,12 +1201,16 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
               while (lod < cuts.length && lod < last) {
                 const c = cuts[lod] * near + bias + airBias;
                 if (dist <= c) break;
-                // In a view, a level does not switch at its cut. Over the next 14 m (less for
-                // a cut close by) the plant is drawn at both levels, and the finer one's share
-                // of it falls from all to none. The share follows distance alone, so there is
-                // no moment of change and nothing to flip back and forth at a boundary.
-                const t = (dist - c) / Math.min(c * 0.3, 14);
-                if (vp && t < 1 && this.fade) { q = Math.max(1, Math.min(63, Math.round((1 - t) * 64))); break; }
+                // Long cross-fade: both LODs draw while the finer share falls with distance.
+                // Band scales with the cut so high-quality crowns ease out, never snap.
+                const band = Math.min(Math.max(c * 0.55, 22), 72);
+                const t = (dist - c) / band;
+                if (vp && t < 1 && this.fade !== false) {
+                  // Smoothstep so the midpoint is soft, not a linear half-ghost.
+                  const u = t * t * (3 - 2 * t);
+                  q = Math.max(1, Math.min(63, Math.round((1 - u) * 64)));
+                  break;
+                }
                 lod++;
               }
               slot = this.slot0[this.kind[i]] + Math.min(lod, last);
@@ -1904,28 +1908,24 @@ function makeAudio() {
     o.connect(g); g.connect(p); p.connect(master); o.start(t); o.stop(t + len + 0.05);
   };
   const R = (a, b) => a + Math.random() * (b - a);
-  const singers = [0, 0, 0, 2, 2, 3].map((kind) => {
+  // Tropical song only, all synthesised: warblers and high trills. No dove/owl coos, no gull.
+  const singers = [0, 0, 0, 0, 1, 1, 1, 1].map((kind) => {
     const ph = [];
     if (kind === 0) {
       // A warbler: a run of short slurred notes.
-      for (let k = 0, t = 0, n = 4 + ((Math.random() * 4) | 0); k < n; k++) { const f = R(2400, 5200), len = R(0.05, 0.13); ph.push([t, f, f * R(0.7, 1.4), len, 0]); t += len + R(0.03, 0.09); }
-    } else if (kind === 2) {
-      // A trill held on one pitch after two lead-in notes.
-      const f = R(3000, 4200);
-      ph.push([0, f * 0.8, f * 0.9, 0.07, 0], [0.12, f * 0.9, f, 0.07, 0], [0.26, f, f * R(0.96, 1.04), R(0.5, 1.1), R(14, 22)]);
+      for (let k = 0, t = 0, n = 4 + ((Math.random() * 4) | 0); k < n; k++) { const f = R(2600, 5600), len = R(0.05, 0.12); ph.push([t, f, f * R(0.75, 1.35), len, 0]); t += len + R(0.03, 0.08); }
     } else {
-      // A gull over the water: a string of falling cries, each a little lower.
-      for (let k = 0, n = 3 + ((Math.random() * 4) | 0); k < n; k++) ph.push([k * 0.38, 1650 - k * 45, 950 - k * 30, 0.27, 31]);
+      // A bright trill: two lead-ins then a held chatter — tropical, not a hoot.
+      const f = R(3200, 4800);
+      ph.push([0, f * 0.85, f * 0.95, 0.06, 0], [0.1, f * 0.95, f, 0.06, 0], [0.22, f, f * R(0.97, 1.03), R(0.45, 0.95), R(16, 26)]);
     }
-    return { kind: kind, ph: ph, pan: R(-0.85, 0.85), far: R(0.3, 1) };
+    return { kind: kind, ph: ph, pan: R(-0.85, 0.85), far: R(0.35, 1) };
   });
   function sing(b, again) {
     if (!api.alive || muted) return;
-    // Gulls belong to the shore, songbirds to the trees.
-    if (b.kind === 3 ? api.shoreAmt < 0.25 : false) return;
     const t = ac.currentTime + 0.03, pace = R(0.92, 1.1), tune = R(0.985, 1.015);
-    const peak = [0.03, 0.05, 0.022, 0.03][b.kind] * b.far;
-    for (const n of b.ph) note(t + n[0] * pace, n[1] * tune, n[2] * tune, n[3] * pace, peak, b.pan, b.kind === 3 ? 'triangle' : 'sine', n[4]);
+    const peak = [0.028, 0.02][b.kind] * b.far;
+    for (const n of b.ph) note(t + n[0] * pace, n[1] * tune, n[2] * tune, n[3] * pace, peak, b.pan, 'sine', n[4]);
     if (b.far > 0.7) api.hush = 0.25;
     const end = (b.ph[b.ph.length - 1][0] + 0.6) * pace;
     // It sings its phrase a few times over, and sometimes another of its kind answers.
@@ -1966,17 +1966,30 @@ function makeAudio() {
   function crash() {
     if (!api.alive || muted) return;
     const t = ac.currentTime;
+    const amt = Math.max(api.shoreAmt || 0, 0.05);
+    // Low boom of the collapsing body.
     const src = ac.createBufferSource(); src.buffer = burst;
     const f = ac.createBiquadFilter();
-    f.type = 'lowpass'; f.frequency.setValueAtTime(1400, t);
-    f.frequency.exponentialRampToValueAtTime(280, t + 0.8);
+    f.type = 'lowpass'; f.frequency.setValueAtTime(900 + amt * 700, t);
+    f.frequency.exponentialRampToValueAtTime(180, t + 0.55 + Math.random() * 0.35);
     const g = ac.createGain();
-    const loud = 0.04 + api.shoreAmt * 0.1;
+    const loud = 0.035 + amt * 0.14;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(loud, t + 0.05 + Math.random() * 0.06);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55 + Math.random() * 0.7);
+    g.gain.exponentialRampToValueAtTime(loud, t + 0.03 + Math.random() * 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.7 + Math.random() * 0.55);
     src.connect(f); f.connect(g); g.connect(master);
-    src.start(t); src.stop(t + 1.5);
+    src.start(t); src.stop(t + 1.6);
+    // Whitewater hiss that follows the boom.
+    const hs = ac.createBufferSource(); hs.buffer = burst;
+    const hf = ac.createBiquadFilter(); hf.type = 'bandpass';
+    hf.frequency.setValueAtTime(1800 + Math.random() * 1400, t);
+    hf.Q.value = 0.7;
+    const hg = ac.createGain();
+    hg.gain.setValueAtTime(0.0001, t + 0.04);
+    hg.gain.exponentialRampToValueAtTime(0.02 + amt * 0.06, t + 0.12);
+    hg.gain.exponentialRampToValueAtTime(0.0001, t + 0.9 + Math.random() * 0.5);
+    hs.connect(hf); hf.connect(hg); hg.connect(master);
+    hs.start(t + 0.04); hs.stop(t + 1.5);
   }
   function later(fn, lo, hi) {
     const wait = (lo + Math.random() * (hi - lo)) * 1000;
@@ -1991,7 +2004,11 @@ function makeAudio() {
     if (Math.random() > api.birds) return;
     sing(singers[(Math.random() * singers.length) | 0], (Math.random() * 3) | 0);
   }, 3.5, 11);
-  later(crash, 4.0, 12.0);
+  // Breaker crashes denser near shore; still irregular timing.
+  later(() => {
+    if ((api.shoreAmt || 0) < 0.12 && Math.random() > 0.35) return;
+    crash();
+  }, 1.6, 5.5);
   try {
     score = createScore(ac, under);
     score.start();
@@ -2561,6 +2578,7 @@ async function main() {
     pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
     pipe('air', airPL, 'vsSky', 'fsAir', {});
     pipe('grass', geoPL, 'vsGrass', 'fsGrass', { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: sceneZ });
+    pipe('shadowGrass', skyPL, 'vsShadowGrass', null, { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: shadowZ });
     pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: [vbuf(16, [[0, 0, 3], [1, 12, 1]]), oneVec4], depth: sceneZ });
     pipe('fish', geoPL, 'vsFish', 'fsFish', { buffers: meshBuffers, depth: sceneZ });
     pipe('shadowFish', skyPL, 'vsShadowFish', null, { buffers: meshBuffers, depth: shadowZ });
@@ -2638,21 +2656,22 @@ async function main() {
 
     const scatter = new Scatter();
     walkHits = [];
+    let shoreObstacles = []; // filled while planting coastal rocks; SWE bed stamps
     const pick = (ids, x, z) => ids[Math.abs(Math.floor(x * 7.3 + z * 3.1)) % ids.length];
     const protoSet = (seeds, make, radius) => seeds.map((sd) => scatter.proto([make(sd)], radius));
-    const rockIds = [4, 11, 23, 37, 52, 68].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [70]));
+    const rockIds = [4, 11, 17, 23, 29, 37, 41, 52, 59, 68, 77, 88].map((sd) => scatter.proto([makeRock(sd, 0), makeRock(sd, 1)], 1.3, [70]));
     // Close palms keep every leaflet; coarser crowns carry the silhouette far past the beach.
     // Softer LOD handoffs — abrupt mid/far crown swaps read as tree-top flicker.
-    const palmIds = [3, 8, 21, 34, 47, 55].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 10.5, [70, 200], [55, 185]));
+    const palmIds = [3, 8, 21, 34, 47, 55].map((sd) => scatter.proto([makePalm(sd, 0), makePalm(sd, 1), makePalm(sd, 2)], 10.5, [95, 240], [70, 210]));
     // A palm leans the way the ground falls, toward the open light over the water.
     const leanYaw = (x, z) => {
       const gx = fieldSample(world, x + 3, z) - fieldSample(world, x - 3, z), gz = fieldSample(world, x, z + 3) - fieldSample(world, x, z - 3);
       return Math.atan2(-gz, -gx) + (rnd() - 0.5) * 1.4;
     };
     const shrubIds = protoSet([5, 9, 14, 22, 27], makeShrub, 1.2);
-    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd, 0), makeCanopy(sd, 1)], 2.4, [35]));
+    const canopyIds = [6, 13, 18, 25].map((sd) => scatter.proto([makeCanopy(sd, 0), makeCanopy(sd, 1)], 2.4, [55]));
     const fernIds = protoSet([7, 12, 19, 24, 30, 33], makeFern, 1.6);
-    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd, 0), makeBroad(sd, 1)], 2.8, [35]));
+    const broadIds = [2, 15, 28, 36, 41].map((sd) => scatter.proto([makeBroad(sd, 0), makeBroad(sd, 1)], 2.8, [58]));
     let palms = 0, broads = 0, shrubs = 0, rocks = 0, stacks = 0, ferns = 0, canopies = 0;
     const palmSites = [];
     const fernBudget = Math.max(14, (q.broad * 0.7) | 0);
@@ -2744,7 +2763,7 @@ async function main() {
     }
     // Interior forest: pick form by habitat — slender near coast, emergent inland, rounded in dense cover.
     // Bounding radius must match canopy size or distant trees fail the pixel/frustum tests and pop.
-    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [16, 82], [0, 50]));
+    const treeIds = [31, 48, 65, 82, 99, 116, 133, 150, 167, 184, 201, 218].map((sd) => scatter.proto([makeTree(sd, 0), makeTree(sd, 1), makeTree(sd, 2)], 7.5, [48, 130], [28, 95]));
     let trees = 0;
     for (let i = 0; i < q.forest * 32 && trees < q.forest; i++) {
       const x = (rnd() - 0.5) * 470;
@@ -2793,36 +2812,49 @@ async function main() {
       if (sc > 0.75) walkHits.push(x, z, 0.6 * sc);
       rocks++;
     }
-    // Shore rock: a few clusters on the wet-sand strip, left and right of the skiff, not a rocky coast.
-    const shoreBudget = Math.min(32, 10 + ((q.rocks / 3) | 0));
+    // Coastal rocks: denser headland pockets, size/tint variety; stamped into SWE bed for wrap.
+    const shoreBudget = Math.min(110, 36 + ((q.rocks * 0.85) | 0));
     let shoreRocks = 0;
-    // Sea direction from the beach sample, not the camera yaw (which looks along the shore).
+    // shoreObstacles hoisted above; refill for this plant.
+    shoreObstacles.length = 0;
     const seaYaw = downhillYaw(world, beach.x, beach.z);
     const seaX = Math.sin(seaYaw), seaZ = -Math.cos(seaYaw);
     const alongX = -seaZ, alongZ = seaX;
     const originX = shore ? shore.x : beach.x, originZ = shore ? shore.z : beach.z;
-    for (let i = 0; i < shoreBudget * 80 && shoreRocks < shoreBudget; i++) {
-      const along = (rnd() - 0.5) * 180;
-      if (Math.abs(along) < 8) continue;
-      if (vnoise(along * 0.035, 2.7) < 0.42) continue;
-      const out = -2 + rnd() * 18;
+    for (let i = 0; i < shoreBudget * 90 && shoreRocks < shoreBudget; i++) {
+      const along = (rnd() - 0.5) * 260;
+      if (Math.abs(along) < 6) continue;
+      const rocky = vnoise(along * 0.028, 2.7) * 0.55 + vnoise(along * 0.09, 5.1) * 0.45;
+      if (rocky < 0.38) continue;
+      const out = -4 + rnd() * 26;
       const x = originX + alongX * along + seaX * out, z = originZ + alongZ * along + seaZ * out;
       const h = fieldSample(world, x, z);
       const sl = fieldSlope(world, x, z);
-      if (h < -0.2 || h > 1.4 || sl > 0.55) continue;
-      const n = 1 + ((rnd() * 3.8) | 0);
+      if (h < -1.1 || h > 1.55 || sl > 0.62) continue;
+      const dense = rocky > 0.62;
+      const n = dense ? 2 + ((rnd() * 5.5) | 0) : 1 + ((rnd() * 3.2) | 0);
       const yaw0 = rnd() * 6.28;
       for (let k = 0; k < n && shoreRocks < shoreBudget; k++) {
-        const ox = k ? Math.cos(yaw0 + k * 1.7) * (0.35 + rnd() * 1.8) : 0;
-        const oz = k ? Math.sin(yaw0 + k * 1.7) * (0.35 + rnd() * 1.8) : 0;
+        const ox = k ? Math.cos(yaw0 + k * 1.55) * (0.3 + rnd() * (dense ? 2.6 : 1.7)) : 0;
+        const oz = k ? Math.sin(yaw0 + k * 1.55) * (0.3 + rnd() * (dense ? 2.6 : 1.7)) : 0;
         const xx = x + ox, zz = z + oz;
         const hh = fieldSample(world, xx, zz);
-        if (hh < -0.25 || hh > 1.5) continue;
-        const sc = (k ? 0.16 : 0.4) + rnd() * (k ? 0.6 : 1.5);
-        const bury = sc * (0.35 + rnd() * 0.3);
-        scatter.add(pick(rockIds, xx, zz), xx, hh - bury, zz, rnd() * 6, sc,
-          [0.72 + rnd() * 0.22, 0.68 + rnd() * 0.18, 0.6 + rnd() * 0.16], 0.4 + rnd() * 0.5);
-        if (sc > 0.65) walkHits.push(xx, zz, 0.55 * sc);
+        if (hh < -1.2 || hh > 1.65) continue;
+        let sc;
+        const roll = rnd();
+        if (k === 0 && roll > 0.82) sc = 1.2 + rnd() * 1.8;
+        else if (roll < 0.35) sc = 0.18 + rnd() * 0.45;
+        else sc = 0.4 + rnd() * 1.15;
+        const bury = sc * (0.28 + rnd() * 0.38);
+        const sy = 0.35 + rnd() * 0.7;
+        const tint = [0.62 + rnd() * 0.28, 0.58 + rnd() * 0.24, 0.5 + rnd() * 0.22];
+        if (rnd() < 0.22) { tint[0] *= 0.85; tint[2] *= 1.1; }
+        else if (rnd() < 0.2) { tint[0] *= 1.12; tint[1] *= 1.05; }
+        scatter.add(pick(rockIds, xx, zz), xx, hh - bury, zz, rnd() * 6, sc, tint, sy);
+        if (sc > 0.55) walkHits.push(xx, zz, 0.5 * sc);
+        const peak = hh - bury + sc * sy * 0.55;
+        const rad = sc * (0.55 + 0.25 * sy);
+        if (hh < 1.2 && rad > 0.25) shoreObstacles.push(xx, zz, peak, rad);
         shoreRocks++;
       }
     }
@@ -2886,44 +2918,68 @@ async function main() {
       }
     }
 
+    // Grass density is a continuous field: patch noise eases from bare sand into meadow,
+    // and blade scale follows that same weight so the edge is short and sparse, not a wall.
     const grassList = [];
     const weedList = [];
-    for (let i = 0; i < (q.grass + q.weed) * 10 && (grassList.length / 4 < q.grass || weedList.length / 4 < q.weed); i++) {
-      const x = (rnd() - 0.5) * 460;
-      const z = (rnd() - 0.5) * 400;
-      const h = fieldSample(world, x, z);
-      const s = fieldSlope(world, x, z);
-      const fromBeach = Math.hypot(x - beach.x, z - beach.z);
-      const patch = vnoise(x * 0.028, z * 0.028);
+    const grassDens = (x, z, h, sl) => {
+      const patch = vnoise(x * 0.022, z * 0.022) * 0.55 + vnoise(x * 0.055 + 3, z * 0.055) * 0.45;
       const fine = vnoise(x * 0.09 + 4, z * 0.09);
-      // Short dune / coastal grass in irregular open patches — leave sandy gaps.
-      if (grassList.length / 4 < Math.min(90, q.grass * 0.12) && h > 0.25 && h < 1.2 && s < 0.2 && fromBeach > 14 && fromBeach < 75 && patch > 0.42) {
-        grassList.push(x, z, rnd() * 6.28, 0.16 + rnd() * 0.22 + fine * 0.08);
-      } else if (grassList.length / 4 < q.grass && h > 1.3 && h < 28 && s < 0.5 && patch > 0.32) {
-        // Inland meadow vs forest-edge wisps; under dense canopy, thinner short cover.
-        const under = forestMask(x, z, h, s);
-        if (under > 0.65 && fine < 0.45) continue;
-        const sc = under > 0.4
-          ? 0.28 + rnd() * 0.35
-          : (h < 2.5 ? 0.35 + rnd() * 0.4 : 0.45 + rnd() * 0.65);
-        grassList.push(x, z, rnd() * 6.28, sc * (0.85 + fine * 0.35));
-      } else if (weedList.length / 4 < q.weed && h < -0.35 && h > -3.2 && s < 0.5 && x > 20 && patch > 0.3) {
-        weedList.push(x, z, rnd() * 6.28, -(0.55 + rnd() * 0.95));
+      const fromBeach = Math.hypot(x - beach.x, z - beach.z);
+      const under = forestMask(x, z, h, sl);
+      let d = 0;
+      if (h > 0.2 && h < 1.35 && sl < 0.28 && fromBeach > 10 && fromBeach < 90) {
+        // Dune fringe: soft rise from open sand.
+        d = Math.max(d, smooth01(0.22, 0.55, patch) * smooth01(0.28, 0.18, sl) * (0.55 + 0.45 * fine));
       }
+      if (h > 1.05 && h < 28 && sl < 0.55) {
+        let meadow = smooth01(0.18, 0.52, patch) * smooth01(0.55, 0.32, sl);
+        meadow *= 1 - under * 0.72;
+        if (under > 0.55) meadow *= smooth01(0.25, 0.7, fine);
+        d = Math.max(d, meadow);
+      }
+      return Math.min(1, d);
+    };
+    for (let i = 0; i < q.grass * 14 && grassList.length / 4 < q.grass; i++) {
+      const x = (rnd() - 0.5) * 460, z = (rnd() - 0.5) * 400;
+      const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+      const dens = grassDens(x, z, h, sl);
+      if (dens < 0.04) continue;
+      // Rejection sampling by density — edges stay thin without a hard threshold.
+      if (rnd() > dens * dens * 0.92 + dens * 0.08) continue;
+      const fine = vnoise(x * 0.09 + 4, z * 0.09);
+      const under = forestMask(x, z, h, sl);
+      let sc = h < 1.4
+        ? 0.12 + dens * (0.22 + fine * 0.12)
+        : under > 0.4
+          ? 0.18 + dens * (0.28 + rnd() * 0.2)
+          : 0.28 + dens * (0.55 + rnd() * 0.5 + fine * 0.2);
+      sc *= 0.75 + rnd() * 0.5;
+      grassList.push(x, z, rnd() * 6.28, sc);
     }
-    // Grass is short and of every size, and it grows thick: each tuft sown above is cut down
-    // by a factor of its own, and two smaller ones stand at its foot. They are sown from
-    // their own numbers, so nothing planted after them moves.
+    for (let i = 0; i < q.weed * 12 && weedList.length / 4 < q.weed; i++) {
+      const x = (rnd() - 0.5) * 460, z = (rnd() - 0.5) * 400;
+      const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+      const patch = vnoise(x * 0.028, z * 0.028);
+      if (h >= -0.35 || h <= -3.2 || sl > 0.5 || x <= 20) continue;
+      const dens = smooth01(0.18, 0.5, patch);
+      if (rnd() > dens) continue;
+      weedList.push(x, z, rnd() * 6.28, -(0.4 + dens * (0.7 + rnd() * 0.5)));
+    }
+    // Fill: each tuft gets two smaller neighbours sized from the same density field.
     {
       const gr = seeded(40507), sown = grassList.length;
       for (let i = 0; i < sown; i += 4) {
-        const big = grassList[i + 3] > 0.5;
-        grassList[i + 3] *= (big ? 0.34 : 0.75) + gr() * (big ? 0.42 : 0.45);
+        const dens = grassDens(grassList[i], grassList[i + 1], fieldSample(world, grassList[i], grassList[i + 1]), fieldSlope(world, grassList[i], grassList[i + 1]));
+        grassList[i + 3] *= 0.55 + dens * 0.35 + gr() * 0.25;
         for (let k = 0; k < 2; k++) {
-          const a = gr() * 6.28, d = 0.2 + gr() * 1.3, u = gr();
+          const a = gr() * 6.28, d = 0.15 + gr() * (0.6 + dens * 1.1), u = gr();
           const x = grassList[i] + Math.cos(a) * d, z = grassList[i + 1] + Math.sin(a) * d;
-          const h = fieldSample(world, x, z);
-          if (h > 0.25 && h < 28 && fieldSlope(world, x, z) < 0.5) grassList.push(x, z, gr() * 6.28, grassList[i + 3] * (0.35 + 0.75 * u * u));
+          const h = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+          const d2 = grassDens(x, z, h, sl);
+          if (d2 < 0.05 || h < 0.2 || h > 28 || sl > 0.55) continue;
+          if (gr() > d2) continue;
+          grassList.push(x, z, gr() * 6.28, grassList[i + 3] * (0.25 + 0.7 * u * u) * (0.5 + 0.5 * d2));
         }
       }
     }
@@ -3122,7 +3178,8 @@ async function main() {
     const shoreSim = await createShore(
       device, world,
       shore || { x: -150, z: 6, fx: -1, fz: 0 },
-      cascades[0].view
+      cascades[0].view,
+      shoreObstacles
     );
     mark('shore');
     await pipesReady;
@@ -3633,15 +3690,16 @@ async function main() {
         const lp = lookYP(Math.cos(az) * hl, env.key[1] * sunView, Math.sin(az) * hl);
         yaw = lp[0]; pitch = lp[1];
       }
-      // Enter under ~10 cm below the local surface; leave ~8 cm above — kills waterline flicker.
+      // Enter under ~12 cm below the local surface; leave ~10 cm above — hysteresis kills flicker.
       const waterGap = waveHere - camY;
-      if (!underLatch && waterGap > 0.1) underLatch = true;
-      else if (underLatch && waterGap < -0.08) underLatch = false;
+      if (!underLatch && waterGap > 0.12) underLatch = true;
+      else if (underLatch && waterGap < -0.1) underLatch = false;
       const under = underLatch ? 1 : 0;
-      // Soft immersion for shaders, but keep each latch side clear of the 0.5 branch edge.
-      let immersion = Math.min(1, Math.max(0, (waterGap + 0.14) / 0.5));
-      if (under) immersion = Math.max(0.58, immersion);
-      else immersion = Math.min(0.42, immersion);
+      // Continuous immersion for shaders (fog/fill/caustics) — no forced jump across 0.5.
+      // Latch still gates discrete app paths (reflections, bugs, audio).
+      let immersion = Math.min(1, Math.max(0, (waterGap + 0.22) / 0.7));
+      // Ease ends so the first/last centimetres do not pop tone.
+      immersion = immersion * immersion * (3 - 2 * immersion);
       // The grid reaches the haze in every direction. A small snap keeps the dense vertices under the camera.
       const eyeH = Math.max(camY, 0.4);
       const cover = Math.min(6400, 2200 + eyeH * 28) * 2;
@@ -3701,7 +3759,8 @@ async function main() {
       const tCull0 = performance.now();
       if (needCull) {
         scatter.pxw = uf[63] * 2 / viewH;
-        scatter.fade = MS > 1;
+        // LOD cross-fade always — sample-mask when MSAA is on, stable leaf dissolve when not.
+        scatter.fade = true;
         mainDraws = scatter.collect(instArr, 0, uf, camX, camY, camZ, plantReach, 0);
         instEnd = mainDraws.end;
         if (reflOn) {
@@ -3861,6 +3920,13 @@ async function main() {
           np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
           np.drawIndexed(nearRows[1], 1, nearRows[0]);
           if (!NO.near) drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
+          // Nearby grass and flower-shrub meshes (in nearDraws) both darken the ground.
+          if (pipes.shadowGrass && grassCount && !NO.grass) {
+            np.setPipeline(pipes.shadowGrass); np.setBindGroup(0, bgUBN);
+            np.setVertexBuffer(0, grassVB); np.setVertexBuffer(1, grassInstB);
+            np.setIndexBuffer(grassIB, 'uint16');
+            np.drawIndexed(g.idx.length, grassCount);
+          }
           if (under) drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
           else drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
           np.end();
@@ -4011,8 +4077,9 @@ async function main() {
         const land = fieldSample(world, camX, camZ);
         const nearBreak = Math.exp(-Math.max(land, 0) * 0.35) * (land < 3 ? 1 : 0.35);
         audio.shoreAmt = nearBreak;
-        audio.surf.gain.value = (muted ? 0 : 0.16) * shore * (under ? 0.25 : 1);
-        audio.hiss.gain.value = (muted ? 0 : 0.045) * nearBreak * (under ? 0.1 : 1);
+        // Swash bed + whitewater hiss scale with break proximity (synthesized noise only).
+        audio.surf.gain.value = (muted ? 0 : 0.18) * shore * (0.75 + 0.55 * nearBreak) * (under ? 0.22 : 1);
+        audio.hiss.gain.value = (muted ? 0 : 0.055) * nearBreak * (0.85 + 0.4 * shore) * (under ? 0.08 : 1);
         // Same travelling gust cells that bend plants and chop the bay.
         const gust = envWindAt(camX, camZ);
         const sy = env.sun[1], dark = smooth01(0.1, -0.08, sy);

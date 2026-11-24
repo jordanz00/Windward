@@ -279,10 +279,15 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let cuspN = fract(sin(dot(pos, vec2<f32>(0.137, 0.091)) + U.time * 0.31) * 43758.17);
   let cuspBias = 0.55 + 0.9 * cuspN;
   // Foam prefers crest peaks and converging flow — not a uniform shoreline mask.
-  foamN += brk * (0.04 + 1.15 * max(peakGate, conv * 0.8) * cuspBias) * (0.12 + lost * 0.75) * dt * 9.0;
+  foamN += brk * (0.06 + 1.35 * max(peakGate, conv * 0.85) * cuspBias) * (0.14 + lost * 0.85) * dt * 11.0;
   // Thin sheet aeration when fast water skims over nearly dry sand.
-  let skim = smoothstep(0.35, 1.1, Fr) * smoothstep(0.12, 0.02, hN) * smoothstep(-0.05, 0.08, b);
-  foamN += skim * (0.35 + 0.65 * peakGate) * dt * 2.4;
+  let skim = smoothstep(0.3, 1.05, Fr) * smoothstep(0.14, 0.02, hN) * smoothstep(-0.08, 0.1, b);
+  foamN += skim * (0.4 + 0.7 * peakGate) * dt * 2.8;
+  // Rock wrap: steep local bed (stamped boulders) sheds whitewater and swirls.
+  let bedGrad = length(vec2<f32>(br - bl, bu - bd)) * invDx * 0.5;
+  let rockFace = smoothstep(0.35, 1.4, bedGrad) * smoothstep(-0.9, 0.2, b);
+  foamN += rockFace * (0.25 + 0.9 * sp / max(celer, 0.2)) * (0.3 + 0.7 * Fr) * dt * 3.2;
+  brk = max(brk, rockFace * smoothstep(0.4, 1.1, Fr) * 0.65);
   let dilute = smoothstep(0.28, 0.035, foamN);
   // Expansion, shear and retreat tear dilute foam into fragments; dense lace lingers longer.
   let retreat = clamp(-dot(vel, S) / max(sp, 0.15), 0.0, 1.0);
@@ -292,12 +297,17 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   foamN = clamp(foamN + spill * (0.15 + 1.85 * peakGate * cuspBias), 0.0, 1.3);
 
   var ground = wet0.z;
-  if (hN < 0.028 && b > -0.05 && foamN > 0.035) {
-    ground = max(ground, foamN * 0.8);
-    foamN *= 0.5;
+  // Residual foam left on sand after the sheet retreats — successive waves stack lace.
+  if (hN < 0.035 && b > -0.08 && foamN > 0.025) {
+    ground = max(ground, foamN * (0.85 + 0.35 * peakGate));
+    foamN *= 0.48;
   }
-  ground *= exp(-dt * 0.055);
-  if (hN > 0.08) { ground *= exp(-dt * 0.35); }
+  // Wet film linger: damp sand stays dark after water leaves.
+  if (hN < 0.02 && b > -0.05 && wet0.x > 0.4) {
+    ground = max(ground, 0.08 * wet0.x);
+  }
+  ground *= exp(-dt * 0.042);
+  if (hN > 0.08) { ground *= exp(-dt * 0.32); }
 
   // Coupling is a band of grid rows at the seaward side, not a contour of the bed.
   let off = f32(z) / max(U.nz - 1.0, 1.0);
@@ -336,7 +346,7 @@ fn copy(@builtin(global_invocation_id) id: vec3<u32>) {
 `;
 }
 
-async function createShore(device, world, anchor, shapeView) {
+async function createShore(device, world, anchor, shapeView, rocks) {
   const nx = SHORE_NX, nz = SHORE_NZ, dx = SHORE_DX;
   const seaX = anchor.fx, seaZ = anchor.fz;
   const alongX = -seaZ, alongZ = seaX;
@@ -365,6 +375,39 @@ async function createShore(device, world, anchor, shapeView) {
       const o = (j * nx + i) * 2;
       bedData[o] = h;
       bedData[o + 1] = drive;
+    }
+  }
+  // Stamp coastal rocks into the sim bed so the shallow-water sheet wraps, piles, and
+  // foams around them. Visual meshes stay separate; this is collision for the wash only.
+  if (rocks && rocks.length) {
+    const invAlong = 1 / (nx * dx), invSea = 1 / (nz * dx);
+    for (let r = 0; r < rocks.length; r += 4) {
+      const rx = rocks[r], rz = rocks[r + 1], peak = rocks[r + 2], rad = Math.max(rocks[r + 3], 0.25);
+      const dOx = rx - originX, dOz = rz - originZ;
+      const fi = (dOx * alongX + dOz * alongZ) / dx;
+      const fj = (dOx * seaX + dOz * seaZ) / dx;
+      const i0 = Math.max(0, Math.floor(fi - rad / dx - 1));
+      const i1 = Math.min(nx - 1, Math.ceil(fi + rad / dx + 1));
+      const j0 = Math.max(0, Math.floor(fj - rad / dx - 1));
+      const j1 = Math.min(nz - 1, Math.ceil(fj + rad / dx + 1));
+      const r2 = rad * rad;
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const x = originX + alongX * (i + 0.5) * dx + seaX * (j + 0.5) * dx;
+          const z = originZ + alongZ * (i + 0.5) * dx + seaZ * (j + 0.5) * dx;
+          const dxr = x - rx, dzr = z - rz, d2 = dxr * dxr + dzr * dzr;
+          if (d2 >= r2) continue;
+          const t = 1 - d2 / r2;
+          // Smooth mound: peaks near rock crown, skirts into surrounding sand.
+          const mound = peak * (t * t * (3 - 2 * t));
+          const o = (j * nx + i) * 2;
+          if (mound > bedData[o]) {
+            bedData[o] = mound;
+            // Rocks are walls for the wash, not open-ocean drive cells.
+            if (mound > -0.15) bedData[o + 1] = Math.min(bedData[o + 1], 0.15);
+          }
+        }
+      }
     }
   }
 

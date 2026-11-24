@@ -68,7 +68,9 @@ button, .q button {
 /* From the bottom up: the buttons, then the hint, then a place's name. Each clears the one
    below it at any width, with room for the hint to wrap to three lines on a phone. */
 #hint {
-  left: 50%; bottom: 68px; transform: translateX(-50%);
+  left: 50%;
+  bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
   width: max-content; max-width: calc(100vw - 32px); text-align: center; line-height: 1.4;
   background: rgba(8, 16, 20, 0.42); padding: 6px 14px; border-radius: 14px;
   font-size: 13px; letter-spacing: 0.04em; opacity: 0; transition: opacity 0.6s ease;
@@ -77,12 +79,16 @@ button, .q button {
 body.places-open #hint { opacity: 0; }
 #hint.show { opacity: 0.9; }
 #stats {
-  top: 12px; left: 14px; font-size: 12px; letter-spacing: 0.04em;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  left: max(14px, env(safe-area-inset-left, 0px));
+  font-size: 12px; letter-spacing: 0.04em;
   background: rgba(8, 16, 20, 0.35); padding: 6px 8px; border-radius: 6px;
 }
 #stats[hidden] { display: none; }
 #menubtn {
-  top: 12px; right: 12px; border: 1px solid rgba(243, 239, 228, 0.4);
+  top: max(12px, env(safe-area-inset-top, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  border: 1px solid rgba(243, 239, 228, 0.4);
   background: rgba(8, 16, 20, 0.35); color: var(--ink); border-radius: 999px;
   padding: 8px 12px; font-size: 13px; opacity: 0; pointer-events: none;
 }
@@ -90,14 +96,20 @@ body.playing #menubtn { opacity: 1; pointer-events: auto; }
 .fine { margin-top: 16px; font-family: "Segoe UI", Helvetica, sans-serif; font-size: 12px; color: var(--dim); }
 @media (max-width: 720px) {
   #scrim { background: linear-gradient(180deg, rgba(8, 16, 20, 0) 20%, rgba(8, 16, 20, 0.78) 70%); }
-  #panel { top: auto; padding: 20px 18px 24px; }
+  #panel { top: auto; padding: 20px 18px calc(24px + env(safe-area-inset-bottom, 0px)); }
   h1 { font-size: 64px; }
   .keys { grid-template-columns: auto 1fr; }
-  #places { bottom: 58px; }
 }
 #chrome, #places, #caption { display: none; }
 body.studio.playing #chrome {
-  display: flex; position: fixed; z-index: 5; left: 16px; bottom: 16px; gap: 8px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start;
+  position: fixed; z-index: 5;
+  left: max(10px, env(safe-area-inset-left, 0px));
+  right: max(10px, env(safe-area-inset-right, 0px));
+  bottom: max(10px, env(safe-area-inset-bottom, 0px));
+  gap: 6px 8px;
+  max-width: none;
+  box-sizing: border-box;
   opacity: 1; transition: opacity 0.6s ease;
 }
 #chrome button, #places .card {
@@ -109,6 +121,9 @@ body.studio.playing #chrome {
   border: 1px solid rgba(243, 239, 228, 0.28);
   border-radius: 999px; padding: 8px 14px; font-size: 15px;
   backdrop-filter: blur(8px);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
 }
 #chrome button:hover { background: rgba(8, 16, 20, 0.55); }
 #chrome button[aria-pressed="true"] {
@@ -116,11 +131,41 @@ body.studio.playing #chrome {
 }
 body.playing.locked #chrome { opacity: 0.28; }
 body.playing.locked:hover #chrome { opacity: 1; }
+/* Narrow phones (iPhone portrait ~390): wrap into two rows, compact chips, clear home indicator. */
+@media (max-width: 480px) {
+  body.studio.playing #chrome {
+    gap: 5px 6px;
+    left: max(8px, env(safe-area-inset-left, 0px));
+    right: max(8px, env(safe-area-inset-right, 0px));
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  }
+  #chrome button {
+    padding: 6px 10px;
+    font-size: 12.5px;
+  }
+  /* Two wrapped rows (~76px) + safe area — keep hint/places above the bar. */
+  #hint {
+    bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+    max-width: calc(100vw - 24px);
+    font-size: 12px;
+    padding: 5px 12px;
+  }
+  body.places-open #places {
+    bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+    padding: 0 max(10px, env(safe-area-inset-left, 0px)) 4px max(10px, env(safe-area-inset-right, 0px));
+  }
+  #caption {
+    bottom: calc(148px + env(safe-area-inset-bottom, 0px));
+    left: max(14px, env(safe-area-inset-left, 0px));
+  }
+}
 body.places-open #places {
   display: flex; position: fixed; z-index: 5;
-  left: 0; right: 0; bottom: 62px;
+  left: 0; right: 0;
+  bottom: calc(62px + env(safe-area-inset-bottom, 0px));
   gap: 10px; padding: 0 16px 6px;
   overflow-x: auto; scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
 }
 #places .card {
   flex: 0 0 168px; scroll-snap-align: start;
