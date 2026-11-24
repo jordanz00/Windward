@@ -118,3 +118,13 @@ Compact working notes. Update, do not grow.
 - Not verified: the timing and loudness of thunder (no audio in the harness), and the flicker in motion on a real GPU.
 
 - Found while testing the storm on the real page: `api.air` named `airCoastF`, which does not exist, in the gust whoosh (gust over 7 m/s and rising). It threw and stopped the frame loop for good. It had been there since the shared-wind commit and would trip in Wind gusts and Tropical shower with sound running; now `airCoast.filter`. The capture harness never ran it because captures have no audio.
+
+## Visual polish (foliage, grounding, water LOD, shore rocks)
+
+- Leaf shade: dry leaves are rougher (`*1.22`) and take a softer specular (`0.95` vs `2.2`); wet weather only lifts leaf gloss a little (`0.88`) while non-leaf wet stays shiny (`0.55`). Edge-weighted transmission kept. Leaflet upper gloss cut; rain multiplies it. Crown hulls use leaf=0.55 / gloss=0.008.
+- Terrain contact AO under grass/shrub/wood-floor patches (same patch frequencies as the sow), mottled, no per-blade shadows.
+- Grass blade feet darkened via `uv.y`.
+- Water: `seaBands` fine fade widened 28→260 m; chop fades on its own distance/footprint with band.x only softening; capillary and chopField keep ranges widened.
+- Shore rock clusters on the wet-sand strip left/right of the skiff (budget from `q.rocks`, seaward axis from `downhillYaw`), partially buried.
+- Dove call removed from singers (was the soft low coo the reviewer heard as an owl). Warbler / trill / gull remain.
+

@@ -1904,15 +1904,11 @@ function makeAudio() {
     o.connect(g); g.connect(p); p.connect(master); o.start(t); o.stop(t + len + 0.05);
   };
   const R = (a, b) => a + Math.random() * (b - a);
-  const singers = [0, 0, 0, 1, 1, 2, 2, 3].map((kind) => {
+  const singers = [0, 0, 0, 2, 2, 3].map((kind) => {
     const ph = [];
     if (kind === 0) {
       // A warbler: a run of short slurred notes.
       for (let k = 0, t = 0, n = 4 + ((Math.random() * 4) | 0); k < n; k++) { const f = R(2400, 5200), len = R(0.05, 0.13); ph.push([t, f, f * R(0.7, 1.4), len, 0]); t += len + R(0.03, 0.09); }
-    } else if (kind === 1) {
-      // A dove: three soft low notes, the middle one long.
-      const f = R(470, 560);
-      ph.push([0, f, f * 1.07, 0.22, 0], [0.36, f * 1.12, f, 0.5, 0], [1.02, f, f * 0.94, 0.3, 0]);
     } else if (kind === 2) {
       // A trill held on one pitch after two lead-in notes.
       const f = R(3000, 4200);
@@ -2797,6 +2793,39 @@ async function main() {
       if (sc > 0.75) walkHits.push(x, z, 0.6 * sc);
       rocks++;
     }
+    // Shore rock: a few clusters on the wet-sand strip, left and right of the skiff, not a rocky coast.
+    const shoreBudget = Math.min(32, 10 + ((q.rocks / 3) | 0));
+    let shoreRocks = 0;
+    // Sea direction from the beach sample, not the camera yaw (which looks along the shore).
+    const seaYaw = downhillYaw(world, beach.x, beach.z);
+    const seaX = Math.sin(seaYaw), seaZ = -Math.cos(seaYaw);
+    const alongX = -seaZ, alongZ = seaX;
+    const originX = shore ? shore.x : beach.x, originZ = shore ? shore.z : beach.z;
+    for (let i = 0; i < shoreBudget * 80 && shoreRocks < shoreBudget; i++) {
+      const along = (rnd() - 0.5) * 180;
+      if (Math.abs(along) < 8) continue;
+      if (vnoise(along * 0.035, 2.7) < 0.42) continue;
+      const out = -2 + rnd() * 18;
+      const x = originX + alongX * along + seaX * out, z = originZ + alongZ * along + seaZ * out;
+      const h = fieldSample(world, x, z);
+      const sl = fieldSlope(world, x, z);
+      if (h < -0.2 || h > 1.4 || sl > 0.55) continue;
+      const n = 1 + ((rnd() * 3.8) | 0);
+      const yaw0 = rnd() * 6.28;
+      for (let k = 0; k < n && shoreRocks < shoreBudget; k++) {
+        const ox = k ? Math.cos(yaw0 + k * 1.7) * (0.35 + rnd() * 1.8) : 0;
+        const oz = k ? Math.sin(yaw0 + k * 1.7) * (0.35 + rnd() * 1.8) : 0;
+        const xx = x + ox, zz = z + oz;
+        const hh = fieldSample(world, xx, zz);
+        if (hh < -0.25 || hh > 1.5) continue;
+        const sc = (k ? 0.16 : 0.4) + rnd() * (k ? 0.6 : 1.5);
+        const bury = sc * (0.35 + rnd() * 0.3);
+        scatter.add(pick(rockIds, xx, zz), xx, hh - bury, zz, rnd() * 6, sc,
+          [0.72 + rnd() * 0.22, 0.68 + rnd() * 0.18, 0.6 + rnd() * 0.16], 0.4 + rnd() * 0.5);
+        if (sc > 0.65) walkHits.push(xx, zz, 0.55 * sc);
+        shoreRocks++;
+      }
+    }
     // Sparse fallen fronds under palms — organic litter, not denser planting.
     const frondIds = [1, 2, 3, 5].map((sd) => scatter.proto([makeFallenFrond(sd)], 1.2));
     for (let i = 0; i < palmSites.length && i < 28; i += 3) {
@@ -3191,11 +3220,11 @@ async function main() {
       // The mirrored view holds the land and what grows on it and nothing else. The sky the
       // water reflects is worked out where it is used, for the tilt of each wave; a mirrored
       // picture of it, pushed about and blurred, laid pale columns over the swell.
-      if (birds) { pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3); }
+      if (birds && !NO.sky) { pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3); }
       pass.setPipeline(pipes.terrain); pass.setBindGroup(0, geo);
       pass.setVertexBuffer(0, terrainVB); pass.setIndexBuffer(terrainIB, 'uint32');
-      pass.drawIndexed(terrain.idx.length);
-      drawMeshes(pass, pipes.mesh, geo, meshVB, meshIB, instB, draws);
+      if (!NO.terrain) pass.drawIndexed(terrain.idx.length);
+      if (!NO.mesh) drawMeshes(pass, pipes.mesh, geo, meshVB, meshIB, instB, draws);
       // The gulls go to roost as the light goes.
       const flock = Math.round(q.birds * (1 - env.night));
       if (birds && flock && pipes.bird) {
@@ -3205,7 +3234,7 @@ async function main() {
         pass.drawIndexed(bgeom.idx.length, flock);
       }
       if (birds) drawMeshes(pass, pipes.fish, geo, fishVB, fishIB, fishInstB, fishDraws);
-      if (birds && grassCount && pipes.grass) {
+      if (birds && grassCount && pipes.grass && !NO.grass) {
         pass.setPipeline(pipes.grass); pass.setBindGroup(0, geo);
         pass.setVertexBuffer(0, grassVB); pass.setVertexBuffer(1, grassInstB);
         pass.setIndexBuffer(grassIB, 'uint16');
@@ -3753,7 +3782,7 @@ async function main() {
         }
         // Every cascade's spectrum is advanced and transformed in one compute pass.
         const cp = enc.beginComputePass();
-        for (const c of cascades) {
+        for (const c of NO.ocean ? [] : cascades) {
           cp.setBindGroup(0, c.bg);
           for (const step of ['evolve', 'rows', 'cols', 'slopes']) {
             cp.setPipeline(oceanPipes[step]);
@@ -3770,7 +3799,7 @@ async function main() {
         shoreSim.encode(e, time - shoreWarm * 0.04, 0.04);
         device.queue.submit([e.finish()]);
       }
-      if (!wp.paused) shoreSim.encode(enc, time, dt);
+      if (!wp.paused && !NO.shoresim) shoreSim.encode(enc, time, dt);
       if (mode === 2 && !wp.paused && pipes.sim) {
         if (ripClear) {
           for (let i = 0; i < 2; i++) {
@@ -3789,7 +3818,7 @@ async function main() {
         ripIndex = 1 - ripIndex;
       }
       const geoNow = bgGeoSet[ripIndex];
-      sky.encode(enc, pipes, bgUB);
+      if (!NO.skybake) sky.encode(enc, pipes, bgUB);
       // Island shadow: redraw when the light has moved about half a degree; lock VP to that bake.
       if (!shadowFor || uf[52] * shadowFor[0] + uf[53] * shadowFor[1] + uf[54] * shadowFor[2] < 0.99996) {
         if (!shadowFor) shadowFor = shadowSun;
@@ -3831,13 +3860,13 @@ async function main() {
           np.setPipeline(pipes.shadowTerrain); np.setBindGroup(0, bgUBN);
           np.setVertexBuffer(0, terrainVB); np.setIndexBuffer(terrainIB, 'uint32');
           np.drawIndexed(nearRows[1], 1, nearRows[0]);
-          drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
+          if (!NO.near) drawMeshes(np, pipes.shadowMesh, bgUBN, meshVB, meshIB, instB, nearDraws);
           if (under) drawMeshes(np, pipes.shadowFish, bgUBN, fishVB, fishIB, fishInstB, fishDraws);
           else drawMeshes(np, pipes.shadowBug, bgUBN, bugVB, bugIB, bugInstB, bugDraws);
           np.end();
         }
       }
-      if (uf[86] > 0.5) {
+      if (uf[86] > 0.5 && !NO.refl) {
         const rp = enc.beginRenderPass(reflPass);
         drawWorld(rp, bgUBR, bgGeoR, false, reflDraws);
         rp.end();

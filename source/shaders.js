@@ -496,10 +496,13 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let roof = forest * (1.0 - smoothstep(3.5, 10.0, world.y - fld.x));
   let skyVis = 1.0 - roof * mix(0.74, 0.5, sat(leaf));
   let wet = F.wx.y * step(0.05, world.y) * (1.0 - F.under);
-  let rough = clamp(mix(0.72, 0.38, sat(gloss)) * mix(1.0, 0.8, sat(leaf)) * mix(1.0, 0.55, wet), 0.08, 0.95);
-  let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.05), sat(leaf));
+  // Dry leaves are matte; rain only lifts their gloss a little. Non-leaf wet still goes
+  // shiny. Gloss still opens the surface when asked (wet sand, coral).
+  let leafK = sat(leaf);
+  let rough = clamp(mix(0.72, 0.38, sat(gloss)) * mix(1.0, 1.22, leafK) * mix(1.0, mix(0.55, 0.88, leafK), wet), 0.08, 0.95);
+  let F0 = mix(vec3<f32>(0.04), vec3<f32>(0.035), leafK);
   // A thin blade is lit a little past its terminator by light crossing it.
-  let wrap = 0.3 * sat(leaf);
+  let wrap = 0.38 * leafK;
   let sunDiff = sat((nl + wrap) / (1.0 + wrap));
   var light = F.sunCol * sunDiff * sh
     + skyIrr(n) * skyVis
@@ -524,11 +527,13 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   let Fs = F0 + (max(vec3<f32>(1.0 - rough), F0) - F0) * 0.6 * pow5(1.0 - ndv);
   var col = alb * (1.0 - Fs) * light;
   // The sun's highlight, and the sky mirrored in whatever is smooth enough to mirror it.
-  col += F.sunCol * microSpec(n, V, L, rough, F0) * sh * 2.2;
-  col += skyDim(reflect(-V, n)) * Fs * skyVis * sat(n.y * 1.4 + 0.4);
-  // Sunlight through a blade from behind: as much as it reflects, and yellower.
-  let trans = max(-nl, 0.0) * leaf;
-  col += alb * vec3<f32>(0.9, 1.2, 0.38) * F.sunCol * trans * mix(0.1, 1.0, sh);
+  // Leaves take a softer highlight than bark or wet sand, so a crown does not read as wax.
+  col += F.sunCol * microSpec(n, V, L, rough, F0) * sh * mix(2.2, 0.95, leafK);
+  col += skyDim(reflect(-V, n)) * Fs * skyVis * sat(n.y * 1.4 + 0.4) * mix(1.0, 0.55, leafK);
+  // Sunlight through a blade from behind: yellower, and a little stronger at thin edges.
+  let edge = pow(1.0 - ndv, 2.0);
+  let trans = max(-nl, 0.0) * leaf * (0.75 + 0.55 * edge);
+  col += alb * vec3<f32>(0.9, 1.2, 0.38) * F.sunCol * trans * mix(0.12, 1.05, sh);
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let shoreWet = 1.0 - sat(world.y / 0.7);
     col += F.sunCol * microSpec(n, V, L, 0.22, vec3<f32>(0.05)) * sh * shoreWet * 0.28;
@@ -733,6 +738,21 @@ struct GeoV {
     let footT = distT * F.tanHalf * 2.0 / max(F.res.y, 1.0) / max(abs(F.camPos.y - in.world.y) / max(distT, 0.1), 0.08);
     let leave = sh.foam * smoothstep(0.08, 0.0, sh.h) * (0.55 + 0.45 * n2(in.world.xz * 1.6 + vec2<f32>(F.time * 0.05, 0.0)));
     washFoam = foamCover(in.world.xz, leave * 0.85, footT);
+  }
+  // Soft contact under grass and low shrubs. Same patch noise the sow uses, so darkening
+  // sits where the blades stand — not a ring under every stem, and not a shadow map of each.
+  if (in.world.y > 0.12 && in.world.y < 12.0 && slope < 0.55) {
+    let gPatch = n2(in.world.xz * 0.028);
+    let gFine = n2(in.world.xz * 0.09 + vec2<f32>(4.0, 0.0));
+    let meadow = smoothstep(1.2, 2.0, in.world.y) * (1.0 - smoothstep(16.0, 26.0, in.world.y));
+    let dune = smoothstep(0.15, 0.45, in.world.y) * (1.0 - smoothstep(0.95, 1.5, in.world.y));
+    let grassHere = sat(gPatch - 0.28) * (0.55 + 0.45 * gFine) * max(meadow, dune * 0.85);
+    let shrub = smoothstep(0.55, 0.9, n2(in.world.xz * 0.045 + vec2<f32>(2.0, 0.0)))
+      * smoothstep(0.8, 2.4, in.world.y) * (1.0 - smoothstep(7.0, 12.0, in.world.y));
+    let woodFloor = smoothstep(1.9, 4.4, in.world.y) * smoothstep(-0.62, -0.12, forestNoise(in.world.xz));
+    let plantAO = sat(grassHere * 0.55 + shrub * 0.4 + woodFloor * 0.35)
+      * (0.7 + 0.3 * n2(in.world.xz * 1.7));
+    alb *= 1.0 - plantAO * 0.38;
   }
   // Rain wets the ground everywhere, and it stays dark after the shower until it dries.
   let rainWet = F.wx.y * step(0.0, in.world.y) * (0.75 + 0.25 * n2(in.world.xz * 0.6));
@@ -1089,9 +1109,9 @@ struct MeshOut {
     let side = sign(in.uv.x + 1e-4);
     let vein = sin(in.uv.y * 48.0 + in.uv.x * 6.0) * 0.04 * (1.0 - rib);
     n = normalize(n + side * cross(n, vec3<f32>(0.0, 1.0, 0.0)) * (0.2 + 0.24 * (1.0 - rib) + vein) * select(-0.4, 1.0, upper));
-    // Two-sided: underside transmits more; upper face has dull wax only.
-    leaf = select(1.35, 0.48, upper) * (0.82 + 0.28 * in.uv.y);
-    gloss = select(0.006, 0.028 + 0.04 * rib, upper);
+    // Two-sided: underside transmits more; upper face is soft and dry, a little glossier in rain.
+    leaf = select(1.45, 0.55, upper) * (0.82 + 0.28 * in.uv.y);
+    gloss = select(0.004, 0.012 + 0.02 * rib, upper) * (1.0 + 1.4 * F.wx.y);
     if (in.world.y < -0.1) { gloss *= 0.15; leaf *= 0.45; }
   } else {
     if (dot(n, Vv) < 0.0) { n = -n; }
@@ -1172,11 +1192,12 @@ struct MeshOut {
       }
     }
   }
-  var col = shade(in.world, n, alb, select(leaf, 0.3, kind == 3), gloss);
+  // Crown hulls use a mild leaf response: transmission without the hard specular of a leaflet.
+  var col = shade(in.world, n, alb, select(leaf, 0.55, kind == 3), select(gloss, 0.008 * (1.0 + F.wx.y), kind == 3));
   if (kind == 3) {
     // Sun that has come down through the crown: the green light on its underside and its
     // shaded flank, which the shadow map alone would leave black.
-    col += alb * vec3<f32>(0.9, 1.2, 0.38) * F.sunCol * (0.24 * sat(0.6 - dot(n, F.sunDir) * 0.7) * sat(0.45 - n.y * 1.3) * cloudShade(in.world.xz, in.world.y));
+    col += alb * vec3<f32>(0.9, 1.2, 0.38) * F.sunCol * (0.28 * sat(0.6 - dot(n, F.sunDir) * 0.7) * sat(0.45 - n.y * 1.3) * cloudShade(in.world.xz, in.world.y));
   }
   // Where a trunk or a rock meets the ground, the ground hides the sky from it.
   let above = in.world.y - sampleField(in.world.xz).x;
@@ -1258,7 +1279,9 @@ struct GrassV {
   if (in.kind > 0.5) { col = mix(vec3<f32>(0.04, 0.16, 0.09), vec3<f32>(0.18, 0.34, 0.16), in.uv.y); }
   let rib = smoothstep(0.08, 0.0, abs(in.uv.x - 0.5));
   // Grass is a dark thing in full sun: a blade reflects about a tenth of what falls on it.
+  // The foot of the blade is darker still, so a tuft reads as planted, not floating.
   col *= 0.46 + 0.14 * n2(in.world.xz * 1.6 + in.uv.y) - rib * 0.08;
+  col *= mix(0.55, 1.0, smoothstep(0.0, 0.35, in.uv.y));
   return vec4<f32>(shade(in.world, in.nrm, col, 1.05, 0.0), 1.0);
 }
 
@@ -1342,9 +1365,10 @@ fn seaFade(dist: f32) -> f32 {
 fn seaBands(dist: f32, foot: f32) -> vec4<f32> {
   let elev = max(abs(F.camPos.y), 0.5);
   let alt = sat((elev - 12.0) / 200.0);
-  let fine = smoothstep(110.0, 22.0, dist) * (1.0 - smoothstep(0.28, 1.55, foot));
+  // Fine chop leaves over a few hundred metres, not a hard ring at ~100 m.
+  let fine = smoothstep(260.0, 28.0, dist) * (1.0 - smoothstep(0.22, 2.2, foot));
   // Far flatten keyed mainly by distance/footprint, not altitude alone (avoids flat blue from cliffs).
-  let farK = smoothstep(90.0, 560.0, dist) * mix(0.42, 0.82, alt) * (0.55 + 0.45 * smoothstep(0.15, 1.2, foot));
+  let farK = smoothstep(140.0, 720.0, dist) * mix(0.38, 0.78, alt) * (0.55 + 0.45 * smoothstep(0.15, 1.4, foot));
   let midK = sat(1.0 - fine - farK * 0.5);
   let roughLift = sat(farK * 0.75 + smoothstep(0.12, 1.4, foot) * 0.55 + alt * farK * 0.25);
   return vec4<f32>(fine, midK, farK, roughLift);
@@ -1384,7 +1408,7 @@ fn capillary(xz: vec2<f32>, dist: f32) -> vec2<f32> {
   );
   for (var b = 0; b < 4; b++) {
     let len = bands[b].x;
-    let keep = smoothstep(pix * 1.4, pix * 3.6, len);
+    let keep = smoothstep(pix * 1.1, pix * 5.2, len);
     if (keep <= 0.001) { continue; }
     for (var k = 0; k < 3; k++) {
       let ang = (f32(k) - 1.0) * 0.62 + f32(b) * 0.31;
@@ -1656,7 +1680,7 @@ fn shapeField(xz: vec2<f32>) -> vec3<f32> {
 // one tile, and it fades once a wavelength is smaller than a pixel.
 fn chopField(xz: vec2<f32>, pix: f32) -> vec2<f32> {
   // Soft screen-space cutoff — hard steps read as triangular patches at grazing angles.
-  let keep = 1.0 - smoothstep(0.22, 1.8, pix);
+  let keep = 1.0 - smoothstep(0.18, 2.4, pix);
   if (keep <= 0.001) { return vec2<f32>(0.0); }
   let a = oceanSample(chopTex, xz, 24.0);
   let r = vec2<f32>(xz.x * 0.94 + xz.y * 0.34, -xz.x * 0.34 + xz.y * 0.94);
@@ -1677,10 +1701,12 @@ fn waveWeights(dist: f32, foot: f32, footLong: f32, scale: f32) -> vec4<f32> {
   let shape = smoothstep(mix(620.0, 1400.0, sat(elev / 180.0)), 55.0, dist)
     * (1.0 - smoothstep(4.0, 48.0, footLong))
     * open * mix(1.0, 0.55, band.z);
-  let chopCut = mix(2.0, 0.85, sat(elev / 120.0));
-  let chop = (1.0 - smoothstep(0.16, chopCut, foot)) * smoothstep(480.0, 40.0, dist)
-    * open * band.x;
-  let cap = mix(0.02, 0.26, band.x) * (1.0 - smoothstep(0.08, 0.9, foot)) * open;
+  let chopCut = mix(2.4, 1.05, sat(elev / 120.0));
+  // Chop fades on its own distance and footprint — band.x only softens, so mid-range
+  // water does not suddenly lose all fine slope when fine hits zero.
+  let chop = (1.0 - smoothstep(0.14, chopCut, foot)) * smoothstep(720.0, 55.0, dist)
+    * open * mix(0.35, 1.0, band.x);
+  let cap = mix(0.02, 0.26, band.x) * (1.0 - smoothstep(0.06, 1.15, foot)) * open;
   return vec4<f32>(swell, shape, chop, cap);
 }
 // Cheap continuous height for FD normals — FFT height only. Gerstner already has
