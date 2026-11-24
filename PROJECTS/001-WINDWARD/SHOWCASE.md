@@ -14,13 +14,13 @@ See README media (`media/lagoon.jpg` and siblings) and the live demo for current
 
 ## How it was made
 
-WebGPU shaders and JS modules build terrain, spectral sea, shore run-up, sky, life, and sound. An AI coding workflow under founder direction assembled the experiment; the founder set taste and approvals rather than hand-authoring the app.
+WebGPU shaders and JS modules build terrain, spectral sea, shore run-up, sky, life, and sound. A free-time experiment directed in Cursor (primarily Fable 5.2 and other models; Grok/Auto sparingly) by a multimedia/video/animation founder — not an experienced software engineer — over about a week before publishing.
 
 ## Constraints that mattered
 
 - One HTML file, no external meshes/images/audio packs  
 - Browser WebGPU (Chrome best; phone on Low)  
-- Short build window; demo-first, not productize-first  
+- Short free-time build window; demo-first, not productize-first  
 
 ## Open it
 

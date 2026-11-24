@@ -21,7 +21,7 @@ Feel of a real place that was never authored as assets: humid air, shoaling wate
 
 ## AI approach
 
-Founder directed; AI implemented under approval gates. Goal: a finished demo in a short burst of days without the founder hand-writing app code. Studio docs manage the lab around the piece; **they do not rewrite the app** unless a separate brief is approved.
+Founder (multimedia / video / animation; not an experienced software engineer) directed a free-time Cursor experiment — primarily Fable 5.2 and other models, Grok/Auto sparingly — aiming for a publishable demo in about a week. Studio docs manage the lab around the piece; **they do not rewrite the app** unless a separate brief is approved.
 
 ## Challenges
 
