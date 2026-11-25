@@ -195,7 +195,7 @@ const html = `<!DOCTYPE html>
 <b>Walk</b><span>WASD or arrow keys. Shift runs. Space jumps. In water, Q dives and Space rises.</span>
 <b>Fly</b><span>F or Fly. W flies where you look. Space up, Q down, Shift faster.</span>
 <b>Places</b><span>Six places worth the trip. Pick one, or Shift and its number, and the camera jumps there.</span>
-<b>Spaces</b><span>1–7, or Spaces. Seven looks for this island. The light eases over a few seconds and holds. 7 is tonight's real moon. Shift-click a card to fly to its view as well.</span>
+<b>Spaces</b><span>1–7, or Spaces. Seven looks for this island. Keys ease the light and fly to each look's view. 7 is tonight's real moon. A Spaces card changes light only; Shift-click or double-click also flies.</span>
 <b>Watch</b><span>Hide the interface. C does the same.</span>
 <b>Day</b><span>T next hour, R weather. N music. X sound effects.</span>
 <b>Shift 1 – 6</b><span>Palm beach, cliff overlook, from above, lagoon shallows, offshore, coral garden</span>

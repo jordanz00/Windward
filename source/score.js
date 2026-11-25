@@ -172,7 +172,7 @@ function createScore(ac, destination) {
     const span = SCORE_EIGHTH * 16;
     chord.pad.forEach((midi, i) => {
       const freq = scoreHz(midi);
-      const g = envGain(t, 1.15, Math.max(0.2, span - 1.3), 2.6, 0.045);
+      const g = envGain(t, 1.15, Math.max(0.2, span - 1.3), 2.6, 0.07);
       const filter = ac.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.value = 980;
@@ -205,7 +205,7 @@ function createScore(ac, destination) {
   function playBass(chord, t) {
     const freq = scoreHz(chord.bass);
     const span = SCORE_EIGHTH * 14;
-    const g = envGain(t, 0.14, Math.max(0.2, span - 0.3), 0.55, 0.11);
+    const g = envGain(t, 0.14, Math.max(0.2, span - 0.3), 0.55, 0.16);
     const filter = ac.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = 200;
@@ -232,7 +232,7 @@ function createScore(ac, destination) {
   function playBell(midi, t, velocity, durEighths) {
     const freq = scoreHz(midi);
     const dur = Math.max(1.4, durEighths * SCORE_EIGHTH);
-    const g = envGain(t, 0.08, 0.05, dur, 0.055 * velocity);
+    const g = envGain(t, 0.08, 0.05, dur, 0.08 * velocity);
     const car = ac.createOscillator();
     const soft = ac.createOscillator();
     const softG = ac.createGain();
@@ -260,31 +260,9 @@ function createScore(ac, destination) {
     endNodes(nodes, t + dur + 0.1);
   }
 
-  function playPluck(midi, t, velocity) {
-    const freq = scoreHz(midi);
-    const g = envGain(t, 0.006, 0.01, 0.42, 0.05 * velocity);
-    const o = ac.createOscillator();
-    o.type = 'triangle';
-    o.frequency.value = freq;
-    const filter = ac.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(freq * 4, t);
-    filter.frequency.exponentialRampToValueAtTime(Math.max(180, freq), t + 0.35);
-    const pan = ac.createStereoPanner();
-    pan.pan.value = (midi % 2 === 0) ? -0.32 : 0.32;
-    o.connect(filter);
-    filter.connect(g);
-    g.connect(pan);
-    pan.connect(dry);
-    pan.connect(delayIn);
-    const nodes = [o, filter, g, pan];
-    o.start(t);
-    endNodes(nodes, t + 0.7);
-  }
-
-  function playArp(midi, t) {
-    playPluck(midi + 12, t, 0.55);
-  }
+  // Hard-disabled: triangle pluck / arp was the metallic clank every ~3 s.
+  function playPluck() { /* silenced */ }
+  function playArp() { /* silenced */ }
 
   function playShimmer(midi, t) {
     const freq = scoreHz(midi + 12);
@@ -403,7 +381,7 @@ function createScore(ac, destination) {
   }
 
   function setAudible(on, vol) {
-    const next = on ? 0.62 * vol : 0;
+    const next = on ? 0.78 * vol : 0;
     if (Math.abs(next - want) < 0.004) return;
     want = next;
     if (typeof OfflineAudioContext !== 'undefined' && ac instanceof OfflineAudioContext) {

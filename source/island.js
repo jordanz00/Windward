@@ -232,10 +232,14 @@ function fillDamp(data, res, span, j0, j1) {
           if (data[(j * res + ii) * 2] > 1.4) { shelter = 0.55 * (1 - k / look.length); break; }
         }
         const x = org + i * step;
-        if (h > -2.2 && x > 40 && x < 210 && z > -80 && z < 70) shelter = Math.max(shelter, 0.72);
-        damp = 1 - Math.min(shelter, 0.9);
-        // Die out in the swash only. The shader steepens the wave as the bottom rises.
-        damp *= ss(0.08, -0.3, h);
+        // Soft lagoon lee only — prior 0.72 shelter left the default beach at ~0.28 scale
+        // and read as a dead flat pond. Keep a mild lee, not a mute.
+        if (h > -2.2 && x > 40 && x < 210 && z > -80 && z < 70) shelter = Math.max(shelter, 0.28);
+        damp = 1 - Math.min(shelter, 0.55);
+        // Keep full Gerstner amp through the breaker belt. Prior ss(0.08,-0.3) starved
+        // the surf (ankle depths already ~0.2–0.5 scale) so the beach sheet looked flat.
+        // Die out only on dry/almost-dry sand — seaAt / hinge own the steepening.
+        damp *= ss(0.18, -0.02, h);
       }
       data[o + 1] = damp;
     }
