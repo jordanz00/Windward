@@ -743,12 +743,12 @@ fn shade(world: vec3<f32>, nrm: vec3<f32>, albedo: vec3<f32>, leaf: f32, gloss: 
   col += F.sunCol * microSpec(n, V, Lw, rough, F0) * sh * mix(1.85, 0.48, leafK);
   col += skyDim(reflect(-V, n)) * Fs * skyVis * sat(n.y * 1.4 + 0.4) * mix(1.0, 0.28, leafK);
   // Transmission scales with leaf thickness proxy: thin tips glow more, thick bases less.
-  // Subtle — green light filters through; never glass-transparent.
-  let edge = pow(1.0 - ndv, 2.0);
+  // Keep grazing edge soft — heavy edge boost read as a blurry green halo on silhouettes.
+  let edge = pow(1.0 - ndv, 2.4);
   let thin = mix(0.5, 1.25, clamp(leaf * 0.55, 0.0, 1.0));
   // Chlorophyll transmission: thin blades pass yellow-green, thick ones stay dark.
   // The shadowed floor is what you see looking up into a crown with the sun behind it.
-  let trans = max(-nl, 0.0) * leaf * (0.48 + 0.82 * edge) * thin;
+  let trans = max(-nl, 0.0) * leaf * (0.55 + 0.45 * edge) * thin;
   col += alb * vec3<f32>(0.68, 1.34, 0.26) * F.sunCol * trans * mix(0.24, 0.88, sh);
   if (world.y > -0.15 && world.y < 1.1 && leaf < 0.5) {
     let shoreWet = 1.0 - sat(world.y / 0.7);
@@ -1509,15 +1509,16 @@ struct MeshOut {
     let kB = sat(1.6 - foot * 3.2);
     if (kB > 0.01) {
       let B = leafCells(pq * 0.85 + 17.0);
-      let mB = smoothstep(0.56, 0.38, B.x);
+      // Narrower cell bands — soft smoothsteps read as airbrushed blur on pad edges.
+      let mB = smoothstep(0.50, 0.40, B.x);
       alb *= mix(1.0, mix(0.62, 0.82 + 0.42 * B.w, mB), kB);
-      n = normalize(n + (vec3<f32>(B.z, B.y + 0.5, B.w) - 0.5) * (0.8 * kB * mB));
+      n = normalize(n + (vec3<f32>(B.z, B.y + 0.5, B.w) - 0.5) * (0.7 * kB * mB));
       let kA = sat(1.5 - foot * 14.0);
       if (kA > 0.01) {
         let A = leafCells(pq * 3.3);
-        let mA = smoothstep(0.64, 0.5, A.x);
+        let mA = smoothstep(0.58, 0.48, A.x);
         alb *= mix(1.0, mix(0.55, 0.85 + 0.45 * A.w, mA), kA);
-        n = normalize(n + (vec3<f32>(A.z, A.y + 0.5, A.w) - 0.5) * (1.1 * kA * mA));
+        n = normalize(n + (vec3<f32>(A.z, A.y + 0.5, A.w) - 0.5) * (0.95 * kA * mA));
       }
     }
     // From far off a crown is boughs: masses of leaf a few metres across with shade between
@@ -1525,8 +1526,8 @@ struct MeshOut {
     let kC = sat(foot * 5.0 - 0.3);
     if (kC > 0.01) {
       let C = leafCells(pq * 0.26 + 5.0);
-      alb *= mix(1.0, 0.5 + 0.75 * smoothstep(0.75, 0.2, C.x), kC * 0.85);
-      n = normalize(n + vec3<f32>(C.z - 0.5, 0.9, C.w - 0.5) * (0.9 * kC));
+      alb *= mix(1.0, 0.5 + 0.75 * smoothstep(0.62, 0.32, C.x), kC * 0.85);
+      n = normalize(n + vec3<f32>(C.z - 0.5, 0.9, C.w - 0.5) * (0.75 * kC));
     }
     // The belly of a pad is in its own shade. The lit skin is the upper shell.
     let cavity = sat(0.46 - n.y);
@@ -1667,7 +1668,7 @@ struct MeshOut {
     if (anC.x > anC.y && anC.x > anC.z) { pqC = in.rest.zy; } else if (anC.z > anC.y) { pqC = in.rest.xy; }
     let cells = leafCells(pqC * 0.9 + 11.0);
     // cells.x near 0 at leaf centres (thicker), higher toward gaps (thinner).
-    let thinEdge = smoothstep(0.25, 0.62, cells.x);
+    let thinEdge = smoothstep(0.32, 0.55, cells.x);
     crownLeaf = mix(0.38, 0.95, thinEdge) * (0.75 + 0.35 * cells.w);
     crownGloss = 0.004 * (1.0 + 0.9 * F.wx.y) * mix(1.15, 0.55, thinEdge);
   }
@@ -1677,9 +1678,9 @@ struct MeshOut {
     // shaded flank, which the shadow map alone would leave black.
     let canopyTx = 0.26 + 0.22 * crownLeaf;
     col += alb * vec3<f32>(0.72, 1.3, 0.3) * F.sunCol * (canopyTx * sat(0.65 - dot(n, F.sunDir) * 0.7) * sat(0.55 - n.y) * cloudShade(in.world.xz, in.world.y));
-    // A thin rim where the pad meets the sky, so the silhouette reads as leaves.
-    let graz = pow(sat(1.0 - abs(dot(n, Vv))), 2.8);
-    col += alb * vec3<f32>(0.9, 1.0, 0.72) * graz * 0.07 * F.day.rgb;
+    // Crisp silhouette cue — prior soft rim + half-res air blur read as fuzzy leaf edges.
+    let graz = pow(sat(1.0 - abs(dot(n, Vv))), 4.2);
+    col += alb * vec3<f32>(0.9, 1.0, 0.72) * graz * 0.035 * F.day.rgb;
   }
   // Contact AO where land plants meet the ground: trunks/rocks, and also low leaves of
   // shrubs, ferns and flowering plants (canopy leaflets sit high and stay untouched).
@@ -3205,13 +3206,29 @@ fn volMarch(rd: vec3<f32>, tA: f32, tB: f32, nNear: i32, nFar: i32, nLight: i32,
   return vec4<f32>(acc.rgb * max(F.lit.y, 0.0), acc.a);
 }
 
-// The air pass read back at full resolution. Four taps hide the grain of its jittered steps.
+// The air pass is half-res. Soft taps hide march grain in open air, but the same blur
+// fringes tree leaflets and crown edges against sky/shafts — depth-aware so silhouettes stay sharp.
 fn airOver(col: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
   let uv = frag / F.res;
-  let e = 1.5 / F.res;
-  let a = (textureSampleLevel(airTex, reflSamp, uv + vec2<f32>(e.x, e.y * 0.4), 0.0) + textureSampleLevel(airTex, reflSamp, uv + vec2<f32>(-e.x * 0.4, e.y), 0.0)
-    + textureSampleLevel(airTex, reflSamp, uv - vec2<f32>(e.x, e.y * 0.4), 0.0) + textureSampleLevel(airTex, reflSamp, uv - vec2<f32>(-e.x * 0.4, e.y), 0.0)) * 0.25;
-  return col * a.a + a.rgb;
+  let px = vec2<i32>(frag);
+  let lim = vec2<i32>(F.res) - 1;
+  let d0 = textureLoad(sceneDepth, px, 0);
+  let dR = textureLoad(sceneDepth, min(px + vec2<i32>(1, 0), lim), 0);
+  let dU = textureLoad(sceneDepth, min(px + vec2<i32>(0, 1), lim), 0);
+  let jump = max(abs(d0 - dR), abs(d0 - dU));
+  // Soft only where depth is continuous. Leaf/sky (and leaf/ground) edges take a hard tap.
+  let soft = 1.0 - smoothstep(6e-5, 7e-4, jump);
+  let center = textureSampleLevel(airTex, reflSamp, uv, 0.0);
+  if (soft < 0.12) {
+    return col * center.a + center.rgb;
+  }
+  let e = (0.35 + 0.95 * soft) / F.res;
+  let a = (textureSampleLevel(airTex, reflSamp, uv + vec2<f32>(e.x, e.y * 0.4), 0.0)
+    + textureSampleLevel(airTex, reflSamp, uv + vec2<f32>(-e.x * 0.4, e.y), 0.0)
+    + textureSampleLevel(airTex, reflSamp, uv - vec2<f32>(e.x, e.y * 0.4), 0.0)
+    + textureSampleLevel(airTex, reflSamp, uv - vec2<f32>(-e.x * 0.4, e.y), 0.0)) * 0.25;
+  let air = mix(center, a, soft);
+  return col * air.a + air.rgb;
 }
 // The finished scene, with the air over it, to the screen. Clouds are already in the air target.
 @fragment fn fsBlit(in: SkyV) -> @location(0) vec4<f32> {
