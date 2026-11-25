@@ -13,7 +13,7 @@ Feel of a real place that was never authored as assets: humid air, shoaling wate
 
 ## Tech
 
-- WebGPU + WGSL; procedural island, spectral ocean, breaking shore, underwater flora, deep-sea sharks/wildlife, volumetric clouds, astronomical night sky, cinematic Spaces 1–7, synthesised ambience and score  
+- WebGPU + WGSL; procedural island, spectral ocean, shore sheet, sky/weather, fish, insects, synthesised audio  
 - Readable modules in `source/` → `node source/build.mjs` → shipped `index.html`  
 - Live: [jordanz00.github.io/Windward](https://jordanz00.github.io/Windward/)  
 - Source of truth for the public mirror: [github.com/jordanz00/Windward](https://github.com/jordanz00/Windward)  
@@ -37,3 +37,15 @@ Founder directed; AI implemented under approval gates. Goal: a finished demo in 
 - Portfolio/lab framing fits better than business-org framing for this experiment.  
 
 See also [OPERATIONS/LESSONS_LEARNED.md](../../OPERATIONS/LESSONS_LEARNED.md).
+
+## Links
+
+| | |
+| --- | --- |
+| Showcase | [SHOWCASE.md](SHOWCASE.md) |
+| Excellence Sprint (draft) | [EXCELLENCE_SPRINT.md](EXCELLENCE_SPRINT.md) |
+| Quality checklist | [QUALITY_CHECKLIST.md](QUALITY_CHECKLIST.md) |
+| Live demo | https://jordanz00.github.io/Windward/ |
+| GitHub | https://github.com/jordanz00/Windward |
+| README | [../../README.md](../../README.md) |
+| Working notes | [../../WINDWARD_NOTES.md](../../WINDWARD_NOTES.md) |

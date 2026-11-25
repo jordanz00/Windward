@@ -309,6 +309,8 @@ function makeFlowerShrub(seed, lod) {
     const a = i / stems * 6.2832 + rnd() * 0.8, sp = 0.3 + rnd() * 0.45;
     branch([Math.cos(a) * 0.05, -0.03, Math.sin(a) * 0.05], norm([Math.cos(a) * sp, 1, Math.sin(a) * sp]), 0.9 + rnd() * 0.7, 0.012, 0, 0);
   }
+  // Grounding plate under the stems (addPlantContactDisk lives on app Mesh helpers).
+  if (typeof addPlantContactDisk === 'function') addPlantContactDisk(m, 0.2, [0.07, 0.05, 0.03]);
   return { mesh: m, blooms: blooms };
 }
 

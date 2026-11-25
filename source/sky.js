@@ -157,7 +157,8 @@ const RE: f32 = 6360.0;
 const WX_K: f32 = 30.0;
 const CS_K: f32 = 5.0;
 // Extinction of full cloud per kilometre, the width of one tile of cloud noise, and the cirrus level.
-const C_SIG: f32 = 45.0;
+// Kept mild so fair-weather cumulus stays light and fluffy rather than chalky.
+const C_SIG: f32 = 36.0;
 const C_TILE: f32 = 9.6;
 const C_HIGH: f32 = 12.0;
 const BR = vec3<f32>(5.8e-3, 13.5e-3, 33.1e-3);
@@ -373,21 +374,22 @@ fn cloudQ(p: vec3<f32>) -> vec3<f32> {
   q += vec3<f32>((warp.a - 0.5) * 0.42 + (w2.a - 0.5) * 0.18, (warp.r - 0.5) * 0.12, (warp.a - 0.5) * 0.34 + (w2.r - 0.5) * 0.16);
   return q;
 }
-// Soft density remapping: coverage lowers the bar, gain keeps a steep opaque core.
+// Soft density remapping: mild gain keeps fluffy edges without hard noise banding.
 fn cloudRemap(n: f32, cov: f32, gain: f32) -> f32 {
   return sat((n - 1.0 + cov) * gain);
 }
 // Cloud at a place, from the weather there. Each family has its own profile with height,
-// and one Perlin–Worley field carves them all. fine adds the small scale, for what the eye
-// sees; light and shadow use the cloud without it.
+// and one Perlin–Worley field carves them all. fine adds a soft mid-scale loft for what
+// the eye sees; light and shadow use the cloud without it. No high-frequency Worley cut —
+// that read as dithered noise banding on the half-res volume pass.
 fn cloudDenW(p: vec3<f32>, w: vec4<f32>, fine: f32) -> f32 {
   let rel = p.y - F.cldA.z;
   let hT = rel / max(F.cldA.w - F.cldA.z, 0.05);
   let q = cloudQ(p);
   let n0 = nz(q);
-  let n1 = nz(q * 2.15 + vec3<f32>(0.19, 0.07, 0.33));
-  // Billows: coarse Perlin–Worley lifted by a mid octave so crowns are cauliflower, not balls.
-  let s = n0.r * 0.72 + n1.r * 0.28;
+  let n1 = nz(q * 1.55 + vec3<f32>(0.19, 0.07, 0.33));
+  // Soft billows: mostly smooth Perlin (n0.a / n0.r blend), light mid octave — cotton fluff.
+  let s = n0.r * 0.45 + n0.a * 0.4 + n1.r * 0.15;
   // d: how full the cloud is here, 0 to 1. k: how dense that kind of cloud is when full.
   // cut: how much of the fine scale it takes.
   var d = 0.0;
@@ -396,55 +398,56 @@ fn cloudDenW(p: vec3<f32>, w: vec4<f32>, fine: f32) -> f32 {
   // Cumulus: flat base at the condensation level, widest there, narrowing to a rounded crown.
   let h1 = rel / (F.skyS.w * (0.55 + 1.15 * w.r));
   if (w.r > 0.02 && h1 > 0.0 && h1 < 1.0) {
-    let base = smoothstep(0.0, 0.045, h1) * smoothstep(1.0, 0.7, h1);
-    let width = 1.0 - 0.55 * pow(h1, 1.2);
-    // Lateral puff: billows thicken the core so the cloud reads as a 3D mass, not a sheet.
-    let puff = sat(0.55 + (s - 0.5) * 0.9 + (n0.a - 0.5) * 0.35);
-    let cov = w.r * width * (1.05 + 0.2 * n0.a) * puff;
-    d = cloudRemap(s, cov * 1.18, 4.2) * base;
+    let base = smoothstep(0.0, 0.08, h1) * smoothstep(1.0, 0.55, h1);
+    let width = 1.0 - 0.35 * pow(h1, 1.1);
+    // Lateral puff: mild billows so the mass stays soft and cottony.
+    let puff = sat(0.7 + (s - 0.5) * 0.35 + (n0.a - 0.5) * 0.12);
+    // Mild coverage so fair days keep soft isolated puffs, not a grey sheet.
+    let cov = w.r * width * (1.05 + 0.12 * n0.a) * puff;
+    d = cloudRemap(s, cov * 1.15, 2.35) * base;
   }
   // Cumulonimbus towers: a column that tapers as it climbs, billows pushing the sides.
   if (w.g > 0.14 && hT > 0.0 && hT < 1.0) {
-    let m = w.g + (s - 0.5) * 0.22 + (n1.a - 0.5) * 0.1;
-    let taper = 0.28 + 0.42 * pow(hT, 0.75);
-    let f = sat((m - taper) * 6.2) * smoothstep(0.0, 0.025, hT) * smoothstep(1.0, 0.96, hT);
-    if (f > d) { d = f; k = 1.45; }
+    let m = w.g + (s - 0.5) * 0.16 + (n1.a - 0.5) * 0.07;
+    let taper = 0.26 + 0.4 * pow(hT, 0.75);
+    let f = sat((m - taper) * 4.4) * smoothstep(0.0, 0.04, hT) * smoothstep(1.0, 0.94, hT);
+    if (f > d) { d = f; k = 1.28; }
   }
   // Anvil: thin ice shelf under the tropopause. Storms build a real shelf; fair weather a sheet.
   if (w.b > 0.02 && hT > 0.68 && hT < 1.0) {
-    let f = cloudRemap(s * 0.55 + n0.a * 0.45, w.b * 0.95 + 0.18, 2.6)
+    let f = cloudRemap(s * 0.55 + n0.a * 0.45, w.b * 0.95 + 0.22, 2.1)
       * smoothstep(0.68, 0.8, hT) * smoothstep(1.0, 0.92, hT);
-    if (f > d) { d = f; k = mix(0.36, 0.78, sat(F.mood.y * F.wx.x)); cut = 0.2; }
+    if (f > d) { d = f; k = mix(0.32, 0.68, sat(F.mood.y * F.wx.x)); cut = 0.18; }
   }
   // Altocumulus: a broken band well above the trade cumulus, not a second deck.
   let yA = (p.y - 2.7) / 1.45;
   if (yA > 0.0 && yA < 1.0 && hT > 0.0 && hT < 1.0 && w.a > 0.12) {
     let nA = nz(vec3<f32>((p.x + F.cldC.x) / 22.0, p.y / 2.2 + 0.2 + F.cldB.w, (p.z + F.cldC.y) / 22.0));
     let covA = sat(w.r * 0.5 + F.cldB.x * 0.4) * sat(6.0 * yA * (1.0 - yA));
-    let fA = cloudRemap(nA.r * 0.7 + nA.a * 0.3, covA * 0.95 + 0.08, 3.1);
-    if (fA > d) { d = fA; k = 0.42; cut = 0.32; }
+    let fA = cloudRemap(nA.r * 0.7 + nA.a * 0.3, covA * 0.95 + 0.12, 2.4);
+    if (fA > d) { d = fA; k = 0.36; cut = 0.28; }
   }
   // Stratocumulus deck: broad shallow cells with soft breaks and vertical heave between them.
   let hD = (p.y - F.cldB.z) / max(F.cldE.z, 0.05);
   if (w.a > 0.02 && hD > 0.0 && hD < 1.0) {
     let n = nz(vec3<f32>((p.x + F.cldC.z) / 14.4, p.y / 3.2 + 0.37 + F.cldB.w * 0.5, (p.z + F.cldC.w) / 14.4));
-    let heave = sat(5.2 * hD * (1.0 - hD)) * (0.75 + 0.35 * n.a);
-    let cov = w.a * (0.42 + 0.58 * heave);
-    let f = cloudRemap(n.r * 0.58 + n.g * 0.42, cov * 1.05 + 0.08, 3.2);
-    if (f > d) { d = f; k = 0.82; cut = 0.45; }
+    let heave = sat(5.0 * hD * (1.0 - hD)) * (0.78 + 0.28 * n.a);
+    let cov = w.a * (0.48 + 0.52 * heave);
+    let f = cloudRemap(n.r * 0.62 + n.g * 0.38, cov * 1.08 + 0.12, 2.45);
+    if (f > d) { d = f; k = 0.7; cut = 0.35; }
   }
   if (d <= 0.0) { return 0.0; }
-  var e = 0.48;
+  // Soft mid-scale loft only — no Worley seam carve (that speckled the volume pass).
+  var e = 0.14;
   if (fine > 0.0) {
-    // Fine Worley cells stand; seams cut away — cauliflower of a growing cloud. Higher up
-    // the cut goes deeper and the cloud frays into a soft skin.
-    let n = nz(q * 5.6 + vec3<f32>(0.13, 0.41 + F.cldB.w * 0.8, 0.77));
-    let nF = nz(q * 11.0 + vec3<f32>(0.55, 0.21, 0.09));
-    let cell = n.g * 0.55 + n.b * 0.28 + nF.b * 0.17;
-    e = mix(0.48, sat(1.08 - cell * 1.55), fine);
+    let n = nz(q * 2.6 + vec3<f32>(0.13, 0.41 + F.cldB.w * 0.4, 0.77));
+    let loft = n.a * 0.7 + n.r * 0.3;
+    e = mix(0.14, 0.08 + loft * 0.14, fine);
   }
-  let erode = e * cut * (0.38 + 0.28 * sat(hT * 2.6)) * max(1.12 - d, 0.0);
-  return k * max(d - erode, 0.0);
+  let erode = e * cut * (0.16 + 0.14 * sat(hT * 2.0)) * max(1.02 - d, 0.0);
+  // Fair weather stays translucent fluff; storms keep more body.
+  let fair = 1.0 - sat(F.mood.y) * 0.55;
+  return k * max(d - erode, 0.0) * mix(1.0, 0.72, fair * (1.0 - sat(F.wx.x)));
 }
 fn cloudDen(p: vec3<f32>) -> f32 {
   let w = wxAt(p.xz);
@@ -529,24 +532,22 @@ fn cloudShade(xz: vec2<f32>, y: f32) -> f32 {
   let rest = mix(0.42, 0.05, dayK);
   return mix(1.0, rest + (1.0 - rest) * lit, k);
 }
-// How a sample throws the sun. Dual HG (back + forward) for the soft body, a multi-scatter
-// powder term that keeps thick cores from going black, and a silver lining when the sun
-// sits behind a thin skin. stormK greys a deck; fair weather keeps the bright rim.
+// How a sample throws the sun. Dual HG for a soft fluffy body, generous powder /
+// multi-scatter so fair weather stays bright and light, and a mild silver lining.
 fn cloudEnergy(mu: f32, tau: f32, d: f32, stormK: f32) -> f32 {
-  let fwd = hg(mu, 0.78);
-  let back = hg(mu, -0.22);
-  let mid = hg(mu, 0.35);
-  let p0 = mix(back, fwd, 0.62);
-  let p1 = mix(hg(mu, -0.08), mid, 0.55);
-  let beer = exp(-tau);
-  // Powder / multi-scatter: light that bounced inside still reaches the eye through thick cloud.
-  let powder = 1.0 - exp(-tau * 2.0 * d);
-  let multi = exp(-tau * mix(0.18, 0.38, stormK)) * (0.55 + 0.45 * powder);
-  let body = p0 * beer * (0.65 + 0.35 * powder) + 0.55 * p1 * multi;
-  let glow = mix(0.22, 0.07, stormK) / (1.0 + mix(0.22, 0.65, stormK) * tau);
-  let skin = sat(d * 2.8) * exp(-d * 0.7);
-  // Silver lining: strong HG forward lobe on a thin edge with the sun behind.
-  let rim = pow(sat(mu), 5.0) * exp(-tau * 0.42) * skin * mix(1.15, 0.22, stormK) * (0.55 + 0.45 * fwd);
+  let fwd = hg(mu, 0.72);
+  let back = hg(mu, -0.18);
+  let mid = hg(mu, 0.32);
+  let p0 = mix(back, fwd, 0.58);
+  let p1 = mix(hg(mu, -0.06), mid, 0.55);
+  let beer = exp(-tau * mix(0.72, 1.0, stormK));
+  // Powder / multi-scatter: keeps light fluffy cores from going chalky or black.
+  let powder = 1.0 - exp(-tau * 1.55 * d);
+  let multi = exp(-tau * mix(0.12, 0.32, stormK)) * (0.62 + 0.38 * powder);
+  let body = p0 * beer * (0.72 + 0.28 * powder) + 0.62 * p1 * multi;
+  let glow = mix(0.28, 0.08, stormK) / (1.0 + mix(0.16, 0.55, stormK) * tau);
+  let skin = sat(d * 2.2) * exp(-d * 0.55);
+  let rim = pow(sat(mu), 4.5) * exp(-tau * 0.35) * skin * mix(0.95, 0.2, stormK) * (0.5 + 0.5 * fwd);
   return body + glow + rim;
 }
 
@@ -622,41 +623,42 @@ struct SkyBake { @location(0) c: vec4<f32> }
     var d = 0.0;
     var ds = 0.55;
     if (cloudMay(w, p.y)) {
-      d = cloudDenW(p, w, 0.4);
-      ds = mix(0.42, 0.16, sat(d * 2.2));
+      d = cloudDenW(p, w, 0.28);
+      ds = mix(0.4, 0.18, sat(d * 2.0));
     } else {
       ds = 0.72;
     }
-    if (d > 0.015) {
-      // Optical depth toward the light: height grade + short sample chain.
-      var tau = d * mix(3.2, 5.5, stormK);
-      if (d > 0.12) {
+    if (d > 0.012) {
+      // Optical depth toward the light: soft height grade + short sample chain.
+      var tau = d * mix(2.6, 4.8, stormK);
+      if (d > 0.16) {
         var marched = 0.0;
-        var sl = 0.07;
+        var sl = 0.08;
         var ll = 0.0;
         let nL = i32(2.0 + cq);
         for (var k = 0; k < 5; k++) {
           if (k >= nL) { break; }
           marched += cloudDen(p + ld * (ll + sl * 0.5)) * sl;
           ll += sl;
-          sl *= 1.85;
+          sl *= 1.8;
         }
-        tau = mix(tau, marched * C_SIG * 0.085, smoothstep(0.12, 0.45, d));
+        tau = mix(tau, marched * C_SIG * 0.07, smoothstep(0.16, 0.5, d));
       }
       let E = cloudEnergy(mu, tau, d, stormK);
       let hr = sat((p.y - base) / 2.5);
       let hRel = sat((p.y - base) / max(F.cldA.w - base, 0.05));
-      // Bright sunlit tops, darker shadowed bases — even in fair weather.
-      let topLit = mix(0.62, 1.18, smoothstep(0.08, 0.72, hRel));
-      let belly = mix(1.0, 0.72, smoothstep(0.45, 0.05, hRel) * (1.0 - sat(mu) * 0.35));
+      // Soft sunlit tops, gently shaded bases — fluffy fair weather.
+      let topLit = mix(0.88, 1.1, smoothstep(0.06, 0.68, hRel));
+      let belly = mix(1.0, mix(0.94, 0.76, stormK), smoothstep(0.4, 0.05, hRel) * (1.0 - sat(mu) * 0.25));
       let anvilK = smoothstep(0.55, 0.92, hRel);
       let bellyK = smoothstep(0.4, 0.02, hRel);
-      let grade = topLit * belly * mix(1.0, mix(0.82, 1.28, anvilK) * mix(1.0, 0.74, bellyK), stormK);
-      let direct = lightC * select(sunT(p.y, sy), vec3<f32>(1.0), byMoon) * E * 0.68;
-      let ambFair = F.amb.rgb * (0.08 + 0.38 * hr);
+      let grade = topLit * belly * mix(1.0, mix(0.86, 1.18, anvilK) * mix(1.0, 0.8, bellyK), stormK);
+      let fluff = mix(vec3<f32>(1.1, 1.08, 1.05), vec3<f32>(0.88, 0.92, 0.98), stormK);
+      let direct = lightC * select(sunT(p.y, sy), vec3<f32>(1.0), byMoon) * E * 0.78 * fluff;
+      let ambFair = F.amb.rgb * (0.14 + 0.48 * hr);
       let ambStorm = vec3<f32>(0.18, 0.21, 0.28) * (0.28 + 0.5 * hr);
       let L = (direct + mix(ambFair, ambStorm, stormK)) * grade;
-      let al = 1.0 - exp(-d * mix(5.2, 7.0, stormK));
+      let al = 1.0 - exp(-d * mix(3.4, 5.8, stormK));
       let keep = pathKeep(t, h0, p.y);
       C += T * al * (L * keep + air * sat3((1.0 - keep) * span));
       T *= 1.0 - al;

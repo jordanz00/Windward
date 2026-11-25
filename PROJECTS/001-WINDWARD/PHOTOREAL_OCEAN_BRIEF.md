@@ -78,4 +78,4 @@ Overall **priority** (what matters most visually) still follows the founder list
 
 - **Phase 1 (audit):** executed from `main` sources; merged as #43.  
 - **Stage 1 (shoaling / coupling):** approved to build from the Cursor photoreal implementation brief (extend existing architecture; no cosmetic-first rewrite).  
-- **Stage 2+ breaker mesh vs hinge-only:** still needs a founder call after Stage 1 lands — audit recommends a localized breaker representation beyond heightfield.
+- **Stage 2+ breaker mesh vs hinge-only:** localized breaker ribbon implemented on PR stack (`PHOTOREAL_BREAKING_SURF.md`); real-GPU visual acceptance still pending (SwiftShader ≠ accept).

@@ -1,6 +1,8 @@
 // Spectral ocean. Two tiled FFT cascades: a wind-sea that displaces the
 // mesh, and a short-wave field whose slopes break the sun into glitter.
 // The long swell stays in the Gerstner set so the horizon is not a tiled patch.
+// Deep-water FFT stays coherent with seaAt / shore couple / breaker ribbon:
+// tiles never own overturn — localized ribbon + hinge read the same trip signals.
 
 const OCEAN_N = 128;
 

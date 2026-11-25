@@ -1,8 +1,9 @@
 const PRESETS = {
-  // Denser shore sheets so the curling lip spans enough verts to read (from #44 amplify).
-  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 460, water: 200, shore: 320, grass: 1600, weed: 220, palms: 48,  broad: 36,  forest: 380,  rocks: 40, vines: 90,  moss: 140, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 620,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
-  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 500, water: 248, shore: 384, grass: 4800, weed: 780, palms: 100, broad: 80,  forest: 950,  rocks: 70, vines: 260, moss: 420, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1450, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
-  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 530, water: 288, shore: 448, grass: 9200, weed: 1400, palms: 160, broad: 130, forest: 1700, rocks: 100, vines: 480, moss: 700, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 2400, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
+  // Shore density held (not raised for continuity). breaker: existing #52 ribbon mesh only.
+  // textent ≈ span so the heightfield bed fills the open ocean; fsSky seaBedAt continues past the rim.
+  low:  { name: 'low',  hres: 384, span: 560, terrain: 240, textent: 548, water: 200, shore: 320, breaker: [64, 8],  grass: 1600, weed: 220, palms: 48,  broad: 36,  forest: 380,  rocks: 40, vines: 90,  moss: 140, stacks: 6,  birds: 5,  fish: 0.6, reef: 26, seagrass: 620,  shadow: 4, clouds: 1, sky: [1536, 384, 16, 256], drops: 5000, refl: 1, scale: 0.72, dpr: 1,    maxPx: 900000 },
+  med:  { name: 'med',  hres: 512, span: 560, terrain: 210, textent: 552, water: 248, shore: 384, breaker: [96, 10], grass: 4800, weed: 780, palms: 100, broad: 80,  forest: 950,  rocks: 70, vines: 260, moss: 420, stacks: 9,  birds: 8,  fish: 1,   reef: 40, seagrass: 1450, shadow: 6, clouds: 2, sky: [2048, 512, 16, 384], drops: 9000, refl: 1, scale: 0.9,  dpr: 1.25, maxPx: 1900000 },
+  high: { name: 'high', hres: 640, span: 560, terrain: 300, textent: 556, water: 288, shore: 448, breaker: [128, 12], grass: 9200, weed: 1400, palms: 160, broad: 130, forest: 1700, rocks: 100, vines: 480, moss: 700, stacks: 12, birds: 12, fish: 1.5, reef: 56, seagrass: 2400, shadow: 10, clouds: 3, sky: [2560, 640, 32, 512], drops: 14000, refl: 1, scale: 1,   dpr: 1.5,  maxPx: 3400000 }
 };
 
 const WAVES = [
@@ -168,6 +169,19 @@ function lookYP(dx, dy, dz) {
 
 // Vertex kinds. The shader lights each one differently.
 const SOLID = 0, BARK = 1, LEAF = 2, CROWN = 3, ROCK = 4, WOOD = 9;
+// Soft-looking contact plate under small land plants / flowers — dark sand disk that
+// grounds the stem in the colour pass and casts into shadowMesh.
+function addPlantContactDisk(m, radius, col) {
+  const n = 8, cy = 0.005, r = radius || 0.18;
+  const c = col || [0.07, 0.06, 0.04];
+  const c0 = m.v(0, cy, 0, 0, 1, 0, c[0], c[1], c[2], 0, SOLID, 0, 0);
+  const rim = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    rim.push(m.v(Math.cos(a) * r, cy, Math.sin(a) * r, 0, 1, 0, c[0] * 0.75, c[1] * 0.75, c[2] * 0.75, 0, SOLID, 0, 0));
+  }
+  for (let i = 0; i < n; i++) m.tri(c0, rim[i], rim[(i + 1) % n]);
+}
 function Mesh() { this.pos = []; this.nrm = []; this.col = []; this.sway = []; this.kind = []; this.uv = []; this.idx = []; }
 Mesh.prototype.v = function (x, y, z, nx, ny, nz, r, g, b, s, kind, u, v) {
   const i = this.pos.length / 3;
@@ -621,6 +635,7 @@ function makeFern(seed) {
       }
     }
   }
+  addPlantContactDisk(m, tall ? 0.22 : 0.17, [0.05, 0.06, 0.035]);
   return m;
 }
 
@@ -701,6 +716,7 @@ function makeShrub(seed) {
         0.12 + rnd() * 0.14, 0.022 + rnd() * 0.025, col, 0.45 + rnd() * 0.2, (rnd() - 0.5) * 0.5);
     }
   }
+  addPlantContactDisk(m, dense ? 0.2 : 0.16, [0.06, 0.055, 0.035]);
   return m;
 }
 
@@ -1264,6 +1280,20 @@ function grassGeom() {
     }
     idx.push(base, base + 1, base + 3, base, base + 3, base + 2, base + 2, base + 3, base + 5, base + 2, base + 5, base + 4);
   }
+  // Flat contact disk at the foot (uv.y < 0): depth-only in shadowGrass so each real tuft
+  // stamps sand; fsGrass discards it so the colour pass stays blade-only.
+  {
+    const R = 0.22, n = 8, cy = 0.004;
+    const center = pos.length / 3;
+    pos.push(0, cy, 0); uv.push(0.5, -1);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      pos.push(Math.cos(a) * R, cy, Math.sin(a) * R);
+      uv.push(0.5, -0.15);
+      if (i > 0) idx.push(center, center + i, center + i + 1);
+    }
+    idx.push(center, center + n, center + 1);
+  }
   return { pos: new Float32Array(pos), uv: new Float32Array(uv), idx: new Uint16Array(idx) };
 }
 function packInterleaved(pos, uv) {
@@ -1502,28 +1532,92 @@ Scatter.prototype.collect = function (out, at, vp, ex, ey, ez, reach, coarser, i
 };
 
 function gridMesh(n, heightAt) {
-  const pos = new Float32Array(n * n * (heightAt ? 3 : 2));
-  const idx = new Uint32Array((n - 1) * (n - 1) * 6);
+  return rectMesh(n, n, heightAt);
+}
+// Procedural open-ocean bed (matches shaders.js seaBedProc) for the abyss skirt mesh.
+function hash21xz(x, z) {
+  let p3x = (x * 0.1031) % 1; if (p3x < 0) p3x += 1;
+  let p3y = (z * 0.1031) % 1; if (p3y < 0) p3y += 1;
+  let p3z = (x * 0.1031) % 1; if (p3z < 0) p3z += 1;
+  const d = p3y * p3z + 33.33;
+  p3x = (p3x + d) % 1; if (p3x < 0) p3x += 1;
+  p3y = (p3y + d) % 1; if (p3y < 0) p3y += 1;
+  p3z = (p3z + d) % 1; if (p3z < 0) p3z += 1;
+  let o = ((p3x + p3y) * p3z) % 1; if (o < 0) o += 1;
+  return o;
+}
+function n2xz(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
+  const a = hash21xz(ix, iz), b = hash21xz(ix + 1, iz);
+  const c = hash21xz(ix, iz + 1), d = hash21xz(ix + 1, iz + 1);
+  return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
+}
+function seaBedProcCPU(x, z) {
+  const r = Math.hypot(x, z);
+  let h = -12.5 - r * 0.009 - Math.pow(r * 0.0011, 1.35) * 6;
+  h += (n2xz(x * 0.0014, z * 0.0014) - 0.5) * 14;
+  h += (n2xz(x * 0.0038 + 7.2, z * 0.0038 + 1.1) - 0.5) * 7;
+  h += (n2xz(x * 0.0095 + 4.1, z * 0.0095 + 1.7) - 0.5) * 3.2;
+  h += (n2xz(x * 0.028 + 2, z * 0.028 + 9) - 0.5) * 1.1;
+  h += (n2xz(x * 0.085, z * 0.085) - 0.5) * 0.28;
+  const mound = Math.max(0, Math.min(1, (n2xz(x * 0.0042 + 11, z * 0.0042 + 3) - 0.72) / 0.2));
+  const m2 = mound * mound;
+  h += m2 * m2 * 4.5; // smoothstep-ish
+  return Math.min(h, -1.8);
+}
+// Annulus from r0..r1 so the open-ocean bed continues past the island terrain mesh.
+function annulusMesh(nTheta, nRad, r0, r1, heightAt) {
+  const nT = Math.max(8, nTheta | 0), nR = Math.max(2, nRad | 0);
+  const pos = new Float32Array(nT * nR * 3);
+  const idx = new Uint32Array((nT) * (nR - 1) * 6);
   let t = 0;
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      const u = i / (n - 1), v = j / (n - 1);
+  for (let j = 0; j < nR; j++) {
+    const v = j / (nR - 1);
+    const r = r0 + (r1 - r0) * v;
+    for (let i = 0; i < nT; i++) {
+      const a = (i / nT) * Math.PI * 2;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      const o = (j * nT + i) * 3;
+      pos[o] = x; pos[o + 1] = heightAt(x, z); pos[o + 2] = z;
+    }
+  }
+  for (let j = 0; j < nR - 1; j++) {
+    for (let i = 0; i < nT; i++) {
+      const i1 = (i + 1) % nT;
+      const a = j * nT + i, b = j * nT + i1;
+      const c = a + nT, d = b + nT;
+      idx[t++] = a; idx[t++] = c; idx[t++] = b;
+      idx[t++] = b; idx[t++] = c; idx[t++] = d;
+    }
+  }
+  return { pos, idx };
+}
+// Rectangular UV grid (breaker ribbon: alongshore × cross-section). Same diagonal flip as gridMesh.
+function rectMesh(nx, nz, heightAt) {
+  const pos = new Float32Array(nx * nz * (heightAt ? 3 : 2));
+  const idx = new Uint32Array((nx - 1) * (nz - 1) * 6);
+  let t = 0;
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) {
+      const u = i / (nx - 1), v = j / (nz - 1);
       if (heightAt) {
         const x = heightAt.x0 + u * heightAt.size;
         const z = heightAt.z0 + v * heightAt.size;
-        const o = (j * n + i) * 3;
+        const o = (j * nx + i) * 3;
         pos[o] = x; pos[o + 1] = heightAt.fn(x, z); pos[o + 2] = z;
       } else {
-        pos[(j * n + i) * 2] = u; pos[(j * n + i) * 2 + 1] = v;
+        pos[(j * nx + i) * 2] = u; pos[(j * nx + i) * 2 + 1] = v;
       }
     }
   }
-  // Alternate quad diagonals so steep nearshore faces do not stack into one jagged saw.
-  for (let j = 0; j < n - 1; j++) {
-    for (let i = 0; i < n - 1; i++) {
-      const a = j * n + i;
+  // Alternate quad diagonals so steep faces do not stack into one jagged saw.
+  for (let j = 0; j < nz - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const a = j * nx + i;
       const b = a + 1;
-      const c = a + n;
+      const c = a + nx;
       const d = c + 1;
       if (((i + j) & 1) === 0) {
         idx[t++] = a; idx[t++] = c; idx[t++] = b;
@@ -1629,7 +1723,7 @@ function smooth01(e0, e1, x) {
   return t * t * (3 - 2 * t);
 }
 // The six places are viewpoints. The Places button and Shift+1–6 jump straight to one.
-// Bare 1–7 are the cinematic spaces below: each eases its light and flies to its spot.
+// Bare 1–7 snap the camera to each cinematic space's spot; weather, clouds, and hour stay put.
 const PLACES = [
   { title: 'Palm Beach', line: 'White sand, leaning palms and the wash running up the shore', swatch: 'linear-gradient(#bfe0ea, #37a9a0 48%, #efe3c4 52%)' },
   { title: 'Cliff Overlook', line: 'High on the bluff, with the cove and its shallows below', swatch: 'linear-gradient(#c9d8e2, #4f9f9c 46%, #2f5a3c 78%)' },
@@ -1638,9 +1732,9 @@ const PLACES = [
   { title: 'Offshore', line: 'Out on the swell, the island standing across the water', swatch: 'linear-gradient(#b7cbe4 40%, #2c7a50 41% 47%, #1d6f98 48%, #0f4a70)' },
   { title: 'Coral Garden', line: 'Under the surface, beside a coral head and its school', swatch: 'linear-gradient(#2a8fa2, #1f6f86 55%, #e8b7b0)' }
 ];
-// Seven looks for the same island. Each is an hour and a weather row, eased in over a few
-// seconds and then held. spot is an optional Places index: Shift-click or a double-click
-// flies there while the light changes. The sea model and fly/walk are not touched.
+// Seven looks for the same island. Spaces strip eases each hour and weather row over a few
+// seconds and then holds. spot is an optional Places index: keys snap there without
+// touching light; Shift-click or a double-click on a card flies while the light changes.
 const wxRow = (id) => WEATHER[id].slice(1);
 const SPACES = [
   { title: 'Golden Paradise', line: 'Late sun on the sand, the water gone to gold. Shift-click flies to the beach.', swatch: 'linear-gradient(#f6d7a2, #e08a3c 48%, #efe3c4)', hour: ENV_OPEN, wx: 'clear', v: wxRow('clear'), wet: 0, dur: 3.2, spot: 0 },
@@ -1671,8 +1765,12 @@ let capTimer = 0;
 let downX = 0, downY = 0, moved = 0;
 
 function waveY(world, x, z, time) {
-  const damp = fieldDamp(world, x, z);
-  const D = Math.max(-fieldSample(world, x, z), 0.25);
+  // CPU walk/swim surface — track GPU seaAt height family (not tip XZ throw).
+  // Prior path muted ankle amp and skipped nearshore floor/shoaling → collision through the surf.
+  const damp0 = fieldDamp(world, x, z);
+  const bed = fieldSample(world, x, z);
+  const D = Math.max(-bed, 0.25);
+  const damp = Math.max(damp0, 0.7 * smooth01(5, 0.6, D));
   const frq = Math.max(wp.frq, 0.2);
   const cs = Math.cos(wp.dir), sn = Math.sin(wp.dir);
   const kP = Math.PI * 2 / WAVES[0][3] * frq;
@@ -1688,14 +1786,32 @@ function waveY(world, x, z, time) {
     const k = Math.PI * 2 / len;
     const feel = 1 - smooth01(len * 0.08, len * 0.45, D);
     let As = w[2] * wp.amp * env.sea * damp * (1 + feel * 0.85);
-    if (i < 2) As *= 1 - 0.74 * smooth01(2, 9, D);
+    if (i < 2) As *= 1 - 0.58 * smooth01(1.6, 7.5, D);
     if (i >= 4) As *= wp.cx;
+    if (i >= 3 && i < 6) As *= 0.22;
     const Q = Math.min(w[4] + feel * 0.45, 1.05);
     const steep = k * As * Q;
     if (steep > 0.72) As *= 0.72 / steep;
-    As *= 1 - (1 - smooth01(0.35, 1.6, D)) * 0.65;
-    const omega = (i === 1 ? wP * (k / kP) : Math.sqrt(9.81 * k)) * wp.spd;
-    y += As * Math.sin(k * (dx * x + dz * z) - omega * time);
+    As *= 1 - (1 - smooth01(0.35, 2.2, D)) * 0.16;
+    const kh = Math.min(k * D, 8);
+    const th = Math.max(Math.tanh(kh), 0.045);
+    const kUse = k / Math.max(Math.sqrt(th), 0.2);
+    if (i < 3) {
+      const kh2 = Math.min(kUse * D * 2, 10);
+      const cgFrac = 0.5 * (1 + kh2 / Math.max(Math.sinh(kh2), 1e-3));
+      const cgRel = Math.max(Math.sqrt(th) * cgFrac, 0.08) / 0.5;
+      const grow = Math.min(1.75, Math.max(1, Math.sqrt(1 / Math.min(cgRel, 1))));
+      As *= 1 + (grow - 1) * smooth01(1.95, 0.15, Math.min(kUse * D, 6));
+    }
+    const omega = (i === 1 ? wP * (kUse / kP) : Math.sqrt(9.81 * kUse)) * wp.spd * Math.sqrt(th);
+    const s = Math.sin(kUse * (dx * x + dz * z) - omega * time);
+    y += As * s;
+    if (i <= 2 && kUse * D < 2.35) {
+      const tip = Math.pow(Math.max(0, Math.min(1, s)), 2.05);
+      const bandK = i === 0 ? 1.5 : i === 1 ? 0.9 : 0.6;
+      const plunge = tip * smooth01(2.8, 0.5, D) * 0.55;
+      y += As * tip * plunge * (0.35 + 0.55 * tip) * bandK;
+    }
   }
   return y;
 }
@@ -1775,18 +1891,21 @@ function spaceSpec(i) {
   }
   return spec;
 }
-// Ease into space i. cam flies to its optional start (smooth, unless snap). Number keys
-// pass cam true so each space also takes its cinematic viewpoint.
+// Apply space i. By default eases hour/weather; snap jumps them. keepEnv leaves weather,
+// clouds, and time of day alone (number keys). cam takes the space's spot; snap/keepEnv
+// jump the camera, otherwise it flies.
 function applySpace(i, opt) {
   const s = SPACES[i];
   if (!s) return;
   const o = opt || {};
-  const same = env.spacePick === i && (env._cine || env.pin);
-  if (o.snap) envCineSnap(spaceSpec(i));
-  else if (!same) envCineBegin(spaceSpec(i));
+  if (!o.keepEnv) {
+    const same = env.spacePick === i && (env._cine || env.pin);
+    if (o.snap) envCineSnap(spaceSpec(i));
+    else if (!same) envCineBegin(spaceSpec(i));
+  }
   markSpace(i);
   if (o.cam && s.spot != null && spots[s.spot]) {
-    if (o.snap) goSpot(s.spot);
+    if (o.snap || o.keepEnv) { trip = null; goSpot(s.spot); }
     else goPlace(s.spot, true);
   }
   if (!o.quiet) showCaption(s);
@@ -2821,8 +2940,8 @@ function bootKeys() {
         paintPickMenus();
       }
     }
-    // 1–7 ease a cinematic space and fly to its viewpoint. Shift+1–6 still jumps to a place.
-    // 7 is Moonlit Island: the ease lands on tonight's real moon and holds, then flies to the beach.
+    // 1–7 snap the camera to that cinematic space's viewpoint. Weather, clouds, and hour
+    // stay as they are. Shift+1–6 still jumps to a Place. Spaces strip still eases light.
     if (e.code >= 'Digit1' && e.code <= 'Digit7' && mode === 2) {
       const n = e.code.charCodeAt(5) - 49;
       if (e.shiftKey && n < PLACES.length) {
@@ -2830,7 +2949,7 @@ function bootKeys() {
         goPlace(n, false);
       } else {
         document.body.classList.remove('places-open', 'hour-open', 'weather-open');
-        applySpace(n, { cam: true });
+        applySpace(n, { cam: true, keepEnv: true });
       }
     }
   });
@@ -3006,6 +3125,9 @@ async function main() {
           const a = new BigInt64Array(b.getMappedRange());
           const ms = Number(a[1] - a[0]) / 1e6;
           gpuMs = ms; b.unmap(); slot.busy = false;
+          PERF.gpuMs = (PERF.gpuMs || 0) + ms;
+          PERF.gpuN = (PERF.gpuN || 0) + 1;
+          PERF.gpuLastMs = ms;
           if (typeof WW_BENCH !== 'undefined' && WW_BENCH.isBench && WW_BENCH.isBench()) WW_BENCH.recordGpu(ms);
         };
         tsSlots.push(slot);
@@ -3140,6 +3262,8 @@ async function main() {
     // The wash on the beach starts from still water and takes its first frames to arrive, so
     // its pipeline can too.
     pipe('shore', waterPL, 'vsShore', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
+    // Restrained breaker ribbon — multi-valued lip over coherent seaAt→SWE sheets.
+    pipe('breaker', waterPL, 'vsBreaker', 'fsWater', { buffers: gridBuf, format: format, blend: over, depth: noZ });
     pipe('air', airPL, 'vsSky', 'fsAir', {});
     pipe('grass', geoPL, 'vsGrass', 'fsGrass', { buffers: [vbuf(24, [[0, 0, 3], [1, 16, 2]]), oneVec4], depth: sceneZ });
     pipe('bird', geoPL, 'vsBird', 'fsBird', { buffers: meshBuffers, depth: sceneZ });
@@ -3157,8 +3281,11 @@ async function main() {
     const READ = qstr.has('read'), READ_AT = parseInt(qstr.get('rf'), 10) || 16;
     const READ_SEQ = Math.max(0, parseInt(qstr.get('seq'), 10) || 0);
     const READ_STRIDE = Math.max(1, parseInt(qstr.get('stride'), 10) || 4);
+    // Headless has no swapchain — presenting destroys the device. ?perf (and ?read) draw
+    // offscreen every frame so FPS/GPU cost is real without lowering quality presets.
+    const OFFSCREEN = READ || qstr.has('perf');
     if (READ_SEQ) window.__pngs = [];
-    const pipesReady = Promise.all(READ ? jobs.concat(lateJobs) : jobs);
+    const pipesReady = Promise.all(OFFSCREEN ? jobs.concat(lateJobs) : jobs);
     pipesReady.catch(() => {});
     Promise.all(lateJobs).catch((err) => console.error(err));
     mark('kick');
@@ -3828,16 +3955,35 @@ async function main() {
       x0: -q.textent, z0: -q.textent, size: q.textent * 2,
       fn: (x, z) => fieldSample(world, x, z)
     });
+    // Open-ocean bed past the island mesh — same fsTerrain path, procedural heights.
+    const abyssR0 = q.textent - 36;
+    const abyssR1 = Math.max(q.textent + 900, 1600);
+    const abyss = annulusMesh(96, 28, abyssR0, abyssR1, (x, z) => {
+      const fld = fieldSample(world, x, z);
+      // Blend like seaBedAt: inside SPAN prefer field, outside prefer procedural.
+      const u = (x + q.span) / (q.span * 2);
+      const v = (z + q.span) / (q.span * 2);
+      const rim = Math.max(-u, u - 1, -v, v - 1);
+      const fade = Math.max(0, Math.min(1, (rim + 0.04) / 0.14));
+      const proc = seaBedProcCPU(x, z);
+      return fld * (1 - fade) + proc * fade;
+    });
     let landLo = 0, landHi = 0;
     for (let i = 1; i < terrain.pos.length; i += 3) { landLo = Math.min(landLo, terrain.pos[i]); landHi = Math.max(landHi, terrain.pos[i]); }
     const water = gridMesh(q.water, null);
     // Shore sheet covers surf + wash; denser than the ocean disk so hinge curl resolves.
     const shoreMesh = gridMesh(q.shore || 320, null);
+    // Breaker ribbon: alongshore × cross-section — only live where breakerEvt fires.
+    const brkRes = q.breaker || [96, 10];
+    const breakerMesh = rectMesh(brkRes[0], brkRes[1], null);
     const packed = scatter.packed;
     const g = grassGeom();
     const grassVert = packInterleaved(g.pos, g.uv);
     const terrainVB = upload(terrain.pos, GPUBufferUsage.VERTEX);
     const terrainIB = upload(terrain.idx, GPUBufferUsage.INDEX);
+    const abyssVB = upload(abyss.pos, GPUBufferUsage.VERTEX);
+    const abyssIB = upload(abyss.idx, GPUBufferUsage.INDEX);
+    const abyssIndexCount = abyss.idx.length;
     // ?stream=0 or ?no=stream keeps the single mesh and the full grass list.
     const streamOn = qstr.get('stream') !== '0' && !NO.stream;
     const stream = new WorldStream({ enabled: streamOn });
@@ -3862,6 +4008,8 @@ async function main() {
         console.warn('stream boot', err);
       }
     }
+    const breakerVB = upload(breakerMesh.pos, GPUBufferUsage.VERTEX);
+    const breakerIB = upload(breakerMesh.idx, GPUBufferUsage.INDEX);
     const waterVB = upload(water.pos, GPUBufferUsage.VERTEX);
     const waterIB = upload(water.idx, GPUBufferUsage.INDEX);
     const shoreVB = upload(shoreMesh.pos, GPUBufferUsage.VERTEX);
@@ -4054,7 +4202,7 @@ async function main() {
       airTex = targetOf(device, rw, rh, sceneFmt);
       cloudTex = targetOf(device, rw, rh, sceneFmt);
       viewW = w; viewH = h;
-      if (READ) {
+      if (OFFSCREEN) {
         if (readTex) readTex.destroy();
         if (readDepth) readDepth.destroy();
         if (readBuf) readBuf.destroy();
@@ -4112,13 +4260,20 @@ async function main() {
         frameDraws++;
       }
     }
-    function drawWorld(pass, ub, geo, birds, draws) {
+    function drawWorld(pass, ub, geo, birds, draws, underWater) {
       // The mirrored view holds the land and what grows on it and nothing else. The sky the
       // water reflects is worked out where it is used, for the tilt of each wave; a mirrored
       // picture of it, pushed about and blurred, laid pale columns over the swell.
       if (birds && !NO.sky) { pass.setPipeline(pipes.sky); pass.setBindGroup(0, geo); pass.draw(3); }
       pass.setPipeline(pipes.terrain); pass.setBindGroup(0, geo);
       drawTerrain(pass);
+      // Infinite open-ocean bed past the island mesh (underwater only — avoids above-water skirt).
+      if (underWater && abyssVB && pipes.terrain) {
+        pass.setVertexBuffer(0, abyssVB);
+        pass.setIndexBuffer(abyssIB, 'uint32');
+        pass.drawIndexed(abyssIndexCount);
+        frameDraws++;
+      }
       if (!NO.mesh) drawMeshes(pass, pipes.mesh, geo, meshVB, meshIB, instB, draws);
       if (birds && birdDraws.length && pipes.bird) {
         drawMeshes(pass, pipes.bird, geo, birdVB, birdIB, birdInstB, birdDraws);
@@ -4163,7 +4318,7 @@ async function main() {
     const ft = new Float32Array(40);
     let ftI = 0, ftN = 0, frames = 0, ready = false;
     let showHint = 0;
-    let shoreWarm = 110;
+    let shoreWarm = 200;
     let fishCam = null, birdNear = 0;
 
     const nearC = [0, 0, 0];
@@ -4360,7 +4515,8 @@ async function main() {
         statusEl.textContent = '';
         barEl.parentElement.hidden = true;
       }
-      ft[ftI] = dt; ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
+      // Wall-clock for FPS (READ freezes sim dt at 1/30 — that must not fake the meter).
+      ft[ftI] = Math.min(0.25, Math.max(rawDt, 1e-4)); ftI = (ftI + 1) % ft.length; if (ftN < ft.length) ftN++;
       frameDraws = 0; frameInst = 0; framePasses = 0;
       const tFrame0 = performance.now();
       // Scripted fly / benchmark overrides the free camera (quality stays at the chosen preset).
@@ -4840,7 +4996,7 @@ async function main() {
       }
       if (uf[86] > 0.5 && !NO.refl) {
         const rp = enc.beginRenderPass(reflPass);
-        drawWorld(rp, bgUBR, bgGeoR, false, reflDraws);
+        drawWorld(rp, bgUBR, bgGeoR, false, reflDraws, false);
         rp.end();
       }
       // GPU timestamps span scene → final swap (AG: first pass begin, last pass end).
@@ -4850,7 +5006,7 @@ async function main() {
       }
       scenePass.timestampWrites = tsSlot ? tsBegin : undefined;
       const sp = enc.beginRenderPass(scenePass);
-      drawWorld(sp, bgUB, geoNow, true, mainDraws);
+      drawWorld(sp, bgUB, geoNow, true, mainDraws, !!under);
       sp.end();
       // The flash is a few frames long. March it into the sky only while it is on.
       if (bolt.now > 0.004 && pipes.bolt && bgBolt && !under && !NO.sky) {
@@ -4893,6 +5049,12 @@ async function main() {
           pass.setVertexBuffer(0, shoreVB); pass.setIndexBuffer(shoreIB, 'uint32');
           pass.drawIndexed(shoreMesh.idx.length);
         }
+        // Breaker ribbon after sheets so the overhanging lip composites over the heightfield.
+        if (pipes.breaker && !NO.shore && !NO.breaker) {
+          pass.setPipeline(pipes.breaker);
+          pass.setVertexBuffer(0, breakerVB); pass.setIndexBuffer(breakerIB, 'uint32');
+          pass.drawIndexed(breakerMesh.idx.length);
+        }
         pass.setBindGroup(1, bgAir);
         drawMeshes(pass, pipes.bug, geoNow, bugVB, bugIB, bugInstB, bugDraws);
         if (!under && pipes.drops && !NO.drops) {
@@ -4907,14 +5069,17 @@ async function main() {
         }
         pass.end();
       };
-      // A capture never presents. Headless WebGPU has no swapchain image, and asking for
-      // one destroys the device before the frame can be read back.
+      // Never present in OFFSCREEN (?read / ?perf): headless swapchain present destroys the device.
       const seqHit = READ_SEQ > 0 && frames >= READ_AT
         && ((frames - READ_AT) % READ_STRIDE) === 0
         && (window.__pngs?.length || 0) < READ_SEQ
         && !window.__reading;
-      if (READ) {
-        if (readTex && (frames === READ_AT || seqHit)) drawSwap(readViews[0], readViews[1], true);
+      if (OFFSCREEN) {
+        // ?perf: every frame (FPS includes full water/shore). ?read: only capture frames —
+        // continuous offscreen+mapAsync on SwiftShader starves GPU readback.
+        if (readTex && (qstr.has('perf') || frames === READ_AT || seqHit)) {
+          drawSwap(readViews[0], readViews[1], true);
+        }
       } else {
         drawSwap(context.getCurrentTexture().createView(), swapDepthView, true);
       }
@@ -4941,6 +5106,17 @@ async function main() {
         slot.b.mapAsync(GPUMapMode.READ).then(slot.done).catch(() => { slot.busy = false; });
       }
       cpuFrameMs = performance.now() - tFrame0;
+      // Live frame stats for ?perf probes (SwiftShader / real-GPU). No quality change.
+      if (ftN > 8) {
+        let sum = 0; for (let i = 0; i < ftN; i++) sum += ft[i];
+        window.__fps = ftN / sum;
+        window.__frameMs = (sum / ftN) * 1000;
+        window.__cpuFrameMs = cpuFrameMs;
+        window.__gpuMs = gpuMs;
+        PERF.frameMs = window.__frameMs;
+        PERF.cpuFrameLastMs = cpuFrameMs;
+        PERF.cpuCullLastMs = cpuCullMs;
+      }
       if (typeof WW_BENCH !== 'undefined' && WW_BENCH.isBench && WW_BENCH.isBench()) {
         WW_BENCH.recordCpu(cpuFrameMs, cpuCullMs);
         WW_BENCH.recordPass(framePasses, frameDraws, frameInst);
@@ -4954,7 +5130,7 @@ async function main() {
             window.__reading = false;
             requestAnimationFrame(frame);
           }
-        }, 240000);
+        }, 420000);
         device.queue.onSubmittedWorkDone().then(() => buf.mapAsync(GPUMapMode.READ)).then(() => {
           clearTimeout(readWatch);
           const data = new Uint8Array(buf.getMappedRange());
@@ -5073,6 +5249,16 @@ async function main() {
         if (capTimer <= 0) { const cap = $('caption'); if (cap) cap.classList.remove('show'); }
       }
       window.__frames = frames;
+      // ?perf: await GPU drain so SwiftShader/headless FPS reflects submit cost (no quality change).
+      if (qstr.has('perf') && !doRead) {
+        const tGpu0 = performance.now();
+        device.queue.onSubmittedWorkDone().then(() => {
+          window.__gpuWaitMs = performance.now() - tGpu0;
+          PERF.gpuWaitLastMs = window.__gpuWaitMs;
+          requestAnimationFrame(frame);
+        }).catch(() => requestAnimationFrame(frame));
+        return;
+      }
       requestAnimationFrame(frame);
     }
 
@@ -5144,11 +5330,20 @@ async function main() {
         camX += Math.sin(yaw) * num('fwd') + Math.cos(yaw) * num('side');
         camZ += -Math.cos(yaw) * num('fwd') + Math.sin(yaw) * num('side');
         if (qstr.has('up')) { fly = true; camY += num('up'); }
-        // at=x,z,yaw,pitch,height: stand anywhere, angles in degrees, height above the ground or the sea.
+        // at=x,z,yaw,pitch,height: stand anywhere, angles in degrees.
+        // height ≥ 0 = metres above bed/sea; height < 0 = absolute world Y (underwater dive).
         if (qstr.has('at')) {
           const a = qstr.get('at').split(',').map(Number);
           camX = a[0] || 0; camZ = a[1] || 0; yaw = (a[2] || 0) * Math.PI / 180; pitch = (a[3] || 0) * Math.PI / 180;
-          camY = Math.max(fieldSample(world, camX, camZ), 0) + (a[4] || 1.7); fly = true;
+          const h = Number.isFinite(a[4]) ? a[4] : 1.7;
+          if (h < 0) {
+            camY = h;
+            dive = Math.max(dive, 1.6);
+            fly = false;
+          } else {
+            camY = Math.max(fieldSample(world, camX, camZ), 0) + h;
+            fly = true;
+          }
         }
         if (env.spaceId === 7 && !qstr.has('at') && !qstr.has('sunview')) {
           const turn = num('dyaw'), tilt = num('dpitch');

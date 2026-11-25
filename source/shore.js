@@ -71,9 +71,9 @@ fn coupleAmp(kUse: f32, th: f32, depth: f32) -> f32 {
   let kh2 = min(kh * 2.0, 10.0);
   let cgFrac = 0.5 * (1.0 + kh2 / max(sinh(kh2), 1e-3));
   let cgRel = max(sqrt(th) * cgFrac, 0.08) / 0.5;
-  // Same growth family as seaAt shoalAmp — slightly stronger so SWE feels the shoal.
-  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.75);
-  return mix(1.0, grow, smoothstep(1.95, 0.15, kh));
+  // Stronger shoal growth so Dirichlet injects enough energy for visible run-up / crash.
+  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 2.35);
+  return mix(1.0, grow, smoothstep(1.95, 0.12, kh));
 }
 fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
   var eta = oceanSample(xz);
@@ -88,33 +88,33 @@ fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
     let len = w.w / frq;
     let k = 6.2831853 / len;
     let feel = 1.0 - smoothstep(len * 0.08, len * 0.45, D);
-    var As = w.z * U.amp * (1.0 + feel * 0.85);
-    let Q = min(steepOf(i) + feel * 0.45, 1.05);
-    // Offshore swell stays low; it stands up only where the bed shoals (matches seaAt).
-    if (i < 2) { As *= mix(1.0, 0.42, deepW); }
-    if (i == 0) { As *= 0.4 + 0.6 * sin(dot(dir, xz) * 0.062 - U.time * 0.045); }
-    if (i == 1) { As *= 0.5 + 0.5 * sin(dot(dir, xz) * 0.09 + 1.3); }
-    if (i >= 3) { As *= 0.22; }
+    var As = w.z * U.amp * (1.0 + feel * 0.95);
+    let Q = min(steepOf(i) + feel * 0.5, 1.1);
+    // Keep more offshore swell energy so the rim drive reaches the surf belt.
+    if (i < 2) { As *= mix(1.0, 0.58, deepW); }
+    if (i == 0) { As *= 0.5 + 0.55 * sin(dot(dir, xz) * 0.062 - U.time * 0.045); }
+    if (i == 1) { As *= 0.55 + 0.5 * sin(dot(dir, xz) * 0.09 + 1.3); }
+    if (i >= 3) { As *= 0.28; }
     let st = k * As * Q;
-    if (st > 0.72) { As *= 0.72 / st; }
+    if (st > 0.78) { As *= 0.78 / st; }
     let collapse = 1.0 - smoothstep(0.35, 2.2, D);
-    As *= 1.0 - collapse * 0.16;
+    As *= 1.0 - collapse * 0.1;
     let sk = coupleK(k, D, f32(i));
     let kUse = sk.x;
     let thK = sk.y;
     let slow = sqrt(thK);
     if (i < 3) { As *= coupleAmp(kUse, thK, D); }
     let steepShore = kUse * As * Q;
-    if (steepShore > 0.72) { As *= 0.72 / steepShore; }
+    if (steepShore > 0.78) { As *= 0.78 / steepShore; }
     let omega = sqrt(9.81 * kUse) * U.spd * slow;
     let phase = kUse * dot(dir, xz) - omega * U.time;
     let s = sin(phase);
     eta += As * s;
-    // Orbital velocity tracks the shortened phase speed so the bore matches the crest.
-    vel += dir * Q * As * s * omega;
+    // Orbital + progressive shoreward flux so the bore carries mass inland.
+    vel += dir * Q * As * s * omega * 1.12;
   }
   let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
-  eta += oceanSample(r * (220.0 / 151.0)) * 0.36;
+  eta += oceanSample(r * (220.0 / 151.0)) * 0.42;
   return vec3<f32>(eta, vel);
 }
 fn at(ix: i32, iz: i32) -> vec4<f32> {
@@ -246,6 +246,7 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 
   var hN = h - dt * invDx * (fR.x - fL.x + fU.x - fD.x);
+  // Positivity: never allow negative depth; cap only at a physical storm ceiling.
   hN = clamp(hN, 0.0, 3.2);
   let srcA = g2 * (sRx * sRx - sLy * sLy);
   let srcS = g2 * (sUx * sUx - sDy * sDy);
@@ -260,9 +261,17 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   var hf = h * foam - dt * invDx * (ffR - ffL + ffU - ffD);
   hf = max(hf, 0.0);
 
-  let denom = hN * hN + 0.0004;
-  vel = A * (pA * hN / denom) + S * (pS * hN / denom);
-  if (hN < 0.003) { vel = vec2<f32>(0.0); }
+  // Desingularized velocity: freeze dry cells; avoid 1/h blow-ups on the film.
+  let hDry = 0.0025;
+  if (hN < hDry) {
+    vel = vec2<f32>(0.0);
+    pA = 0.0;
+    pS = 0.0;
+    hN = 0.0;
+  } else {
+    let denom = hN * hN + 0.00025;
+    vel = A * (pA * hN / denom) + S * (pS * hN / denom);
+  }
 
   let uAr = dot(r.yz, A);
   let uAl = dot(l.yz, A);
@@ -287,21 +296,14 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   // Dissipate supercritical momentum. The bore speed is the local wave speed, not a constant.
   vel *= exp(-brk * 1.65 * dt);
 
-  // Slightly less friction on the wet foreshore so run-up tongues travel farther inland
-  // before stalling into backwash.
-  let Cf = 0.008 + select(0.0, 0.022, b > -0.02);
+  // Depth-aware Manning-like friction: strong on the thin beach film (crash + retreat),
+  // mild through the mid-surf so injected swell reaches the foreshore before dying.
+  let Cf = 0.0028 + 0.034 * smoothstep(-0.28, 0.14, b) + 0.026 * smoothstep(0.1, 0.012, hN);
   let sp2 = length(vel);
   if (sp2 > 0.02 && hN > 0.004) {
-    vel *= 1.0 / (1.0 + dt * Cf * sp2 / max(hN, 0.025));
+    vel *= 1.0 / (1.0 + dt * Cf * sp2 / max(hN, 0.02));
   }
   if (length(vel) > 9.0) { vel *= 9.0 / length(vel); }
-  // A bore that has climbed onto the sand collapses into a sheet. The surplus
-  // becomes foam. Slightly taller sheet so wash remains readable up the beach.
-  var spill = 0.0;
-  if (b > -0.03 && hN > 0.2) {
-    spill = hN - 0.2;
-    hN = 0.2;
-  }
 
   var foamN = 0.0;
   if (hN > 0.006) { foamN = clamp(hf / hN, 0.0, 1.25); }
@@ -315,88 +317,64 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let frontL = abs(max(lU.x, 0.0) + bedAt(ip.x - 1, ip.y + 1).x - max(lD.x, 0.0) - bedAt(ip.x - 1, ip.y - 1).x);
   let frontR = abs(max(rU.x, 0.0) + bedAt(ip.x + 1, ip.y + 1).x - max(rD.x, 0.0) - bedAt(ip.x + 1, ip.y - 1).x);
   let peak = max(front - 0.5 * (frontL + frontR), 0.0) * invDx;
-  // A straight crest produces almost no foam. Local peaks and converging
-  // flow do, so the break comes apart along the beach instead of as one band.
   let peakGate = smoothstep(0.003, 0.04, peak);
   let conv = smoothstep(0.06, 0.65, -div);
-  // Alongshore modulation — cusps breathe so consecutive breakers do not stack as one stripe.
   let pos = cellPos(x, z);
   let cuspN = fract(sin(dot(pos, vec2<f32>(0.137, 0.091)) + U.time * 0.31) * 43758.17);
   let cuspBias = 0.55 + 0.9 * cuspN;
-  // Foam prefers crest peaks and converging flow — not a uniform shoreline mask.
-  foamN += brk * (0.06 + 1.35 * max(peakGate, conv * 0.85) * cuspBias) * (0.14 + lost * 0.85) * dt * 11.0;
-  // Thin sheet aeration when fast water skims over nearly dry sand.
+  foamN += brk * (0.08 + 1.45 * max(peakGate, conv * 0.85) * cuspBias) * (0.16 + lost * 0.9) * dt * 11.0;
   let skim = smoothstep(0.3, 1.05, Fr) * smoothstep(0.14, 0.02, hN) * smoothstep(-0.08, 0.1, b);
   foamN += skim * (0.4 + 0.7 * peakGate) * dt * 2.8;
-  // Rock wrap: steep local bed (stamped boulders) sheds whitewater and swirls.
   let bedGrad = length(vec2<f32>(br - bl, bu - bd)) * invDx * 0.5;
   let rockFace = smoothstep(0.35, 1.4, bedGrad) * smoothstep(-0.9, 0.2, b);
-  foamN += rockFace * (0.25 + 0.9 * sp / max(celer, 0.2)) * (0.3 + 0.7 * Fr) * dt * 3.2;
-  brk = max(brk, rockFace * smoothstep(0.4, 1.1, Fr) * 0.65);
+  foamN += rockFace * (0.2 + 0.8 * sp / max(celer, 0.2)) * (0.3 + 0.7 * Fr) * dt * 2.6;
+  brk = max(brk, rockFace * smoothstep(0.4, 1.1, Fr) * 0.55);
   let dilute = smoothstep(0.28, 0.035, foamN);
-  // S is seaward: retreat = velocity toward the sea (backwash), not the run-up.
   let retreat = clamp(dot(vel, S) / max(sp, 0.15), 0.0, 1.0);
   foamN *= exp(-dt * (0.16 + 3.4 * max(div, 0.0) + 1.2 * abs(shear) + dilute * 1.15 + retreat * 0.55));
-  // A uniform collapse stays a clear sheet. Only the locally stronger
-  // parts of the front throw foam, so the wash is not one white band.
-  foamN = clamp(foamN + spill * (0.15 + 1.85 * peakGate * cuspBias), 0.0, 1.3);
+  foamN = clamp(foamN, 0.0, 1.25);
 
   var ground = wet0.z;
-  // Residual foam left on sand after the sheet retreats — successive waves stack lace.
   if (hN < 0.035 && b > -0.08 && foamN > 0.025) {
     ground = max(ground, foamN * (0.9 + 0.4 * peakGate));
     foamN *= 0.48;
   }
-  // Wet film linger: damp sand stays dark after water leaves. Backwash deposits a longer
-  // tongue than a still sheet, so activity (speed + retreat) fattens the residual.
   let back = clamp(dot(vel, S) / max(sp, 0.12), 0.0, 1.0);
   if (hN < 0.028 && b > -0.08 && wet0.x > 0.35) {
     ground = max(ground, (0.1 + 0.14 * back + 0.08 * clamp(sp * 0.15, 0.0, 1.0)) * wet0.x);
   }
-  // Slower dry-out so the wet strip remains readable between successive bores.
   ground *= exp(-dt * 0.032);
   if (hN > 0.08) { ground *= exp(-dt * 0.28); }
 
-  // Coupling is a soft seaward band, not a hard row wall or a painted foam strip.
-  // Depth for the drive uses the local bed so shoaled swell, not deep-water FFT phase,
-  // sets the mass and momentum that feed run-up and backwash.
+  // Authoritative coastal handoff: Dirichlet on a wide seaward rim so FFT/Gerstner
+  // swell injects into the conservative SWE — fluid then carries crash → run-up → retreat.
+  // Interior cells stay HLL (no wide soft Gerstner overwrite).
   let off = f32(z) / max(U.nz - 1.0, 1.0);
-  // Wider/softer row blend + depth gate: drive submerged cells, leave dry beach to SWE.
-  let wRow = smoothstep(0.32, 0.92, off);
-  let wDepth = smoothstep(0.08, -0.55, b);
+  let wRow = smoothstep(0.72, 0.96, off);
+  let wDepth = smoothstep(0.1, -0.6, b);
   let w = wRow * wDepth;
-  if (w > 0.001 && b < 1.0) {
+  if (w > 0.001 && b < 0.6) {
     let depthDrive = max(-b, 0.25);
     let sea = ocean(cellPos(x, z), depthDrive);
-    let hO = max(sea.x - b, 0.0);
-    // Soft mix so SWE still evolves inside the band (avoids freezing a static ridge).
-    let couple = w * 0.86;
-    // Miche-like seed: depth-limited H/h + orbital steepness — same family as seaAt trip.
-    // Prefer crest-positive collapse so dump follows a wave event, not a continuous push.
+    // Shared free-surface η ≈ sea.x (mean-sea frame); depth = η − bed.
+    // Crest bias so positive phases push a coherent bore inland (visible run-up).
+    let hO = max(sea.x * 1.32 - b, 0.0);
+    hN = mix(hN, hO, w);
+    vel = mix(vel, sea.yz * 1.38, w);
+    // Boundary foam seed from local steepness — foam is transported by SWE, not painted.
     let waveH = max(abs(sea.x) * 2.0, 0.02);
-    let depthLim = smoothstep(0.42, 0.68, waveH / max(depthDrive, 0.2));
+    let depthLim = smoothstep(0.28, 0.55, waveH / max(depthDrive, 0.2));
     let coupleSteep = abs(sea.x) * length(sea.yz) / max(depthDrive, 0.3);
-    let steepLim = smoothstep(0.08, 0.42, coupleSteep);
-    let crestGate = smoothstep(0.02, 0.14, sea.x);
-    let coupleBrk = max(depthLim, steepLim) * smoothstep(2.6, 0.22, depthDrive) * crestGate;
-    // Alongshore irregularity — cusps dump harder so run-up becomes tongues, not a bar.
-    let posC = cellPos(x, z);
-    let cusp = 0.55 + 0.9 * fract(sin(dot(posC, vec2<f32>(0.137, 0.091)) + U.time * 0.27) * 43758.17);
-    let brkEvt = coupleBrk * cusp;
-    // Collapse dump: inject mass + inland momentum (-S) so run-up follows the lip, not only
-    // the orbital Gerstner velocity (which never carried the hinge overturn).
-    let dumpH = brkEvt * (0.05 + 0.14 * max(sea.x, 0.0));
-    hN = mix(hN, hO + dumpH, couple);
-    let dumpV = -S * brkEvt * (1.8 + 2.4 * max(sea.x, 0.0)) + A * (cusp - 1.0) * brkEvt * 0.55;
-    vel = mix(vel, sea.yz + dumpV, couple);
-    foamN = mix(foamN, max(foamN, brkEvt * 1.1), couple * 0.78);
-    foamN *= mix(1.0, 0.9, couple);
+    let steepLim = smoothstep(0.04, 0.28, coupleSteep);
+    let crestGate = smoothstep(0.005, 0.08, sea.x);
+    let brkEvt = max(depthLim, steepLim) * smoothstep(2.8, 0.15, depthDrive) * crestGate;
+    foamN = mix(foamN, max(foamN, brkEvt * 1.35), w * 0.9);
   }
-  if (x < 6u || x + 6u >= NX) {
-    let fade = select(f32(x) / 6.0, f32(NX - 1u - x) / 6.0, x + 6u >= NX);
-    hN *= fade;
-    vel *= fade;
-    foamN *= fade;
+  // Alongshore ends are closed walls (flux already zero outside). Do not destroy
+  // mass with a fade — only damp foam that would otherwise pile on the rim.
+  if (x < 4u || x + 4u >= NX) {
+    let edge = select(f32(x) / 4.0, f32(NX - 1u - x) / 4.0, x + 4u >= NX);
+    foamN *= mix(0.35, 1.0, edge);
   }
 
   var wet = wet0.x;
@@ -533,8 +511,9 @@ async function createShore(device, world, anchor, shapeView, rocks) {
   function writeWaves(time, dt) {
     u[8] = time;
     u[9] = dt;
-    // Shore breakers track weather wind strength; heading stays with the place swell.
-    u[10] = wp.amp * (typeof env !== 'undefined' ? env.sea : 1);
+    // Shore breakers track weather wind strength; couple boost so Dirichlet
+    // energy survives mid-surf friction into a readable crash / run-up / retreat.
+    u[10] = wp.amp * (typeof env !== 'undefined' ? env.sea : 1) * 1.32;
     u[11] = wp.spd;
     u[12] = wp.dir;
     u[14] = Math.max(wp.frq, 0.2);
@@ -565,8 +544,9 @@ async function createShore(device, world, anchor, shapeView, rocks) {
   }
   function encode(enc, time, dt) {
     // CFL at dx 0.32 m and a ~8 m/s bore is about 0.016 s. Stay under it.
-    // The uniforms are written once: every step of one encoder would read the last write anyway.
-    const n = Math.max(1, Math.min(5, Math.ceil(dt / 0.012)));
+    // Cap at 3 substeps: at ~30 fps (dt≈0.033) that is still full CFL coverage; allowing
+    // 5 on hitch frames made slow frames do more SWE work and dig a deeper hole.
+    const n = Math.max(1, Math.min(3, Math.ceil(dt / 0.012)));
     writeWaves(time, dt / n);
     const steps = [];
     for (let s = 0; s < n; s++) {

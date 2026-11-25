@@ -167,11 +167,11 @@ const html = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Windward</title>
-<meta name="description" content="Procedural tropical island in the browser (WebGPU). Volumetric clouds, living ocean, cinematic spaces, and a synthesised score — one HTML file, no assets.">
+<meta name="description" content="A tropical island you can walk, swim and fly in the browser. One HTML file drawn with WebGPU: no images, no 3D models, no audio files, no libraries.">
 <meta property="og:title" content="Windward">
-<meta property="og:description" content="Procedural tropical island in the browser (WebGPU). Volumetric clouds, living ocean, cinematic spaces, and a synthesised score — one HTML file, no assets.">
+<meta property="og:description" content="A tropical island you can walk, swim and fly in the browser. One HTML file drawn with WebGPU: no images, no 3D models, no audio files, no libraries.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="https://jordanz00.github.io/Windward/media/clouds.jpg">
+<meta property="og:image" content="https://jordanz00.github.io/Windward/media/lagoon.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <style>${cssOut}</style>
 </head>
@@ -195,7 +195,7 @@ const html = `<!DOCTYPE html>
 <b>Walk</b><span>WASD or arrow keys. Shift runs. Space jumps. In water, Q dives and Space rises.</span>
 <b>Fly</b><span>F or Fly. W flies where you look. Space up, Q down, Shift faster.</span>
 <b>Places</b><span>Six places worth the trip. Pick one, or Shift and its number, and the camera jumps there.</span>
-<b>Spaces</b><span>1–7, or Spaces. Seven looks for this island. Keys ease the light and fly to each look's view. 7 is tonight's real moon. A Spaces card changes light only; Shift-click or double-click also flies.</span>
+<b>Spaces</b><span>1–7, or Spaces. Keys jump the camera to each look's view; weather, clouds, and hour stay put. A Spaces card changes light only; Shift-click or double-click also flies. 7 is Moonlit Island.</span>
 <b>Watch</b><span>Hide the interface. C does the same.</span>
 <b>Day</b><span>T next hour, R weather. N music. X sound effects.</span>
 <b>Shift 1 – 6</b><span>Palm beach, cliff overlook, from above, lagoon shallows, offshore, coral garden</span>

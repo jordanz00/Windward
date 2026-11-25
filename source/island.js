@@ -236,10 +236,11 @@ function fillDamp(data, res, span, j0, j1) {
         // and read as a dead flat pond. Keep a mild lee, not a mute.
         if (h > -2.2 && x > 40 && x < 210 && z > -80 && z < 70) shelter = Math.max(shelter, 0.28);
         damp = 1 - Math.min(shelter, 0.55);
-        // Keep full Gerstner amp through the breaker belt. Prior ss(0.08,-0.3) starved
-        // the surf (ankle depths already ~0.2–0.5 scale) so the beach sheet looked flat.
-        // Die out only on dry/almost-dry sand — seaAt / hinge own the steepening.
-        damp *= ss(0.18, -0.02, h);
+        // Keep full Gerstner amp through the breaker belt (bed ≳ −2.6 m). Prior
+        // ss(0.08,-0.3) starved ankle depths so the beach sheet looked flat.
+        // Die out only on dry/almost-dry sand — seaAt / hinge / breaker ribbon own steepening.
+        // Bounds check: stay at 1.0 for h ≤ −0.05 (full surf); taper only above that.
+        damp *= ss(0.2, -0.05, h);
       }
       data[o + 1] = damp;
     }
