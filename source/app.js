@@ -4253,6 +4253,13 @@ async function main() {
       try { frameBody(now); if (frames > 4) { PERF.cpuN = (PERF.cpuN || 0) + 1; PERF.cpuMs = (PERF.cpuMs || 0) + performance.now() - c0; } } catch (err) { window.__gpuerr = String(err && err.stack || err); console.error('FRAME', err); }
     }
     // Bench is deferred (critical gzip). Eval before install; B/G/?bench still work.
+    function ensureScore() {
+      if (typeof createScore === 'function') return true;
+      const el = document.getElementById('ww-deferred-score');
+      if (!el) return false;
+      (0, eval)(el.textContent);
+      return typeof createScore === 'function';
+    }
     function ensureBench() {
       if (typeof WW_BENCH !== 'undefined') return true;
       const el = document.getElementById('ww-deferred-bench');

@@ -1,0 +1,34 @@
+source/.wgsl-gate-last.json
+
+# Windward OS runtime (keep skeleton; ignore local execution residue)
+.windward/state/*
+!.windward/state/.gitkeep
+!.windward/state/README.md
+.windward/tasks/*
+!.windward/tasks/.gitkeep
+!.windward/tasks/README.md
+.windward/approvals/*
+!.windward/approvals/.gitkeep
+!.windward/approvals/README.md
+.windward/logs/*
+!.windward/logs/.gitkeep
+!.windward/logs/README.md
+.windward/reports/*
+!.windward/reports/.gitkeep
+!.windward/reports/README.md
+tools/company-os/node_modules/
+
+# Windward OS generated intelligence / audit (keep READMEs + .gitkeep)
+.windward/intelligence/**/*.json
+.windward/audit/*.jsonl
+.windward/reports/*-daily-simulated.md
+.windward/reports/*-improve-*.md
+# keep improvement baseline JSON tracked
+!.windward/improvement/*.json
+.windward/state/aei-last-cycle.json
+.windward/state/*.tmp
+tools/aei/node_modules/
+.windward/reports/aei-dashboard.md
+# AEI evidence SQLite (export JSON archives under AEI/evidence/archives/ instead)
+.windward/aei/*.sqlite
+.windward/aei/*.sqlite-*
