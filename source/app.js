@@ -1977,27 +1977,14 @@ let musicOn = true;
 // The music is not one of them and has its own switch.
 let sfxOn = true;
 try { sfxOn = localStorage.getItem('ww-sfx') !== '0'; } catch (e) {}
-let musicVol = 0.88;
+let musicVol = 0.72;
 // score.js ships as type=text/plain (AEI critical-gzip deferral). Eval it before createScore.
-// MUST stay at module scope — nested inside boot/frame leaves makeAudio unable to see it (silent music).
 function ensureScore() {
   if (typeof createScore === 'function') return true;
   const el = document.getElementById('ww-deferred-score');
   if (!el) return false;
   try { (0, eval)(el.textContent); } catch (err) { console.error(err); return false; }
   return typeof createScore === 'function';
-}
-function startIslandScore(ac, dest) {
-  if (!ensureScore()) return null;
-  try {
-    const sc = createScore(ac, dest);
-    sc.start();
-    sc.setAudible(musicOn && !muted, musicVol);
-    return sc;
-  } catch (err) {
-    console.error(err);
-    return null;
-  }
 }
 function makeAudio() {
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -2128,12 +2115,11 @@ function makeAudio() {
   // time, and how many are singing follows the hour, the rain, the wind and the trees.
   // A rasp: a band of noise beaten at a steady rate, which is how a cicada's tymbal and a
   // dragonfly's wings both make their sound.
-  // Soft amplitude breath — sine LFO only. Square AM edges read as metallic ticks.
   const rasp = (band, q, beatHz, depth, to) => {
     const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
     const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = band; f.Q.value = q;
     const beat = ac.createGain(); beat.gain.value = 1 - depth;
-    const o = ac.createOscillator(); o.type = 'sine'; o.frequency.value = beatHz;
+    const o = ac.createOscillator(); o.type = 'square'; o.frequency.value = beatHz;
     const od = ac.createGain(); od.gain.value = depth; o.connect(od); od.connect(beat.gain);
     const g = ac.createGain(); g.gain.value = 0;
     const p = ac.createStereoPanner(); p.pan.value = Math.random() * 1.6 - 0.8;
@@ -2144,31 +2130,31 @@ function makeAudio() {
   // Insects = subtle texture through insectEq (upper-mid cut + LPF), not muted.
   const bus = () => { const g = ac.createGain(); g.gain.value = 0; g.connect(insectEq.bus); return g; };
   const cicadas = bus(), crickets = bus(), chorus = bus();
-  for (let i = 0; i < 2; i++) {
-    // Soft tymbal air — mid band + low Q; slow bouts only (no HF ring / tick).
-    const g = rasp(1800 + Math.random() * 700, 1.35, 18 + Math.random() * 14, 0.14, cicadas);
+  for (let i = 0; i < 3; i++) {
+    // Soft tymbal air — lower band + low Q; no sharp HF ring.
+    const g = rasp(2400 + Math.random() * 900, 1.8, 55 + Math.random() * 45, 0.22, cicadas);
     const bout = () => {
       if (!api.alive) return;
-      const t = ac.currentTime, len = 10 + Math.random() * 16, peak = 0.05 + Math.random() * 0.08;
+      const t = ac.currentTime, len = 6 + Math.random() * 12, peak = 0.12 + Math.random() * 0.18;
       g.cancelScheduledValues(t); g.setValueAtTime(0.0001, t);
-      g.exponentialRampToValueAtTime(peak, t + 3.5 + Math.random() * 3);
-      g.setValueAtTime(peak, t + len); g.exponentialRampToValueAtTime(0.0001, t + len + 4.5);
-      setTimeout(bout, (len + 14 + Math.random() * 18) * 1000);
+      g.exponentialRampToValueAtTime(peak, t + 2.5 + Math.random() * 2.5);
+      g.setValueAtTime(peak, t + len); g.exponentialRampToValueAtTime(0.0001, t + len + 3.5);
+      setTimeout(bout, (len + 8 + Math.random() * 14) * 1000);
     };
-    setTimeout(bout, 8000 + Math.random() * 20000);
+    setTimeout(bout, Math.random() * 16000);
   }
   // Crickets: continuous soft mid air only — no pulsed oscillator ticks (those read as metallic clanks every few seconds).
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 3; i++) {
     const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
     const f = ac.createBiquadFilter();
-    f.type = 'bandpass'; f.frequency.value = 1600 + Math.random() * 500; f.Q.value = 1.1;
-    const g = ac.createGain(); g.gain.value = 0.025 + Math.random() * 0.03;
+    f.type = 'bandpass'; f.frequency.value = 2100 + Math.random() * 700; f.Q.value = 1.4;
+    const g = ac.createGain(); g.gain.value = 0.04 + Math.random() * 0.05;
     const p = ac.createStereoPanner(); p.pan.value = Math.random() * 1.6 - 0.8;
     src.connect(f); f.connect(g); g.connect(p); p.connect(crickets);
     src.start(0, Math.random() * 20);
   }
   // Far night chorus: soft shimmer, not a high resonant scream.
-  rasp(3200, 1.6, 12, 0.22, chorus).value = 0.45;
+  rasp(4200, 2.4, 28, 0.4, chorus).value = 0.7;
   const rain = bed('bandpass', 1600, 0.35, airEq.bus), patter = bed('bandpass', 420, 0.5, airEq.bus), rustle = bed('bandpass', 2400, 0.35, airEq.bus);
   const hum = (type, f) => {
     const o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
@@ -2218,17 +2204,18 @@ function makeAudio() {
     api.birds = (1 - s.dark) * dry * (0.5 + s.dawn) * (1 - 0.35 * blow);
     wetness = s.rain; woods = s.wood;
   };
-  // Soft leaf drip under trees in rain — rare, low, no metallic ping.
+  // Single drops off the leaves, heard one at a time under trees in light rain.
   const drip = () => {
     if (!api.alive) return;
-    if (!muted && wetness > 0.08 && Math.random() < 0.12 + woods * 0.25) {
+    if (!muted && wetness > 0.03 && Math.random() < 0.3 + woods) {
       const t = ac.currentTime, src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(), p = ac.createStereoPanner();
-      src.buffer = burst; f.type = 'lowpass'; f.frequency.value = 900 + Math.random() * 500; f.Q.value = 0.5; p.pan.value = Math.random() * 2 - 1;
-      g.gain.setValueAtTime(0.003 + Math.random() * 0.006, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08 + Math.random() * 0.06);
+      // Soft leaf drip — very low Q / quieter so it cannot read as a metal ping.
+      src.buffer = burst; f.type = 'bandpass'; f.frequency.value = 1200 + Math.random() * 1400; f.Q.value = 1.1; p.pan.value = Math.random() * 2 - 1;
+      g.gain.setValueAtTime(0.006 + Math.random() * 0.014, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06 + Math.random() * 0.06);
       src.connect(f); f.connect(g); g.connect(p); p.connect(master);
-      src.start(t, Math.random()); src.stop(t + 0.12);
+      src.start(t, Math.random()); src.stop(t + 0.1);
     }
-    setTimeout(drip, 180 + Math.random() * 520 / Math.max(wetness, 0.12));
+    setTimeout(drip, 40 + Math.random() * 260 / Math.max(wetness, 0.1));
   };
   drip();
   // Underwater bubble bursts (Abyssal): short rising blips while submerged.
@@ -2360,8 +2347,35 @@ function makeAudio() {
       c.start(t, Math.random()); c.stop(t + 0.3);
     }
   };
-  // No scheduled breaker crash pulses — looping noise beds carry the ocean.
-  // (Old crash() every 3–8 s / 14–28 s read as a repeating metallic bang.)
+  function crash() {
+    if (!api.alive || muted) return;
+    const t = ac.currentTime;
+    const amt = Math.max(api.shoreAmt || 0, 0.05);
+    // Soft low swell only — no sharp attack / mid bite that reads as a metallic hit.
+    const src = ac.createBufferSource(); src.buffer = burst;
+    const f = ac.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.setValueAtTime(280 + amt * 220, t);
+    f.frequency.exponentialRampToValueAtTime(90, t + 1.1 + Math.random() * 0.5);
+    const g = ac.createGain();
+    const loud = 0.018 + amt * 0.07;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(loud, t + 0.18 + Math.random() * 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4 + Math.random() * 0.7);
+    src.connect(f); f.connect(g); g.connect(oceanEq.bus);
+    src.start(t); src.stop(t + 2.2);
+    // Soft foam wash — low Q, capped HF, no ping.
+    const hs = ac.createBufferSource(); hs.buffer = burst;
+    const hf = ac.createBiquadFilter(); hf.type = 'bandpass';
+    hf.frequency.setValueAtTime(700 + Math.random() * 400, t);
+    hf.Q.value = 0.35;
+    const hl = ac.createBiquadFilter(); hl.type = 'lowpass'; hl.frequency.value = 2200; hl.Q.value = 0.25;
+    const hg = ac.createGain();
+    hg.gain.setValueAtTime(0.0001, t + 0.12);
+    hg.gain.exponentialRampToValueAtTime(0.008 + amt * 0.022, t + 0.35);
+    hg.gain.exponentialRampToValueAtTime(0.0001, t + 1.6 + Math.random() * 0.6);
+    hs.connect(hf); hf.connect(hl); hl.connect(hg); hg.connect(oceanEq.bus);
+    hs.start(t + 0.1); hs.stop(t + 2.1);
+  }
   function later(fn, lo, hi) {
     const wait = (lo + Math.random() * (hi - lo)) * 1000;
     setTimeout(() => {
@@ -2378,8 +2392,22 @@ function makeAudio() {
     b.x = api._birdEar.x + R(-25, 25); b.z = api._birdEar.z + R(-25, 25);
     sing(b, Math.random() < 0.35 ? 1 : 0);
   }, 7, 18);
-  // Eval deferred score.js then start Beneath the Blue (module-scope ensureScore).
-  score = startIslandScore(ac, under);
+  // Soft breaker accents — beds carry the ocean; rare only (old 3–8 s loop read as a repeating hit).
+  later(() => {
+    if ((api.shoreAmt || 0) < 0.22 && Math.random() > 0.18) return;
+    if ((api.shoreAmt || 0) < 0.5 && Math.random() > 0.45) return;
+    crash();
+  }, 14, 28);
+  try {
+    if (!ensureScore()) throw new Error('deferred score missing');
+    score = createScore(ac, under);
+    score.start();
+    // Open the bed immediately after unlock; frame loop keeps setAudible in sync.
+    if (score) score.setAudible(musicOn && !muted, musicVol);
+  } catch (err) {
+    console.error(err);
+    score = null;
+  }
   return api;
 }
 
@@ -2772,12 +2800,7 @@ function bootKeys() {
     }
     if (e.repeat) return;
     if (e.code === 'KeyM') { muted = !muted; if (audio) audio.master.gain.value = muted ? 0 : 0.9; }
-    if (e.code === 'KeyN') {
-      musicOn = !musicOn;
-      paintMusic();
-      if (score) score.setAudible(musicOn && !muted, musicVol);
-      else if (audio) score = startIslandScore(audio.ac, audio.under);
-    }
+    if (e.code === 'KeyN') { musicOn = !musicOn; paintMusic(); }
     if (e.code === 'KeyX') setSfx(!sfxOn);
     if (e.code === 'KeyH') statsEl.hidden = !statsEl.hidden;
     if (e.code === 'KeyF' && mode === 2 && !orbit) {
@@ -5082,21 +5105,22 @@ async function main() {
       if (!audio) {
         audio = makeAudio();
         if (audio) {
-          // User gesture: resume context, then force score audible (deferred chunk may race).
+          // User gesture: resume context, then ensure score is audible if create ran.
           audio.ac.resume().then(() => {
-            if (!score) score = startIslandScore(audio.ac, audio.under);
-            else score.setAudible(musicOn && !muted, musicVol);
+            if (score) score.setAudible(musicOn && !muted, musicVol);
+            else if (ensureScore()) {
+              try {
+                score = createScore(audio.ac, audio.under);
+                score.start();
+                score.setAudible(musicOn && !muted, musicVol);
+              } catch (err) { console.error(err); }
+            }
           }).catch(() => {});
         }
       } else if (audio.ac.state !== 'running') {
         audio.ac.resume().then(() => {
-          if (!score) score = startIslandScore(audio.ac, audio.under);
-          else score.setAudible(musicOn && !muted, musicVol);
+          if (score) score.setAudible(mode > 0 && musicOn && !muted, musicVol);
         }).catch(() => {});
-      } else if (!score) {
-        score = startIslandScore(audio.ac, audio.under);
-      } else {
-        score.setAudible(musicOn && !muted, musicVol);
       }
       document.body.classList.add('playing', 'studio');
       // In on foot, on the beach, with the mouse already looking: what anyone who has played
