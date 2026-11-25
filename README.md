@@ -6,7 +6,7 @@ In the same spirit as [Abyssal Garden](https://github.com/Noniv/abyssal-garden):
 
 **[Try it in your browser](https://jordanz00.github.io/Windward/)** · Best in Chrome. Also runs in Edge, and on a phone at Low detail. Free, MIT license.
 
-![Volumetric clouds over the tropical shore](media/clouds.jpg)
+![Palm Beach at golden hour — ocean and late sun](media/golden-hour.jpg)
 
 ## Try it
 

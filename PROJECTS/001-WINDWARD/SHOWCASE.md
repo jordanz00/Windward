@@ -20,7 +20,7 @@ Open the page. Wait for the coast to generate. Press Enter — you are on the be
 
 ## Stills
 
-README gallery (`media/clouds.jpg`, `media/shore-curl.jpg`, `media/flora.jpg`, `media/night-sky.jpg`, and siblings) plus the live demo. Real app frames, UI hidden — no AI art.
+README hero `media/golden-hour.jpg` (Palm Beach golden hour) plus gallery (`media/clouds.jpg`, `media/shore-curl.jpg`, `media/flora.jpg`, `media/night-sky.jpg`, and siblings) plus the live demo. Real app frames, UI hidden — no AI art.
 
 ## How it was made
 
