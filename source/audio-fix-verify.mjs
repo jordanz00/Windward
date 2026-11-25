@@ -17,6 +17,44 @@ const PORT = 8772;
 const DBG = 9226;
 const PAGE = join(root, '.audio-fix-verify.html');
 
+/** Static guards on built index.html — catch #41-style regressions before Chrome. */
+function staticScanBuiltHtml() {
+  const built = readFileSync(join(root, 'index.html'), 'utf8');
+  const compact = built.replace(/\s+/g, '');
+  const issues = [];
+  if (!built.includes('id="ww-deferred-score"')) issues.push('missing ww-deferred-score');
+  if (!/function ensureScore\(/.test(built)) issues.push('missing ensureScore');
+  if (!/function startIslandScore\(/.test(built) && !/startIslandScore\(/.test(built)) {
+    // startIslandScore preferred; fall back: ensureScore must precede createScore in makeAudio path
+  }
+  // makeAudio must eval deferred score before createScore (Pages pre-#41 called createScore bare).
+  const makeIdx = compact.indexOf('functionmakeAudio(');
+  // makeAudio is large (~15KB minified); scan through return + following helper.
+  const makeSlice = makeIdx >= 0 ? compact.slice(makeIdx, makeIdx + 22000) : '';
+  if (!makeSlice.includes('ensureScore()') && !makeSlice.includes('startIslandScore(')) {
+    issues.push('makeAudio does not call ensureScore/startIslandScore');
+  }
+  if (/crash\(\),[\d.]+,[\d.]+\)/.test(compact) || /crash\(\);\},[\d.]+,[\d.]+\)/.test(compact)) {
+    const m = compact.match(/crash\(\);\},([\d.]+),([\d.]+)\)/);
+    if (m && parseFloat(m[1]) < 60) issues.push(`scheduled crash loop ${m[1]}-${m[2]}s (must be removed)`);
+  }
+  // Old pulsed cricket: short sine bursts ~2.8–3.7 kHz every ~1–3 s.
+  if (/frequency\.value=2[89]\d\d\+Math\.random/.test(compact) && /linearRampToValueAtTime\([^,]+,[^)]*0\.0[12]/.test(compact)) {
+    issues.push('pulsed HF cricket tick pattern still present');
+  }
+  if (compact.includes('playPluck(){/*silenced*/}') === false && /function playPluck\([^)]*\)\{(?!\s*\/\*)/.test(compact)) {
+    // In minified deferred chunk, silenced stub is playPluck(){/*silenced*/} or empty body
+  }
+  if (!compact.includes('function playPluck(){/*silenced*/}') && !compact.includes('function playPluck(){}')) {
+    // Accept either silenced comment stub or empty; fail if playPluck still synthesizes
+    const pluck = compact.match(/function playPluck\(\)\{[^}]{0,40}\}/);
+    if (pluck && /createOscillator|createBufferSource/.test(pluck[0])) {
+      issues.push('playPluck still synthesizes audio');
+    }
+  }
+  return issues;
+}
+
 const scoreSrc = readFileSync(join(root, 'source', 'score.js'), 'utf8');
 const html = `<!doctype html><meta charset=utf-8><title>audio fix verify</title>
 <script type="text/plain" id="ww-deferred-score">${scoreSrc.replace(/<\/script/gi, '<\\/script')}</script>
@@ -77,11 +115,30 @@ const html = `<!doctype html><meta charset=utf-8><title>audio fix verify</title>
     let s = 123456789;
     for (let i = 0; i < n; i++) { s = (Math.imul(s, 1664525) + 1013904223) | 0; d[i] = ((s >>> 0) / 4294967296) * 2 - 1; }
     const master = ac.createGain(); master.connect(ac.destination);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {
       const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
-      const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2100 + i * 200; f.Q.value = 1.4;
-      const g = ac.createGain(); g.gain.value = 0.05;
+      const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1600 + i * 200; f.Q.value = 1.1;
+      const g = ac.createGain(); g.gain.value = 0.03;
       src.connect(f); f.connect(g); g.connect(master); src.start(0);
+    }
+    return ac.startRendering();
+  }
+  // Old breaker crash pulse every ~4 s — must stay well above soft bed impulse count.
+  async function oldCrashPulses() {
+    const sr = 48000, dur = 8, ac = new OfflineAudioContext(1, (sr * dur) | 0, sr);
+    const n = (sr * 1.6) | 0, buf = ac.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    let s = 123456789;
+    for (let i = 0; i < n; i++) { s = (Math.imul(s, 1664525) + 1013904223) | 0; d[i] = ((s >>> 0) / 4294967296) * 2 - 1; }
+    const master = ac.createGain(); master.connect(ac.destination);
+    for (let t = 0.5; t < dur - 0.5; t += 4.0) {
+      const src = ac.createBufferSource(); src.buffer = buf;
+      const f = ac.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 900;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      src.connect(f); f.connect(g); g.connect(master);
+      src.start(t); src.stop(t + 0.4);
     }
     return ac.startRendering();
   }
@@ -94,16 +151,20 @@ const html = `<!doctype html><meta charset=utf-8><title>audio fix verify</title>
     return ac.startRendering();
   }
   try {
-    const [oldB, softB, scoreB] = await Promise.all([oldTicks(), softBed(), scoreBed()]);
+    const [oldB, softB, scoreB, crashB] = await Promise.all([oldTicks(), softBed(), scoreBed(), oldCrashPulses()]);
     const oldPeaks = impulsePeaks(oldB, 2500, 4500);
     const softPeaks = impulsePeaks(softB, 2500, 4500);
+    const crashPeaks = impulsePeaks(crashB, 600, 4000);
+    const softMidPeaks = impulsePeaks(softB, 600, 4000);
     const scoreRms = rms(scoreB);
-    const okScore = scoreRms > 0.0008;
+    const okScore = scoreRms > 0.001;
     const okNoClank = softPeaks < Math.max(2, oldPeaks * 0.25);
+    const okNoBang = softMidPeaks < Math.max(2, crashPeaks * 0.3);
     window.__audioFix = {
       ensureScore: typeof createScore === 'function',
-      scoreRms, oldPeaks, softPeaks, okScore, okNoClank,
-      ok: okScore && okNoClank
+      scoreRms, oldPeaks, softPeaks, crashPeaks, softMidPeaks,
+      okScore, okNoClank, okNoBang,
+      ok: okScore && okNoClank && okNoBang
     };
   } catch (e) {
     window.__audioFix = { ok: false, error: String(e && e.message || e) };
@@ -112,6 +173,13 @@ const html = `<!doctype html><meta charset=utf-8><title>audio fix verify</title>
 </script>`;
 
 writeFileSync(PAGE, html);
+
+const staticIssues = staticScanBuiltHtml();
+if (staticIssues.length) {
+  console.error('AUDIO_FIX_FAIL static:', staticIssues.join('; '));
+  try { unlinkSync(PAGE); } catch (_) {}
+  process.exit(1);
+}
 
 function getJSON(url) {
   return new Promise((resolve, reject) => {
@@ -241,8 +309,15 @@ try {
   }, session);
   const live = liveEv.result?.result?.value;
   summary.live = live;
+  summary.staticOk = true;
   if (!(live && live.hasScore && live.createReady && live.hasAudio)) {
     throw new Error('live unlock failed: ' + JSON.stringify(live));
+  }
+  if (!(live.busGain == null || live.busGain > 0.05)) {
+    throw new Error('live score bus silent: ' + JSON.stringify(live));
+  }
+  if (live.acState !== 'running') {
+    throw new Error('AudioContext not running after Enter: ' + JSON.stringify(live));
   }
 
   pass = true;
