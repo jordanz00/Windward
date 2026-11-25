@@ -457,26 +457,102 @@ function makeAnemone(seed, lod) {
 }
 
 // A tuft of seagrass: ribbons from one root, each with its own lean.
+// Taller lagoon blades + stronger tip sway feed meshPlace underwater current bend.
 function makeSeagrass(seed, lod) {
   const rnd = seeded(seed * 37 + 11);
   const m = new Mesh();
-  const blades = lod ? 6 : 15, segs = lod ? 2 : 5;
+  const blades = lod ? 8 : 18, segs = lod ? 3 : 6;
   for (let b = 0; b < blades; b++) {
-    const a = rnd() * 6.2832, r0 = rnd() * 0.07;
-    const h = 0.2 + rnd() * 0.3, w = (lod ? 0.014 : 0.008) + rnd() * 0.004, lean = 0.1 + rnd() * 0.35, la = rnd() * 6.2832;
+    const a = rnd() * 6.2832, r0 = rnd() * 0.09;
+    const h = 0.28 + rnd() * 0.42, w = (lod ? 0.015 : 0.009) + rnd() * 0.005;
+    const lean = 0.12 + rnd() * 0.42, la = rnd() * 6.2832;
     const fx = Math.cos(a), fz = Math.sin(a);
     let prev = null;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const cx = Math.cos(a) * r0 + Math.cos(la) * lean * h * t * t, cz = Math.sin(a) * r0 + Math.sin(la) * lean * h * t * t;
-      const ww = w * (1 - 0.5 * t * t * t);
+      const cx = Math.cos(a) * r0 + Math.cos(la) * lean * h * t * t;
+      const cz = Math.sin(a) * r0 + Math.sin(la) * lean * h * t * t;
+      const ww = w * (1 - 0.55 * t * t * t);
       const g = 0.75 + rnd() * 0.3;
-      const c = [(0.035 + 0.11 * t) * g, (0.15 + 0.2 * t) * g, (0.05 + 0.04 * t) * g];
-      const l = m.v(cx - fz * ww, h * t - 0.02, cz + fx * ww, fx, 0.15, fz, c[0], c[1], c[2], t * t * 0.1, LEAF, -1, t);
-      const r = m.v(cx + fz * ww, h * t - 0.02, cz - fx * ww, fx, 0.15, fz, c[0], c[1], c[2], t * t * 0.1, LEAF, 1, t);
+      const c = [(0.03 + 0.1 * t) * g, (0.16 + 0.22 * t) * g, (0.05 + 0.05 * t) * g];
+      const sw = t * t * 0.18;
+      const l = m.v(cx - fz * ww, h * t - 0.02, cz + fx * ww, fx, 0.15, fz, c[0], c[1], c[2], sw, LEAF, -1, t);
+      const r = m.v(cx + fz * ww, h * t - 0.02, cz - fx * ww, fx, 0.15, fz, c[0], c[1], c[2], sw, LEAF, 1, t);
       if (prev) { m.tri(prev[0], l, prev[1]); m.tri(prev[1], l, r); }
       prev = [l, r];
     }
+  }
+  return m;
+}
+
+// Soft flowing seaweed ribbons — lagoon / reef-margin beds that lean with seaCurrent.
+function makeFlowingWeed(seed, lod) {
+  const rnd = seeded(seed * 53 + 29);
+  const m = new Mesh();
+  const strands = lod ? 4 : 9, segs = lod ? 4 : 8;
+  for (let s = 0; s < strands; s++) {
+    const a0 = rnd() * 6.2832, leanA = a0 + (rnd() - 0.5) * 0.8;
+    const h = 0.55 + rnd() * 0.95, w0 = 0.018 + rnd() * 0.022;
+    const curl = 0.12 + rnd() * 0.28;
+    let prev = null;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const bend = curl * t * t;
+      const cx = Math.cos(leanA) * bend * h, cz = Math.sin(leanA) * bend * h;
+      const ww = w0 * (1 - 0.6 * t);
+      const g = 0.65 + rnd() * 0.4;
+      const c = [0.03 * g, (0.2 + 0.32 * t) * g, (0.1 + 0.08 * t) * g];
+      const sw = t * t * (0.32 + 0.12 * rnd());
+      const fx = Math.cos(a0), fz = Math.sin(a0);
+      const l = m.v(cx - fz * ww, h * t - 0.015, cz + fx * ww, fx, 0.25, fz, c[0], c[1], c[2], sw, LEAF, -1, t);
+      const r = m.v(cx + fz * ww, h * t - 0.015, cz - fx * ww, fx, 0.25, fz, c[0], c[1], c[2], sw, LEAF, 1, t);
+      if (prev) { m.tri(prev[0], l, prev[1]); m.tri(prev[1], l, r); }
+      prev = [l, r];
+    }
+  }
+  return m;
+}
+
+// Underwater climbing vine: spiral stipe + leaflets. Sits on submerged rock / reef
+// (never dry beach) — the "vines growing up" that used to sit on shoreline sand.
+function makeSeaVine(seed, lod) {
+  const rnd = seeded(seed * 71 + 13);
+  const m = new Mesh();
+  const H = 0.95 + rnd() * 1.35;
+  const turns = 1.1 + rnd() * 1.6;
+  const rad = 0.05 + rnd() * 0.09;
+  const rings = lod ? 8 : 12;
+  const stipe = [];
+  for (let i = 0; i <= rings; i++) {
+    const t = i / rings;
+    const a = t * turns * 6.2832;
+    stipe.push([Math.cos(a) * rad * (0.5 + 0.55 * t), H * t - 0.03, Math.sin(a) * rad * (0.5 + 0.55 * t)]);
+  }
+  coralTube(m, stipe, 0.018, 0.01, lod ? 4 : 6, [0.1, 0.26, 0.12], 0, 1, 0.2, 0.55);
+  for (let k = 0; k < m.pos.length / 3; k++) {
+    m.uv[k * 2] = 3;
+    m.sway[k] = Math.max(m.sway[k], Math.max(0, m.pos[k * 3 + 1]) / H * 0.28);
+  }
+  const nLeaf = lod ? 8 : 16;
+  for (let i = 0; i < nLeaf; i++) {
+    const t = 0.1 + rnd() * 0.85;
+    const a = t * turns * 6.2832;
+    const px = Math.cos(a) * rad * (0.5 + 0.55 * t);
+    const pz = Math.sin(a) * rad * (0.5 + 0.55 * t);
+    const py = H * t;
+    const g = 0.7 + rnd() * 0.35;
+    const c = [0.04 * g, (0.22 + 0.2 * t) * g, 0.08 * g];
+    const side = rnd() < 0.5 ? -1 : 1;
+    const lw = 0.07 + rnd() * 0.1, lh = 0.015 + rnd() * 0.012;
+    const dx = Math.cos(a + side) * 0.55, dz = Math.sin(a + side) * 0.55;
+    const sw = t * t * 0.3;
+    const fx = dx, fz = dz;
+    const L = Math.hypot(fx, fz) || 1;
+    const nx = fx / L, nz = fz / L;
+    const l = m.v(px - nz * lh, py, pz + nx * lh, nx, 0.3, nz, c[0], c[1], c[2], sw, LEAF, -1, t);
+    const tip = m.v(px + nx * lw, py + 0.02, pz + nz * lw, nx, 0.35, nz, c[0] * 1.05, c[1] * 1.1, c[2], sw * 1.1, LEAF, 0, t + 0.05);
+    const r = m.v(px + nz * lh, py, pz - nx * lh, nx, 0.3, nz, c[0], c[1], c[2], sw, LEAF, 1, t);
+    m.tri(l, tip, r);
   }
   return m;
 }
@@ -486,30 +562,30 @@ function makeSeagrass(seed, lod) {
 function makeKelp(seed, lod) {
   const rnd = seeded(seed * 91 + 19);
   const m = new Mesh();
-  const blades = lod ? 2 : 4, segs = lod ? 4 : 8;
-  const h = 1.4 + rnd() * 1.8;
+  const blades = lod ? 3 : 6, segs = lod ? 5 : 10;
+  const h = 1.7 + rnd() * 2.2;
   // Central stipe.
   const stipe = [];
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;
-    stipe.push([(rnd() - 0.5) * 0.02 * t, h * t - 0.04, (rnd() - 0.5) * 0.02 * t]);
+    stipe.push([(rnd() - 0.5) * 0.025 * t, h * t - 0.04, (rnd() - 0.5) * 0.025 * t]);
   }
-  coralTube(m, stipe, 0.025, 0.012, lod ? 4 : 6, [0.12, 0.28, 0.1], 0, 1, 0.18, 0.4);
+  coralTube(m, stipe, 0.028, 0.012, lod ? 4 : 6, [0.12, 0.28, 0.1], 0, 1, 0.22, 0.5);
   for (let k = 0; k < m.pos.length / 3; k++) {
     m.uv[k * 2] = 3;
-    m.sway[k] = Math.max(m.sway[k], Math.max(0, m.pos[k * 3 + 1]) / h * 0.22);
+    m.sway[k] = Math.max(m.sway[k], Math.max(0, m.pos[k * 3 + 1]) / h * 0.32);
   }
   for (let b = 0; b < blades; b++) {
-    const a = b / blades * 6.2832 + rnd() * 0.4, lean = 0.15 + rnd() * 0.35;
+    const a = b / blades * 6.2832 + rnd() * 0.45, lean = 0.18 + rnd() * 0.42;
     let prev = null;
-    const bh = h * (0.55 + rnd() * 0.4), w0 = 0.04 + rnd() * 0.03;
+    const bh = h * (0.55 + rnd() * 0.42), w0 = 0.045 + rnd() * 0.035;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const cx = Math.cos(a) * lean * t * t * bh * 0.15, cz = Math.sin(a) * lean * t * t * bh * 0.15;
+      const cx = Math.cos(a) * lean * t * t * bh * 0.18, cz = Math.sin(a) * lean * t * t * bh * 0.18;
       const ww = w0 * (1 - 0.55 * t);
       const g = 0.7 + rnd() * 0.35;
-      const c = [0.04 * g, (0.22 + 0.28 * t) * g, 0.08 * g];
-      const sw = t * t * 0.28;
+      const c = [0.04 * g, (0.22 + 0.3 * t) * g, 0.08 * g];
+      const sw = t * t * 0.38;
       const fx = Math.cos(a), fz = Math.sin(a);
       const l = m.v(cx - fz * ww, bh * t - 0.02, cz + fx * ww, fx, 0.2, fz, c[0], c[1], c[2], sw, LEAF, -1, t);
       const r = m.v(cx + fz * ww, bh * t - 0.02, cz - fx * ww, fx, 0.2, fz, c[0], c[1], c[2], sw, LEAF, 1, t);
@@ -604,9 +680,11 @@ function plantReef(world, scatter, q) {
   const table = [7, 8].map((s) => scatter.proto([makeCoral(2, s, 0), makeCoral(2, s, 1), makeCoral(2, s, 2)], 0.6, [10, 30]));
   const mound = [9, 10].map((s) => scatter.proto([makeCoral(3, s, 0), makeCoral(3, s, 1), makeCoral(3, s, 2)], 1.2, [14, 40]));
   const anem = scatter.proto([makeAnemone(1, 0), makeAnemone(1, 1)], 0.25, [5]);
-  const grass = [1, 2, 3].map((s) => scatter.proto([makeSeagrass(s, 0), makeSeagrass(s, 1)], 0.45, [7]));
-  const kelpN = Math.max(4, Math.round((q.reef || 40) * 0.55));
-  const kelp = [1, 2, 3, 4].map((s) => scatter.proto([makeKelp(s, 0), makeKelp(s, 1)], 1.1, [16, 36]));
+  const grass = [1, 2, 3, 4].map((s) => scatter.proto([makeSeagrass(s, 0), makeSeagrass(s, 1)], 0.5, [8]));
+  const flow = [1, 2, 3, 5].map((s) => scatter.proto([makeFlowingWeed(s, 0), makeFlowingWeed(s, 1)], 0.7, [12, 28]));
+  const seaVine = [2, 6, 9, 14].map((s) => scatter.proto([makeSeaVine(s, 0), makeSeaVine(s, 1)], 0.95, [14, 32]));
+  const kelpN = Math.max(8, Math.round((q.reef || 40) * 0.85));
+  const kelp = [1, 2, 3, 4, 5].map((s) => scatter.proto([makeKelp(s, 0), makeKelp(s, 1)], 1.25, [18, 40]));
   const wreckA = scatter.proto([makeWreck(1, 0), makeWreck(1, 1)], 3.2, [40, 90]);
   const wreckB = scatter.proto([makeWreck(7, 0), makeWreck(7, 1)], 3.4, [42, 95]);
   const heads = [], blocks = [], sand = [], bubbles = [], wrecks = [];
@@ -690,19 +768,80 @@ function plantReef(world, scatter, q) {
   }
   // Kelp forest on rocky shelves (current-driven sway via mesh sway weights).
   let kelps = 0;
-  for (let i = 0; i < kelpN * 18 && kelps < kelpN; i++) {
+  for (let i = 0; i < kelpN * 22 && kelps < kelpN; i++) {
     const x = -180 + rnd() * 220, z = -40 + rnd() * 240;
     const bed = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
     const bio = reefBiome(x, z, bed);
-    if (bio.kelp < 0.18 || bed > -1.6 || bed < -7.5 || sl > 0.55) continue;
+    if (bio.kelp < 0.14 || bed > -1.6 || bed < -7.5 || sl > 0.55) continue;
     let near = false;
-    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < h.r + 1.2) { near = true; break; }
+    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < h.r + 1.0) { near = true; break; }
     if (near) continue;
-    const sc = 0.85 + rnd() * 0.7;
-    scatter.add(kelp[(rnd() * 4) | 0], x, bed, z, rnd() * 6.28, sc, [0.85 + rnd() * 0.25, 1, 0.8 + rnd() * 0.2], 1);
+    const sc = 0.9 + rnd() * 0.85;
+    scatter.add(kelp[(rnd() * kelp.length) | 0], x, bed, z, rnd() * 6.28, sc, [0.85 + rnd() * 0.25, 1, 0.8 + rnd() * 0.2], 1);
     blocks.push(x, bed + 0.7 * sc, z, 0.18 * sc);
-    if (rnd() < 0.35) bubbles.push(x, bed + 1.1 * sc, z);
+    if (rnd() < 0.4) bubbles.push(x, bed + 1.1 * sc, z);
+    // Satellite stipes for denser shelf thickets.
+    if (rnd() < 0.55 && kelps + 1 < kelpN) {
+      const a = rnd() * 6.28, d = 0.45 + rnd() * 1.1;
+      const x2 = x + Math.cos(a) * d, z2 = z + Math.sin(a) * d;
+      const b2 = fieldSample(world, x2, z2);
+      if (b2 < -1.7 && b2 > -7.2 && fieldSlope(world, x2, z2) < 0.55) {
+        const sc2 = sc * (0.55 + rnd() * 0.45);
+        scatter.add(kelp[(rnd() * kelp.length) | 0], x2, b2, z2, rnd() * 6.28, sc2, [0.85 + rnd() * 0.2, 1, 0.8 + rnd() * 0.15], 1);
+        blocks.push(x2, b2 + 0.6 * sc2, z2, 0.15 * sc2);
+        kelps++;
+      }
+    }
     kelps++;
+  }
+  // Sea vines climb submerged rock / reef feet — upward growth stays underwater, off dry sand.
+  let vinesUw = 0;
+  const vineBudget = Math.max(10, Math.round((q.reef || 40) * 1.1));
+  for (let i = 0; i < vineBudget * 28 && vinesUw < vineBudget; i++) {
+    const nearReef = rnd() < 0.62;
+    const x = nearReef ? 40 + rnd() * 220 : -160 + rnd() * 200;
+    const z = nearReef ? (rnd() - 0.5) * 220 : -30 + rnd() * 220;
+    const bed = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+    // Fully submerged only — never dry beach / intertidal sand.
+    if (bed > -0.95 || bed < -7.5 || sl > 0.62) continue;
+    const bio = reefBiome(x, z, bed);
+    const chance = 0.15 + 0.55 * bio.garden + 0.4 * bio.wall + 0.35 * bio.kelp;
+    if (rnd() > chance) continue;
+    let host = false;
+    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < h.r + 2.4 && Math.hypot(h.x - x, h.z - z) > h.r * 0.35) { host = true; break; }
+    if (!nearReef && bio.kelp < 0.2 && !host) continue;
+    if (nearReef && !host && bio.garden < 0.2 && bio.wall < 0.25) continue;
+    const sc = 0.85 + rnd() * 0.9;
+    const tint = [0.8 + rnd() * 0.25, 0.95 + rnd() * 0.2, 0.75 + rnd() * 0.2];
+    scatter.add(seaVine[(rnd() * seaVine.length) | 0], x, bed, z, rnd() * 6.28, sc, tint, 1);
+    blocks.push(x, bed + 0.45 * sc, z, 0.14 * sc);
+    vinesUw++;
+  }
+  // Flowing seaweed ribbons in lagoon / reef shallows (current sway).
+  let flows = 0;
+  const flowBudget = Math.max(24, Math.round((q.seagrass || 1000) * 0.22));
+  for (let i = 0; i < flowBudget * 16 && flows < flowBudget; i++) {
+    const x = 25 + rnd() * 200, z = (rnd() - 0.5) * 210;
+    const bed = fieldSample(world, x, z), sl = fieldSlope(world, x, z);
+    if (bed > -0.7 || bed < -4.2 || sl > 0.4) continue;
+    if (fieldDamp(world, x, z) > 0.6) continue;
+    const patch = vnoise(x * 0.05 + 4.2, z * 0.05);
+    if (patch < 0.32) continue;
+    let near = false;
+    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < h.r + 0.4) { near = true; break; }
+    if (near) continue;
+    const sc = 0.75 + rnd() * 0.85;
+    scatter.add(flow[(rnd() * flow.length) | 0], x, bed, z, rnd() * 6.28, sc, [0.85 + rnd() * 0.25, 1, 0.8 + rnd() * 0.2], 1);
+    if (rnd() < 0.45 && flows + 1 < flowBudget) {
+      const a = rnd() * 6.28, d = 0.3 + rnd() * 0.7;
+      const x2 = x + Math.cos(a) * d, z2 = z + Math.sin(a) * d;
+      const b2 = fieldSample(world, x2, z2);
+      if (b2 < -0.75 && b2 > -4.0) {
+        scatter.add(flow[(rnd() * flow.length) | 0], x2, b2, z2, rnd() * 6.28, sc * (0.55 + rnd() * 0.4), [0.85, 1, 0.85], 1);
+        flows++;
+      }
+    }
+    flows++;
   }
   // 1800s wreck habitats — partially buried hulls colonised by soft coral, whip, kelp, fish.
   const placeWreck = (proto, wx, wz, yaw, scale) => {
@@ -752,20 +891,33 @@ function plantReef(world, scatter, q) {
     if (rnd() < 0.4) bubbles.push(x, bed + 0.6 * sc, z);
     abyssN++;
   }
-  // Seagrass in meadows on the lagoon sand, away from the coral and out of the surf.
+  // Seagrass meadows on lagoon sand — denser beds, away from coral and out of the surf.
+  // Never on dry beach: bed must stay clearly submerged.
   let tufts = 0;
-  for (let i = 0; i < q.seagrass * 14 && tufts < q.seagrass; i++) {
-    const x = 20 + rnd() * 180, z = (rnd() - 0.5) * 200;
+  for (let i = 0; i < q.seagrass * 16 && tufts < q.seagrass; i++) {
+    const x = 20 + rnd() * 190, z = (rnd() - 0.5) * 210;
     const bed = fieldSample(world, x, z);
-    if (bed > -0.55 || bed < -2.6 || fieldSlope(world, x, z) > 0.3) continue;
+    if (bed > -0.65 || bed < -3.0 || fieldSlope(world, x, z) > 0.32) continue;
     if (fieldDamp(world, x, z) > 0.55) continue;
-    if (vnoise(x * 0.06 + 9, z * 0.06) < 0.5) { if (sand.length < 400 && bed > -1.9 && rnd() < 0.2) sand.push(x, bed, z); continue; }
+    const patch = vnoise(x * 0.06 + 9, z * 0.06) * 0.55 + vnoise(x * 0.11 + 2, z * 0.11) * 0.45;
+    if (patch < 0.38) { if (sand.length < 400 && bed > -1.9 && rnd() < 0.18) sand.push(x, bed, z); continue; }
     let near = false;
-    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < h.r + 0.6) { near = true; break; }
+    for (const h of heads) if (Math.hypot(h.x - x, h.z - z) < h.r + 0.5) { near = true; break; }
     if (near) continue;
     const g = 0.8 + rnd() * 0.4;
-    scatter.add(grass[(rnd() * 3) | 0], x, bed, z, rnd() * 6.28, 0.8 + rnd() * 0.7, [g, g, g * 0.9], 0.8 + rnd() * 0.5);
+    const sc = 0.85 + rnd() * 0.85 + patch * 0.35;
+    scatter.add(grass[(rnd() * grass.length) | 0], x, bed, z, rnd() * 6.28, sc, [g, g, g * 0.9], 0.85 + rnd() * 0.55);
     tufts++;
+    // Meadow fill — neighbouring blades for denser lagoon beds.
+    if (patch > 0.55 && rnd() < 0.6 && tufts < q.seagrass) {
+      const a = rnd() * 6.28, d = 0.2 + rnd() * 0.55;
+      const x2 = x + Math.cos(a) * d, z2 = z + Math.sin(a) * d;
+      const b2 = fieldSample(world, x2, z2);
+      if (b2 < -0.7 && b2 > -2.9 && fieldSlope(world, x2, z2) < 0.32) {
+        scatter.add(grass[(rnd() * grass.length) | 0], x2, b2, z2, rnd() * 6.28, sc * (0.5 + rnd() * 0.45), [g, g, g * 0.9], 0.8);
+        tufts++;
+      }
+    }
   }
   return { heads: heads, blocks: blocks, sand: sand, bubbles: bubbles, wrecks: wrecks };
 }

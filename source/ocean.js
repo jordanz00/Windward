@@ -230,7 +230,8 @@ function makeOceanH0(n, size, wind, A, band, target, slopeTarget, seed, tilt) {
       const sdz = wdx * 0.91 + wdz * 0.41;
       const swell = (kx * sdx + kz * sdz) / k;
       const longW = Math.max(0, Math.min(1, (lambda - 12) / 30));
-      const dir = spread(kd, 2) * 0.8 + spread(swell, 3) * (0.3 + longW * 0.15);
+      // Tighter wind-aligned spread so chop reads as one sea, not isotropic ripples.
+      const dir = spread(kd, 2.6) * 0.88 + spread(swell, 3.2) * (0.22 + longW * 0.12);
       // JONSWAP peak: concentrates energy near the wind-sea peak so swell is not white noise.
       const omega = Math.sqrt(g * k);
       const wp = Math.sqrt(g / Math.max(L * 0.85, 1e-3)); // peak ~ wind-sea

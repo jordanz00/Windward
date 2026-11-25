@@ -2,7 +2,8 @@
 // time at Saint Lucia (13.9094 N, 60.9789 W). The moon's phase and place are the real
 // ones for that hour on the UTC date, from the truncated ELP series in Meeus,
 // Astronomical Algorithms, chapters 22, 25 and 47. Stars are Hipparcos through
-// magnitude 6; the lines are the 88 IAU figures; the Milky Way follows the galactic plane.
+// magnitude 6 at real RA/Dec (so Orion, the Dipper, and the rest form from positions,
+// not stick-figure lines); the Milky Way follows the galactic plane.
 // Space 7, Moonlit Island, uses this moon by default.
 
 const ASTRO_LAT_DEG = 13.9094;
@@ -344,11 +345,10 @@ function astroB64(s) {
 }
 function astroCatalog() {
   if (astroCatalog.cache) return astroCatalog.cache;
-  const stars = [], lines = [];
+  const stars = [];
   try {
-    const sb = astroB64(ASTRO_STARS_B64), lb = astroB64(ASTRO_LINES_B64);
+    const sb = astroB64(ASTRO_STARS_B64);
     const sv = new DataView(sb.buffer, sb.byteOffset, sb.byteLength);
-    const lv = new DataView(lb.buffer, lb.byteOffset, lb.byteLength);
     for (let i = 0; i < sb.length; i += 6) {
       stars.push({
         ra: sv.getUint16(i, true) / 65535 * Math.PI * 2,
@@ -357,19 +357,10 @@ function astroCatalog() {
         bv: sv.getInt8(i + 5) / 50 - 0.4
       });
     }
-    for (let i = 0; i < lb.length; i += 8) {
-      lines.push([
-        lv.getUint16(i, true) / 65535 * 360,
-        lv.getUint16(i + 2, true) / 65535 * 180 - 90,
-        lv.getUint16(i + 4, true) / 65535 * 360,
-        lv.getUint16(i + 6, true) / 65535 * 180 - 90
-      ]);
-    }
   } catch (err) {
     stars.length = 0;
-    lines.length = 0;
   }
-  astroCatalog.cache = { stars: stars, lines: lines };
+  astroCatalog.cache = { stars: stars };
   return astroCatalog.cache;
 }
 function astroStarRGB(bv) {
@@ -388,18 +379,23 @@ function astroHash(n) {
 function astroSplat(acc, W, H, ra, dec, rgb, amp) {
   const px = ra / (Math.PI * 2) * W - 0.5;
   const py = (dec / Math.PI + 0.5) * H - 0.5;
-  const rad = astroClamp(1.05 + Math.sqrt(Math.max(amp, 0)) * 1.8, 1.15, 3.8);
-  const r = Math.ceil(rad * 2.2);
+  // Tight core + soft diffraction halo. Bright stars read as points, not blobs;
+  // faint ones stay single-pixel so the field keeps a real magnitude ladder.
+  const core = astroClamp(0.55 + Math.sqrt(Math.max(amp, 0)) * 0.95, 0.55, 2.4);
+  const halo = core * (1.55 + Math.min(amp, 2.5) * 0.35);
+  const r = Math.ceil(halo * 2.1);
   const cx = Math.round(px), cy = Math.round(py);
-  const s2 = 2 * rad * rad * 0.42;
+  const sCore = 2 * core * core * 0.28;
+  const sHalo = 2 * halo * halo * 0.55;
   for (let dy = -r; dy <= r; dy++) {
     const j = cy + dy;
     if (j < 0 || j >= H) continue;
     const ddy = py - j;
     for (let dx = -r; dx <= r; dx++) {
       const ddx = px - (cx + dx);
-      const w = Math.exp(-(ddx * ddx + ddy * ddy) / s2);
-      if (w < 0.03) continue;
+      const d2 = ddx * ddx + ddy * ddy;
+      const w = Math.exp(-d2 / sCore) + 0.18 * Math.exp(-d2 / sHalo);
+      if (w < 0.025) continue;
       const i = ((cx + dx) % W + W) % W;
       const o = (j * W + i) * 3;
       acc[o] += rgb[0] * amp * w;
@@ -408,20 +404,8 @@ function astroSplat(acc, W, H, ra, dec, rgb, amp) {
     }
   }
 }
-function astroDrawLine(acc, W, H, seg, rgb) {
-  const x0 = seg[0] / 360 * W - 0.5, y0 = (seg[1] + 90) / 180 * H - 0.5;
-  const x1 = seg[2] / 360 * W - 0.5, y1 = (seg[3] + 90) / 180 * H - 0.5;
-  const steps = Math.max(1, Math.round(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const ix = ((Math.round(x0 + (x1 - x0) * t) % W) + W) % W;
-    const iy = Math.round(y0 + (y1 - y0) * t);
-    if (iy < 0 || iy >= H) continue;
-    const o = (iy * W + ix) * 3;
-    acc[o] += rgb[0]; acc[o + 1] += rgb[1]; acc[o + 2] += rgb[2];
-  }
-}
 // Equirectangular celestial map. u is right ascension, v runs from the south pole to the north.
+// Only catalog stars + Milky Way — no constellation stick figures.
 function astroBake(W, H) {
   const acc = new Float32Array(W * H * 3);
   const sD = Math.sin(ASTRO_GN_DEC), cD = Math.cos(ASTRO_GN_DEC);
@@ -462,11 +446,10 @@ function astroBake(W, H) {
     }
   }
   const cat = astroCatalog();
-  const ink = [0.007, 0.009, 0.013];
-  for (let i = 0; i < cat.lines.length; i++) astroDrawLine(acc, W, H, cat.lines[i], ink);
   for (let i = 0; i < cat.stars.length; i++) {
     const s = cat.stars[i];
-    const amp = Math.pow(10, -0.4 * s.mag) * 0.42;
+    // Pogson flux, slightly lifted so mag ≤2 asterisms read under showcase exposure.
+    const amp = Math.pow(10, -0.4 * s.mag) * 0.58;
     astroSplat(acc, W, H, s.ra, s.dec, astroStarRGB(s.bv), amp);
   }
   const out = new Uint8Array(W * H * 4);

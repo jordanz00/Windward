@@ -1558,16 +1558,17 @@ struct GrassV {
     bend = ph * sqrt(max(uv.y, 0.0)) * lp.y;
     w.y -= bend * bend * 0.5 / max(lp.y, 0.02);
   } else {
+    // Seaweed / kelp: stronger along-length current bend + cross-flow flutter.
     let cur = seaCurrent(inst.xy);
     let id = fract(inst.x * 0.731 + inst.y * 0.417);
     let t = max(uv.y, 0.0);
-    let along = pow(t, 1.55) * lp.y;
-    let phase = F.time * (0.48 + 0.2 * id) + inst.x * 0.05 + t * 2.4;
-    let flutter = sin(phase) * 0.4 + sin(phase * 1.85 + id * 9.0) * 0.2;
-    dir = normalize(cur + vec2<f32>(-cur.y, cur.x) * (id - 0.5) * 0.55 + vec2<f32>(0.001));
-    bend = length(cur) * (0.55 + 0.45 * flutter) * along * 1.15;
+    let along = pow(t, 1.45) * lp.y;
+    let phase = F.time * (0.52 + 0.22 * id) + inst.x * 0.05 + inst.y * 0.03 + t * 2.6;
+    let flutter = sin(phase) * 0.42 + sin(phase * 1.85 + id * 9.0) * 0.24 + sin(phase * 0.41 + id * 3.0) * 0.14;
+    dir = normalize(cur + vec2<f32>(-cur.y, cur.x) * (id - 0.5) * 0.65 + vec2<f32>(0.001));
+    bend = length(cur) * (0.62 + 0.5 * flutter) * along * 1.35;
     ph = bend;
-    w.y -= bend * bend * 0.35 / max(lp.y, 0.05);
+    w.y -= bend * bend * 0.32 / max(lp.y, 0.05);
   }
   w.x += bend * dir.x;
   w.z += bend * dir.y;
@@ -1601,7 +1602,11 @@ struct GrassV {
   if (ground > 4.0) {
     col = mix(col, col * vec3<f32>(0.75, 0.85, 0.7), 0.35 * smoothstep(4.0, 10.0, ground));
   }
-  if (in.kind > 0.5) { col = mix(vec3<f32>(0.04, 0.16, 0.09), vec3<f32>(0.18, 0.34, 0.16), in.uv.y); }
+  if (in.kind > 0.5) {
+    // Underwater weed / kelp strips: olive → brighter tip, mottled for denser beds.
+    col = mix(vec3<f32>(0.035, 0.15, 0.085), vec3<f32>(0.16, 0.36, 0.15), in.uv.y);
+    col = mix(col, vec3<f32>(0.05, 0.22, 0.12), mott * 0.35);
+  }
   let rib = smoothstep(0.08, 0.0, abs(in.uv.x - 0.5));
   // Grass is a dark thing in full sun: a blade reflects about a tenth of what falls on it.
   // The foot of the blade is darker still, so a tuft reads as planted, not floating.
@@ -1728,9 +1733,10 @@ struct Sea {
 fn shoreK(k: f32, depth: f32, band: f32) -> vec2<f32> {
   let kh0 = k * depth;
   let th0 = tanh(min(kh0, 8.0));
-  let bunch = smoothstep(1.85, 0.32, kh0) * (1.0 - smoothstep(3.5, 4.5, band));
+  // Start wavelength bunching earlier in mid-depth so shoaling reads before the last metre.
+  let bunch = smoothstep(2.05, 0.28, kh0) * (1.0 - smoothstep(3.5, 4.5, band));
   let kHold = k / max(th0, 0.32);
-  let kUse = mix(k, min(kHold, k * 1.48), bunch);
+  let kUse = mix(k, min(kHold, k * 1.55), bunch);
   let th = tanh(min(kUse * depth, 8.0));
   return vec2<f32>(kUse, max(th, 0.045));
 }
@@ -1748,8 +1754,9 @@ fn shoalAmp(kUse: f32, th: f32, depth: f32) -> f32 {
   let kh2 = min(kh * 2.0, 10.0);
   let cgFrac = 0.5 * (1.0 + kh2 / max(sinh(kh2), 1e-3));
   let cgRel = max(sqrt(th) * cgFrac, 0.08) / 0.5;
-  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.42);
-  return mix(1.0, grow, smoothstep(1.7, 0.22, kh));
+  // Stronger mid-depth growth so approaching crests stand up before the hinge trips.
+  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.75);
+  return mix(1.0, grow, smoothstep(1.95, 0.15, kh));
 }
 
 fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
@@ -1760,6 +1767,9 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
   var jxz = 0.0;
   var brk = 0.0;
   let D = max(depth, 0.25);
+  // Heightfield damp can mute the surf/lagoon; keep a nearshore floor so shoaling
+  // and hinge lips still have amplitude to work with.
+  let scaleUse = max(scale, 0.7 * smoothstep(5.0, 0.6, D));
   let dist = length(F.camPos.xz - xz);
   let ampK = max(F.ctrl.x, 0.0);
   let spdK = F.ctrl.y;
@@ -1777,19 +1787,23 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     let k = 6.2831853 / len;
     let fade = waveGain(len, dist) * select(1.0, detailK, i >= 4);
     let feel = 1.0 - smoothstep(len * 0.08, len * 0.45, D);
-    var As = w.z * ampK * scale * fade * (1.0 + feel * 0.85);
+    var As = w.z * ampK * scaleUse * fade * (1.0 + feel * 0.85);
     let Q = min(steepQ(i) + feel * 0.45, 1.05);
     // Offshore the swell is long and low. It only stands up where the bottom shoals,
     // so the open sea is not a row of identical steep ridges.
-    let deepW = smoothstep(2.0, 9.0, D);
-    if (i < 2) { As *= mix(1.0, 0.26, deepW); }
+    // Mid-depth (≈1.6–7.5 m) starts standing up earlier so shoaling is visible approaching the beach.
+    // Keep a higher offshore floor so swell trains remain readable before the bed rises.
+    let deepW = smoothstep(1.6, 7.5, D);
+    if (i < 2) { As *= mix(1.0, 0.42, deepW); }
     if (i == 0) { As *= 0.4 + 0.6 * sin(dot(dir, xz) * 0.062 - F.time * 0.045); }
     if (i == 1) { As *= 0.5 + 0.5 * sin(dot(dir, xz) * 0.09 + 1.3); }
     if (i >= 6) { As *= 0.65 + 0.35 * sin(dot(dir, xz) * 0.041 + F.time * 0.03); }
     let steep = k * As * Q;
     if (steep > 0.72) { As *= 0.72 / steep; }
-    let collapse = 1.0 - smoothstep(0.4, 2.4, D);
-    As *= 1.0 - collapse * 0.38;
+    // Soften ankle-depth collapse so approaching crests still have height to curl —
+    // prior 0.38 cut left the beach sheet looking dead-flat in captures.
+    let collapse = 1.0 - smoothstep(0.35, 2.2, D);
+    As *= 1.0 - collapse * 0.16;
     // The spectral field owns the mid and short waves. These layers were the repeating ripples.
     if (i >= 3 && i < 6) { As *= 0.22; }
     // Depth-aware dispersion. Deep water (tanh → 1) matches the old sqrt(gk).
@@ -1838,21 +1852,21 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     // (steepen → pitch → curl → collapse) so the mesh folds into a real lip, then dumps.
     // Soft Iribarren ξ picks spill / plunge / collapse / surge kinematics.
     if (i <= 2 && kUse * D < 2.35) {
-      let crestS = sat(s * (1.15 + 0.2 * f32(1 - i)) - 0.12);
-      // Tip-only weight — the crest pitch-over must leave the mid-face behind or it never overhangs.
-      let tip = pow(sat(s), 3.2);
-      let faceHold = sat(0.55 + 0.55 * c) * (1.0 - tip * 0.85);
+      let crestS = sat(s * (1.15 + 0.2 * f32(1 - i)) - 0.08);
+      // Wider tip so the lip spans several shore-sheet verts (pow 2.35 was a one-vert ridge).
+      let tip = pow(sat(s), 1.55);
+      let faceHold = sat(0.5 + 0.6 * c) * (1.0 - tip * 0.62);
       let waveH = max(As * 2.0, 0.02);
       let gamma = 0.5 * max(thK, 0.22);
       let depthLim = sat((waveH / D - gamma) / 0.22);
       let steepLim = sat((kUse * As * Q - 0.32) / 0.24);
       let across = dot(vec2<f32>(-dir.y, dir.x), xz);
-      let section = smoothstep(0.38, 0.7, crestPack(across, f32(i)));
+      let section = smoothstep(0.28, 0.62, crestPack(across, f32(i)));
       let wxBoost = 1.0 + 0.55 * sat(F.mood.y) + 0.35 * sat(F.wx.x);
       let excess = sat(max(depthLim, steepLim) * wxBoost);
-      // Nearshore always allows a soft trip on a packed crest so the beach showcase reads.
-      let nearForce = smoothstep(2.6, 0.55, D) * tip * section * 0.55;
-      let trip = sat(max(excess, nearForce) * wxBoost) * section * crestS * fade;
+      // Nearshore trips crests often enough that the beach lip is common, not rare.
+      let nearForce = smoothstep(3.6, 0.35, D) * max(tip, crestS * 0.6) * max(section, 0.42) * 1.45;
+      let trip = sat(max(excess, nearForce) * wxBoost) * max(section, 0.45) * max(crestS, tip * 0.9) * fade;
       let slopeDrop = sampleField(xz + dirN * 2.2).x - sampleField(xz - dirN * 2.2).x;
       let beta = abs(slopeDrop) / 4.4;
       let xi = beta / sqrt(max(waveH / max(len, 1.0), 0.003));
@@ -1860,53 +1874,68 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
       let plungeW = smoothstep(0.18, 0.55, xi) * (1.0 - smoothstep(0.95, 1.65, xi));
       let crumpleW = smoothstep(0.95, 1.65, xi) * (1.0 - smoothstep(2.4, 3.4, xi));
       let surgeW = smoothstep(2.4, 3.4, xi);
-      // Prefer plunge/collapse near beach so the curl reads even on moderate foreshores.
-      let plungeBias = 0.35 + 0.65 * smoothstep(2.4, 0.7, D);
-      let spill = trip * spillW * (1.0 - plungeBias * 0.45);
-      let plunge = trip * max(plungeW, plungeBias * 0.55 * (1.0 - surgeW));
-      let crumpleBrk = trip * crumpleW;
-      let surge = trip * surgeW;
+      // Force plunge in the surf — tropical ξ often scores surge/spill and skips the lip.
+      let plungeBias = 0.72 + 0.28 * smoothstep(3.0, 0.45, D);
       let face = sat(0.55 + 0.55 * c);
-      let phase = sat(crestS * (0.35 + 0.65 * face) * (0.55 + 0.7 * excess + nearForce));
-      let steepen = smoothstep(0.0, 0.28, phase) * (1.0 - smoothstep(0.28, 0.48, phase));
-      let pitch = smoothstep(0.18, 0.48, phase) * (1.0 - smoothstep(0.48, 0.72, phase));
-      let curl = smoothstep(0.42, 0.72, phase) * (1.0 - smoothstep(0.72, 0.94, phase));
-      let fall = smoothstep(0.68, 1.0, phase);
-      let bandK = select(0.55, select(0.85, 1.45, i == 0), i == 1);
-      // Hinge jet: tip pitches seaward and drops; mid-face holds height → overhanging lip / tube.
-      let ang = (pitch * 1.55 + curl * 3.15) * plunge * bandK;
-      let lipR = As * (2.4 + 1.8 * excess) * bandK;
-      let wLip = tip * (0.5 + 0.5 * section);
+      // Stage the break along the crest cycle so the eye reads steepen→pitch→curl→fall,
+      // not a single white flash. Tip peaking drives curl; falling crest drives dump.
+      let phase = sat(crestS * (0.28 + 0.55 * face) * (0.45 + 0.55 * excess + nearForce * 0.85)
+        + tip * 0.22 * trip);
+      let steepen = smoothstep(0.0, 0.22, phase) * (1.0 - smoothstep(0.22, 0.4, phase));
+      let pitch = smoothstep(0.16, 0.4, phase) * (1.0 - smoothstep(0.4, 0.62, phase));
+      let curl = smoothstep(0.38, 0.62, phase) * (1.0 - smoothstep(0.62, 0.82, phase));
+      let fall = smoothstep(0.72, 1.0, phase);
+      let spill = trip * spillW * (1.0 - plungeBias * 0.9);
+      let plunge = trip * max(plungeW, plungeBias * (1.0 - surgeW * 0.15));
+      let crumpleBrk = trip * max(crumpleW, plungeBias * 0.4 * fall);
+      let surge = trip * surgeW * (1.0 - plungeBias * 0.7);
+      let bandK = select(0.95, select(1.3, 2.15, i == 0), i == 1);
+      // Hinge ~95–115°: keep sin high for forward pitch; avoid ang→π (ox→0).
+      // Curl owns the fold; fall only adds a little so the lip hangs before it dumps.
+      let fold = sat(pitch * 0.4 + curl * 1.2 + fall * 0.12);
+      let ang = clamp(1.0 + fold * 1.1 * plunge * bandK, 1.0, 2.0);
+      let lipR = As * (8.5 + 5.0 * excess) * bandK;
+      let wLip = tip * (0.4 + 0.6 * max(section, 0.55));
       let ox = sin(ang) * lipR * wLip;
-      let oy = (cos(ang) - 1.0) * lipR * wLip;
+      // Soft tip drop vs throw so the lip stays high while pitching shoreward.
+      let oy = (cos(ang) - 1.0) * lipR * wLip * 0.5;
       d.x += dirN.x * ox;
       d.z += dirN.y * ox;
       d.y += oy;
-      // Hold the face up while the tip curls — creates the pocket under the lip.
-      d.y += As * faceHold * plunge * (pitch * 0.35 + curl * 0.55) * bandK;
-      // Extra seaward tip throw past hinge (reads as collapse jet).
-      d.x += dirN.x * As * tip * plunge * (curl * 1.8 + fall * 1.2) * bandK;
-      d.z += dirN.y * As * tip * plunge * (curl * 1.8 + fall * 1.2) * bandK;
-      let dump = (crumpleBrk * (0.7 + fall) + plunge * fall * 1.45 + spill * 0.3) * bandK;
-      d.y -= As * dump * (0.7 + 0.55 * tip);
-      d.x += dirN.x * As * (dump * 0.85 + spill * 0.28 + surge * 0.45);
-      d.z += dirN.y * As * (dump * 0.85 + spill * 0.28 + surge * 0.45);
-      d.y -= As * spill * 0.14;
-      d.y += As * surge * crestS * 0.22;
-      let faceTilt = plunge * (steepen * 1.2 + pitch * 3.4 + curl * 4.6) + crumpleBrk * (1.45 + fall * 1.3)
-        + spill * 0.7 + surge * 0.35;
+      // Face hold builds the pocket under the overhanging tip — strongest during curl.
+      d.y += As * faceHold * plunge * (pitch * 0.7 + curl * 1.55) * bandK;
+      // Shoreward tip throw peaks in curl; fall adds throw as the lip pitches over.
+      d.x += dirN.x * As * tip * plunge * (2.8 + curl * 6.2 + fall * 2.2) * bandK;
+      d.z += dirN.y * As * tip * plunge * (2.8 + curl * 6.2 + fall * 2.2) * bandK;
+      // Keep the lip crest elevated during curl so it reads above the pocket.
+      d.y += As * tip * plunge * curl * 1.25 * bandK;
+      // Dump only on fall — do not erase the curl by collapsing early.
+      let dump = (crumpleBrk * fall * 1.35 + plunge * fall * fall * 2.6 + spill * fall * 0.55) * bandK;
+      d.y -= As * dump * (0.9 + 0.55 * tip);
+      d.x += dirN.x * As * (dump * 1.35 + spill * fall * 0.45 + surge * 0.4);
+      d.z += dirN.y * As * (dump * 1.35 + spill * fall * 0.45 + surge * 0.4);
+      d.y -= As * spill * 0.12;
+      d.y += As * surge * crestS * 0.2;
+      // Residual aerated body after collapse — whitewater that travels, not a vanishing crest.
+      let washBody = trip * fall * (0.55 + 0.45 * section) * (1.0 - tip * 0.65);
+      d.y += As * washBody * 0.28;
+      d.x += dirN.x * As * washBody * 0.55;
+      d.z += dirN.y * As * washBody * 0.55;
+      let faceTilt = plunge * (steepen * 1.6 + pitch * 4.6 + curl * 7.4) + crumpleBrk * fall * (2.2 + fall)
+        + spill * 0.7 + surge * 0.4;
       n.x -= dirN.x * faceTilt * wLip;
       n.z -= dirN.y * faceTilt * wLip;
-      n.y -= plunge * (pitch * 0.65 + curl * 1.7) * wLip + dump * 0.8 + spill * 0.22 + surge * 0.1;
-      // Overhanging tip: normal tips seaward/down so the face reads as a wall then a tube.
-      n.x -= dirN.x * tip * plunge * curl * 2.8 * bandK;
-      n.z -= dirN.y * tip * plunge * curl * 2.8 * bandK;
-      n.y -= tip * plunge * curl * 1.6 * bandK;
-      brk += trip * select(0.7, select(1.0, 1.45, i == 0), i == 1);
-      brk += plunge * (curl * 0.95 + fall * 2.15) + crumpleBrk * (0.95 + fall * 1.2) + spill * 1.05;
-      brk += surge * 0.14;
-      jxx += plunge * curl * wLip * 0.95;
-      jzz += plunge * curl * wLip * 0.55;
+      n.y -= plunge * (pitch * 0.9 + curl * 2.8) * wLip + dump * 1.2 + spill * 0.22 + surge * 0.1;
+      // Overhanging tip: normal tips shoreward/down so the face reads as a wall then a tube.
+      n.x -= dirN.x * tip * plunge * curl * 4.6 * bandK;
+      n.z -= dirN.y * tip * plunge * curl * 4.6 * bandK;
+      n.y -= tip * plunge * curl * 2.6 * bandK;
+      // brk: curl readable first; collapse/fall drives the whitewater + spray signal.
+      brk += trip * select(0.7, select(1.0, 1.4, i == 0), i == 1) * (0.35 + 0.65 * curl);
+      brk += plunge * (curl * 1.1 + fall * 3.4) + crumpleBrk * fall * (1.5 + fall * 1.2) + spill * fall * 1.4;
+      brk += surge * 0.12 + washBody * 0.85;
+      jxx += plunge * curl * wLip * 1.5;
+      jzz += plunge * curl * wLip * 0.9;
     }
     jxx += Q * dirN.x * dirN.x * wa * s;
     jzz += Q * dirN.y * dirN.y * wa * s;
@@ -2199,49 +2228,63 @@ fn seaLod(dist: f32, depth: f32) -> vec2<f32> {
   return o;
 }
 
-// Pack shore-sheet UVs toward the beach (uv.y→0) and lightly under the camera along-shore
-// so run-up and breakers keep short edges; far seaward cells stay coarse without a hard cut.
+// Pack shore-sheet UVs into the breaker belt (mid foreshore) with short edges for the lip.
 fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
-  let v = 1.0 - pow(max(1.0 - uv.y, 0.0), 1.55);
+  // Concentrate verts around waterline/surf (uv.y ~ 0.2–0.55) for lip resolution.
+  let v0 = uv.y;
+  let vBelt = 0.18 + 0.5 * pow(clamp((v0 - 0.06) / 0.78, 0.0, 1.0), 0.62);
+  let v = mix(v0, vBelt, 0.82);
   let along = uv.x * 2.0 - 1.0;
-  let k = 1.35;
+  let k = 0.85;
   let uAbs = (exp(k * abs(along)) - 1.0) / (exp(k) - 1.0);
   let u = sign(along) * uAbs * 0.5 + 0.5;
-  return vec2<f32>(mix(uv.x, u, 0.55), v);
+  return vec2<f32>(mix(uv.x, u, 0.28), v);
 }
-// The surf is its own surface, one vertex per stretch of the shoreline grid,
-// so the sheet can climb the sand instead of being painted onto the sea plane.
+// Fine shore mesh owns the surf: Gerstner + hinge overturn on submerged cells,
+// SWE swash on the sand. Prior vsShore zeroed hinge XZ and only drew bed>-0.025,
+// so curl lived only on the coarse ocean disk and never read as a lip.
 @vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
   let suv = shoreWarp(uv);
-  let xz = SH.origin + SH.along * (suv.x * SH.nx * SH.dx) + SH.sea * (suv.y * SH.nz * SH.dx);
-  let sh = shoreFetch(xz);
-  let field = sampleField(xz);
-  let depth = max(-field.x, 0.2);
-  let s = seaAt(xz, field.y, depth);
-  let distSh = length(xz - F.camPos.xz);
+  let xz0 = SH.origin + SH.along * (suv.x * SH.nx * SH.dx) + SH.sea * (suv.y * SH.nz * SH.dx);
+  let sh = shoreFetch(xz0);
+  let field0 = sampleField(xz0);
+  let depth0 = max(-field0.x, 0.2);
+  let s = seaAt(xz0, field0.y, depth0);
+  let distSh = length(xz0 - F.camPos.xz);
   let pixSh = max(distSh * F.tanHalf * 2.0 / max(F.res.y, 1.0), 0.004);
   let elevSh = max(abs(F.camPos.y), 0.15);
   let footSh = pixSh / pow(elevSh / max(distSh, 0.1), 0.6);
-  let wwSh = waveWeights(distSh, footSh, pixSh / max(elevSh / max(distSh, 0.1), 0.01), field.y);
-  // Same radial LOD as the open sea, so the sheet does not keep a crest the mesh dropped.
-  let geomSh = smoothstep(420.0, 55.0, distSh) * (1.0 - smoothstep(0.35, 2.4, footSh) * 0.55);
-  let lodSh = seaLod(distSh, depth);
-  var y = s.disp.y * mix(0.12, 1.0, wwSh.x) * geomSh * lodSh.x + shapeField(xz).x * wwSh.y * geomSh * lodSh.y;
+  let wwSh = waveWeights(distSh, footSh, pixSh / max(elevSh / max(distSh, 0.1), 0.01), field0.y);
+  let geomSh = smoothstep(520.0, 40.0, distSh) * (1.0 - smoothstep(0.45, 2.8, footSh) * 0.4);
+  let lodSh = seaLod(distSh, depth0);
+  // Full Gerstner/hinge on the fine sheet — never LOD-starve the lip at beach range.
+  let gs = geomSh * max(wwSh.x, 0.95) * max(lodSh.x, 0.98);
+  // Sand-only blend. Keep full seaAt through the breaker belt and into ankle depth;
+  // SWE owns the thin film once the bed is truly above the waterline.
+  let toSand = smoothstep(-0.12, 0.08, field0.x);
+  let hingeK = 1.0 - toSand * 0.05;
+  // Depth-weighted sheet boost so curling lips read at beach range (incl. SwiftShader).
+  let surfBelt = (1.0 - toSand) * smoothstep(3.2, 0.15, depth0);
+  let lipBoost = 1.0 + (1.05 + 1.15 * sat(s.brk)) * surfBelt;
+  let xz = xz0 + s.disp.xz * gs * hingeK * lipBoost;
+  let field = sampleField(xz);
+  var ySea = s.disp.y * gs * lipBoost + shapeField(xz0).x * wwSh.y * geomSh * max(lodSh.y, 0.55);
+  ySea += shapeField(xz).x * 0.35 * (1.0 - toSand) * geomSh;
+  var yBeach = ySea;
   if (sh.inside > 0.5) {
-    // Stay on the sand even where the sheet is dry, so a triangle never stretches
-    // from the water up across the sky. Dry fragments are discarded later.
-    // In the water the sheet is the simulated surface. On the sand it sits on the
-    // smooth beach, so the small bed ridges do not draw contour lines.
-    // A thin film on the smooth beach. Slight front lift where foam piles —
-    // organic swash thickness, not a flat plate of water on sand.
     let hVis = min(sh.h, 0.28);
-    let laceLift = sh.foam * 0.035 * smoothstep(0.02, 0.12, sh.h);
-    let frontLift = length(sh.vel) * 0.008 * smoothstep(0.01, 0.08, sh.h);
-    y = field.x + hVis + 0.016 + laceLift + frontLift;
+    let laceLift = sh.foam * 0.04 * smoothstep(0.02, 0.12, sh.h);
+    let frontLift = length(sh.vel) * 0.01 * smoothstep(0.01, 0.08, sh.h);
+    let sheetY = field.x + hVis + 0.016 + laceLift + frontLift;
+    // Break → wash: keep the crest dominant; sheet only wins once water is a thin film on sand.
+    let film = smoothstep(0.12, 0.02, sh.h);
+    yBeach = max(sheetY, mix(ySea, sheetY, 0.08 + 0.35 * film));
   }
+  // Prefer seaAt through the surf; only blend to SWE once truly on sand.
+  let y = mix(ySea, yBeach, toSand * toSand);
   var o: WaterV;
   o.world = vec3<f32>(xz.x, y, xz.y);
-  o.xz0 = xz;
+  o.xz0 = xz0;
   o.sheet = 1.0;
   o.clip = F.viewProj * vec4<f32>(o.world, 1.0);
   return o;
@@ -2365,10 +2408,12 @@ const DROP_SPRAY: u32 = 60000u;
     o.dist = d;
   } else {
     // Shore spray from overturn collapse: seaAt.brk (curl/fall) + shore foam/velocity.
+    // Large droplets from the lip; fine mist from the aerated wash — both inherit jet+wind.
     let k = ii - DROP_SPRAY;
     let stormOpen = sat(F.mood.y) * 0.55 + sat(F.wx.x) * 0.35;
+    let mistSlot = select(0u, 1u, (k % 3u) == 2u);
     let slotStride = select(4u, 2u, stormOpen > 0.45);
-    let slotOn = select(0u, 1u, (k % slotStride) == 0u);
+    let slotOn = select(0u, 1u, (k % slotStride) == 0u || mistSlot > 0u);
     let cellc = floor(F.camPos.xz / 3.6) + vec2<f32>(f32(k % 32u), f32(k / 32u)) - 16.0;
     let hh = hash22(cellc);
     let home = (cellc + hh) * 3.6;
@@ -2377,45 +2422,57 @@ const DROP_SPRAY: u32 = 60000u;
     var force = 0.0;
     var top = 0.0;
     var jet = vec2<f32>(0.0);
+    var breakDir = vec2<f32>(0.0);
     if (slotOn > 0u && fld.x < 0.15 && fld.x > -2.2) {
       let S = seaAt(home, fld.y, deep);
-      // Spray force tracks collapse / fold — Jacobian fold + brk from the hinge dump.
-      let focus = sat((1.0 - S.jac) * 1.05) + sat(length(S.nrm.xz) * 1.15) * 0.28;
-      force = sat(S.brk * 1.55 + focus * 0.4) * smoothstep(2.2, 0.45, deep) * (0.5 + 0.25 * stormOpen);
+      // Spray only from real collapse/fold — not random ocean freckles.
+      let focus = sat((1.0 - S.jac) * 1.25) + sat(length(S.nrm.xz) * 1.3) * 0.28;
+      let collapse = sat(S.brk * 1.35 + focus * 0.65);
+      force = collapse * smoothstep(2.2, 0.4, deep) * (0.5 + 0.35 * stormOpen);
+      // Mist layer needs less force; big droplets need a hard collapse.
+      if (mistSlot == 0u) { force *= smoothstep(0.22, 0.55, collapse); }
       top = S.disp.y;
-      // Lip jet: puffs leave along the overturn horizontal fold, then fall with gravity.
-      jet = S.disp.xz * sat(S.brk * 1.2) * 0.55;
+      breakDir = S.disp.xz;
+      // Lip jet inherits overturn throw; shoreward bias so spray leaves the crest, not floats.
+      jet = breakDir * sat(S.brk * 1.55) * 0.85;
       let sh = shoreFetch(home);
       if (sh.inside > 0.5) {
         let spd = length(sh.vel);
-        force = max(force, sat(sh.foam * 0.95) * smoothstep(0.45, 1.9, spd) * (0.4 + 0.2 * stormOpen));
-        force = max(force, smoothstep(-0.25, 0.25, sh.bed) * sat(sh.foam + spd * 0.1) * 0.32);
-        force = max(force, smoothstep(0.12, 0.35, sh.h) * smoothstep(0.7, 1.4, spd / max(sqrt(9.81 * max(sh.h, 0.02)), 0.2)) * 0.22);
+        force = max(force, sat(sh.foam * 0.9) * smoothstep(0.5, 2.0, spd) * (0.35 + 0.25 * stormOpen));
+        force = max(force, smoothstep(-0.2, 0.2, sh.bed) * sat(sh.foam + spd * 0.08) * 0.28);
         top = max(top, sh.eta);
-        jet += sh.vel * 0.12;
+        jet += sh.vel * 0.22;
+        breakDir += sh.vel * 0.15;
       }
     }
-    let life = fract(F.time * (0.42 + 0.28 * hh.x) + hh.y * 9.0);
+    let life = fract(F.time * (0.38 + 0.32 * hh.x) + hh.y * 9.0);
     let local = windAt(home);
     let blow = clamp(local / 5.0, 0.2, 2.2);
     let humid = sat(F.wx.w);
-    // Collapse throw: higher arc early in life, then falls; rides the lip jet seaward.
-    let rise = (0.12 + 0.85 * pow(life, 0.42) * (0.65 + 0.55 * hh.y) * (0.55 + 0.7 * force))
-      * (0.5 + 0.4 * blow) - 1.05 * life * life;
-    let w = vec3<f32>(home.x + jet.x * life * 2.2, max(top, 0.0) + rise, home.y + jet.y * life * 2.2)
-      + vec3<f32>(F.wind.x, 0.0, F.wind.y) * local * 0.4 * life * 1.4
-      + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * 0.025, 0.0);
-    let rad = (0.12 + 0.48 * life) * (0.55 + 0.55 * hh.x) * (0.75 + 0.2 * humid) * (1.0 + 0.15 * stormOpen);
-    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(0.035, force);
+    // Gravity arc: launch with break jet, then fall; wind advects after leave.
+    let launch = 0.55 + 0.9 * force * (0.4 + 0.6 * hh.y);
+    let rise = (0.1 + launch * pow(life, 0.38) * (select(0.55, 1.15, mistSlot == 0u)))
+      * (0.45 + 0.5 * blow) - (1.05 + 0.35 * force) * life * life;
+    let throwK = select(1.6, 3.2, mistSlot == 0u);
+    let w = vec3<f32>(
+      home.x + jet.x * life * throwK + breakDir.x * life * 0.35,
+      max(top, 0.0) + rise,
+      home.y + jet.y * life * throwK + breakDir.y * life * 0.35
+    )
+      + vec3<f32>(F.wind.x, 0.0, F.wind.y) * local * 0.55 * life * life * 1.6
+      + vec3<f32>(0.0, sin(life * 9.0 + hh.x * 20.0) * select(0.015, 0.04, mistSlot == 0u), 0.0);
+    let rad = select(0.06 + 0.22 * life, 0.16 + 0.62 * life, mistSlot == 0u)
+      * (0.5 + 0.55 * hh.x) * (0.7 + 0.25 * humid) * (1.0 + 0.2 * stormOpen);
+    pos = w + (F.right * c.x + F.upv * c.y) * rad * step(select(0.04, 0.05, mistSlot == 0u), force);
     let mu = dot(normalize(w - F.camPos), F.sunDir);
-    // Backlit spray glows; otherwise a soft grey veil.
-    let back = pow(sat(mu), 4.0);
-    light = F.amb.rgb * 0.45
+    // Backlit spray glows; mist is a softer veil.
+    let back = pow(sat(mu), select(3.2, 4.5, mistSlot == 0u));
+    light = F.amb.rgb * select(0.55, 0.4, mistSlot == 0u)
       + F.sunCol * sunVis(w) * cloudShade(w.xz, 0.0)
-        * (0.12 + 1.4 * back);
+        * (0.1 + select(1.1, 1.55, mistSlot == 0u) * back);
     o.dist = length(w - F.camPos);
-    a = force * sin(life * 3.14159) * (0.08 + 0.07 * humid + 0.04 * stormOpen) * blow
-      * smoothstep(2.0, 10.0, o.dist) * smoothstep(42.0, 14.0, o.dist);
+    a = force * sin(life * 3.14159) * (select(0.07, 0.13, mistSlot == 0u) + 0.08 * humid + 0.05 * stormOpen) * blow
+      * smoothstep(1.2, 8.0, o.dist) * smoothstep(select(36.0, 52.0, mistSlot == 0u), 10.0, o.dist);
     o.form = 2.0;
   }
   // Rising underwater bubbles (form≈3): reuse spray lattice slots when submerged.
@@ -2657,7 +2714,9 @@ fn cloudSlab(y: f32, dy: f32, y0: f32, y1: f32) -> vec2<f32> {
   return vec2<f32>(min(ta, tb), max(ta, tb));
 }
 // One step of the volume march. rgb is in-scatter, a is the transmittance of the step.
-// An empty step is (0,0,0,1). Bottoms stay darker than tops; the rim is only a skin.
+// An empty step is (0,0,0,1). Beer–Lambert self-shadow + HG energy: bright tops, dark bases,
+// silver lining on thin sunward skin. Close to the eye, gain stays below the panorama so a
+// thick first step does not tonemap white.
 fn volStep(rd: vec3<f32>, t: f32, dt: f32, nLight: i32, ld: vec3<f32>, mu: f32, stormK: f32, sigK: f32, lightC: vec3<f32>, byMoon: bool, hEye: f32) -> vec4<f32> {
   let pm = (F.camPos + rd * t) * 0.001;
   let w = wxAt(pm.xz);
@@ -2669,26 +2728,29 @@ fn volStep(rd: vec3<f32>, t: f32, dt: f32, nLight: i32, ld: vec3<f32>, mu: f32, 
   let dC = cirrusDen(pm);
   if (dC > d) { d = dC; }
   if (d <= 0.003) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
-  // Skin first. A full light march only once the sample is thick enough to shadow itself.
-  // Close to the eye there is no air in front to dim this, so the skin is kept
-  // dimmer than the panorama or the first thick step tonemaps to white.
-  var tau = d * mix(4.0, 7.0, stormK);
-  if (d >= 0.42) {
+  // Self-shadow from a short chain toward the sun once the sample has body.
+  var tau = d * mix(3.4, 6.0, stormK);
+  if (d >= 0.1) {
     var marched = 0.0;
-    var sl = 0.055;
+    var sl = 0.045;
     var ll = 0.0;
-    for (var k = 0; k < 4; k++) {
-      if (k >= nLight) { break; }
+    let taps = max(nLight, 2);
+    for (var k = 0; k < 6; k++) {
+      if (k >= taps) { break; }
       marched += cloudDen(pm + ld * (ll + sl * 0.5)) * sl;
       ll += sl;
-      sl *= 2.1;
+      sl *= 1.9;
     }
-    tau = mix(tau, marched * sigK, smoothstep(0.42, 0.62, d));
+    tau = mix(tau, marched * sigK * 0.09, smoothstep(0.1, 0.48, d));
   }
   let E = cloudEnergy(mu, tau, d, stormK);
   let hr = sat((pm.y - F.cldA.z) / 2.5);
+  let hRel = sat((pm.y - F.cldA.z) / max(F.cldA.w - F.cldA.z, 0.05));
+  let topLit = mix(0.58, 1.2, smoothstep(0.06, 0.7, hRel));
+  let belly = mix(1.0, 0.68, smoothstep(0.42, 0.04, hRel) * (1.0 - sat(mu) * 0.4));
   let ambC = F.amb.rgb * mix(1.0, 0.42, stormK);
-  let Ls = lightC * select(sunT(pm.y, F.sunTrue.y), vec3<f32>(1.0), byMoon) * E * mix(0.34, 0.2, stormK) + ambC * (0.05 + 0.16 * hr);
+  let Ls = (lightC * select(sunT(pm.y, F.sunTrue.y), vec3<f32>(1.0), byMoon) * E * mix(0.38, 0.22, stormK)
+    + ambC * (0.04 + 0.18 * hr)) * (topLit * belly);
   let al = 1.0 - exp(-d * sigK * max(dt, 0.4) * 0.001);
   let keep = pathKeep(t * 0.001, hEye, pm.y);
   // The screen bolt pass skips this view once pad0 is set, so the flash is added here.
@@ -2737,9 +2799,9 @@ fn volMarch(rd: vec3<f32>, tA: f32, tB: f32, nNear: i32, nFar: i32, nLight: i32,
   var farM = 24000.0;
   if (dep < 0.99999) { farM = length(worldAt(vec2<f32>(px) + 0.5, dep) - F.camPos); }
   let cq = clamp(F.cloudOct, 1.0, 3.0);
-  let nNear = i32(8.0 + 6.0 * cq);
-  let nFar = i32(4.0 + 2.0 * cq);
-  let nLight = i32(1.0 + cq);
+  let nNear = i32(10.0 + 7.0 * cq);
+  let nFar = i32(5.0 + 3.0 * cq);
+  let nLight = i32(2.0 + cq);
   let stormK = sat(F.mood.y) * (0.45 + 0.55 * sat(F.wx.x));
   let sigK = C_SIG * mix(1.0, 1.35, stormK);
   let byMoon = F.sunTrue.y < -0.16;
@@ -2747,6 +2809,7 @@ fn volMarch(rd: vec3<f32>, tA: f32, tB: f32, nNear: i32, nFar: i32, nLight: i32,
   let stormDim = mix(1.0, 0.7, stormK) * mix(1.0, 0.9, sat(F.wx.x));
   let lightC = select(F.disc.rgb * stormDim * mix(vec3<f32>(1.0), vec3<f32>(0.78, 0.84, 0.98), stormK), vec3<f32>(0.62, 0.72, 0.9) * F.astroB.w * 1.7, byMoon);
   let mu = dot(rd, ld);
+  // Stable spatial dither (no frame scramble) so the half-res volume pass does not flicker.
   let jit = fract(52.9829189 * fract(dot(in.clip.xy, vec2<f32>(0.06711056, 0.00583715))));
   let hEye = max(F.camPos.y, 0.0) * 0.001;
   var acc = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -2823,9 +2886,11 @@ fn hidden(clip: vec4<f32>) -> bool {
   let sh0 = shoreFetch(in.xz0);
   let shoreD = in.xz0 - SH.origin;
   let shoreOff = dot(shoreD, SH.sea) / SH.dx / max(SH.nz, 1.0);
-  // Only water that has climbed onto the sand. Drawing this grid over the bay
-  // turns a few wet cells into a huge translucent facet.
-  let drawSheet = sh0.inside > 0.5 && sh0.bed > -0.025 && (sh0.h > 0.012 || sh0.foam > 0.08);
+  // Fine shore mesh owns the surf + wash. Submerged cells (bed ≤ −0.025) carry
+  // Gerstner/hinge curl; sand cells only draw when wet/foam. Open-ocean disk yields.
+  let onSand = sh0.bed > -0.025 && (sh0.h > 0.012 || sh0.foam > 0.08);
+  let inSurf = sh0.bed <= -0.025 && sh0.bed > -2.55;
+  let drawSheet = sh0.inside > 0.5 && (onSand || inSurf);
   if (in.sheet > 0.5 && !drawSheet) { discard; }
   if (in.sheet < 0.5 && drawSheet) { discard; }
   let field = sampleField(in.xz0);
@@ -2933,12 +2998,15 @@ fn hidden(clip: vec4<f32>) -> bool {
   let packM = max(crestPack(acrossW, 0.0), crestPack(acrossW, 1.0) * 0.85);
   let sectionF = smoothstep(0.46, 0.78, packM);
   let wakeN = n2(vec2<f32>(alongW * 0.085 - F.time * 0.16, acrossW * 0.028 + 2.0));
-  let wake = sectionF * shoal * smoothstep(0.4, 0.78, wakeN) * (0.18 + 0.55 * lipF + 0.45 * fold);
+  // Wake trails the collapse — gated by section so it is not a beach-wide paint strip.
+  let wake = sectionF * shoal * smoothstep(0.45, 0.82, wakeN) * (0.12 + 0.7 * lipF + 0.55 * fold);
   let crest = smoothstep(0.48, 0.16, S.jac) * smoothstep(0.2, 0.75, scale);
-  let whitecap = sat(crest - 0.55) * (1.0 - shoal * 0.75) * smoothstep(0.35, 0.7, lace);
-  // Whitewater from overturn activity: lip + fold burst + wake + open whitecaps.
+  // Open-ocean whitecaps stay sparse — do not bleach the whole sea to fake surf.
+  let whitecap = sat(crest - 0.62) * (1.0 - shoal * 0.85) * smoothstep(0.4, 0.75, lace);
+  // Whitewater from collapse: lip + fold burst + sectional wake. Not uniform crest paint.
   let stormFoam = 1.0 + 0.45 * sat(F.mood.y) + 0.25 * sat(F.wx.x);
-  let foamDens = sat(max(max(lipF * 1.05 + fold * 0.55, wake), whitecap * 0.45)) * max(F.mood.w, 0.0) * stormFoam
+  let collapseFoam = sat(lipF * 1.15 + fold * 0.85) * sectionF;
+  let foamDens = sat(max(max(collapseFoam, wake), whitecap * 0.35)) * max(F.mood.w, 0.0) * stormFoam
     * (1.0 - smoothstep(0.45, 2.4, foot) * 0.8) * (1.0 - band.z * 0.55);
   var foam = foamCover(in.xz0, foamDens, foot);
   var onSheet = 0.0;
@@ -2952,24 +3020,27 @@ fn hidden(clip: vec4<f32>) -> bool {
     let acrossF = shoreFetch(in.xz0 + vec2<f32>(-dir.y, dir.x) * 0.42).foam;
     let acrossF2 = shoreFetch(in.xz0 - vec2<f32>(-dir.y, dir.x) * 0.55).foam;
     let backF = shoreFetch(in.xz0 + dir * 0.55).foam;
-    let tongue = sat(sh.foam * 1.45 - max(acrossF, acrossF2) * 0.9);
-    let trail = sat(min(sh.foam, max(alongF, alongF2 * 0.85) * 1.25));
-    // Backwash: retreating flow leaves sparse fragments and thin lace behind the front.
-    let retreat = sat(-dot(dir, SH.sea)) * sat(backF * 0.95 - sh.foam * 0.3);
+    // Tongues: foam stronger than neighbors across-shore → fingers, not a continuous ribbon.
+    let tongue = sat(sh.foam * 1.75 - max(acrossF, acrossF2) * 1.05);
+    let trail = sat(min(sh.foam, max(alongF, alongF2 * 0.85) * 1.4));
+    // Backwash: seaward flow stretches lace into thin filaments toward the sea.
+    let retreat = sat(dot(dir, SH.sea)) * sat(backF * 1.15 - sh.foam * 0.2);
     let cusp = n2(in.xz0 * 1.7 + dir * F.time * 0.22) * 0.55 + n2(in.xz0 * 4.6 + vec2<f32>(F.time * 0.3, 2.0)) * 0.45;
     let grain = n2(in.xz0 * 6.2 + dir * F.time * 0.4 + vec2<f32>(2.0, 0.0));
-    let adv = sat(max(tongue, trail * 0.8) * mix(0.62, 1.08, cusp) * mix(0.75, 1.05, grain)
-      + retreat * 0.55 * grain);
+    let hole = smoothstep(0.15, 0.55, n2(in.xz0 * 2.4 + dir * 0.15));
+    let adv = sat(max(tongue, trail * 0.75) * mix(0.55, 1.12, cusp) * mix(0.7, 1.08, grain) * (0.55 + 0.55 * hole)
+      + retreat * 0.7 * grain * (0.4 + 0.6 * hole));
     let band = 1.0 - smoothstep(0.48, 0.82, shoreOff);
-    // Live foam density from the solver, shaped into organic lace — not a painted white strip.
-    let densS = max(adv, sh.foam * (0.55 + 0.45 * cusp)) * band;
-    let patches = foamCover(in.xz0 + dir * (F.time * 0.1), densS * 0.95, foot);
-    let patches2 = foamCover(in.xz0 - dir * 0.35 + vec2<f32>(-dir.y, dir.x) * 0.2, densS * 0.55, foot);
-    let laceS = sat(max(patches, patches2 * 0.7));
-    foam = sat(mix(foam * (1.0 - band * 0.9), laceS, band * smoothstep(0.015, 0.08, densS)));
+    // Live foam density from the solver — clear-water holes stay open between tongues.
+    // Require tongue/trail activity; raw sh.foam alone must not paint a continuous strip.
+    let densS = sat(adv * 1.15 + sh.foam * tongue * (0.35 + 0.4 * cusp) * hole) * band;
+    let patches = foamCover(in.xz0 + dir * (F.time * 0.1), densS * 0.9, foot);
+    let patches2 = foamCover(in.xz0 - dir * 0.35 + vec2<f32>(-dir.y, dir.x) * 0.2, densS * 0.45, foot);
+    let laceS = sat(max(patches, patches2 * 0.6));
+    foam = sat(mix(foam * (1.0 - band * 0.85), laceS, band * smoothstep(0.02, 0.09, densS)));
     onSheet = band * laceS;
     // Thin clear film of run-up — wet look without bleaching the sand white.
-    sheetFilm = band * smoothstep(0.004, 0.055, sh.h) * (1.0 - laceS * 0.55)
+    sheetFilm = band * smoothstep(0.004, 0.05, sh.h) * (1.0 - laceS * 0.7)
       * (0.55 + 0.45 * n2(in.xz0 * 3.1 + vec2<f32>(0.0, F.time * 0.08)));
   }
 
@@ -2977,8 +3048,8 @@ fn hidden(clip: vec4<f32>) -> bool {
     let churn = n2(in.xz0 * 2.1 + sh.vel * F.time * 0.45) * 0.5
       + n2(in.xz0 * 6.5 - vec2<f32>(F.time * 0.75, 0.0)) * 0.32
       + n2(in.xz0 * 14.0 + sh.vel.yx * F.time * 0.2) * 0.18;
-    // Breaking face: bright aerated wall, then torn lace — not a solid slab.
-    foam = max(foam, sat(bore * (0.55 + 1.2 * churn)));
+    // Bore aeration stays patchy — churn tears holes so it is not a solid white wall.
+    foam = max(foam, sat(bore * (0.35 + 1.0 * churn) * smoothstep(0.2, 0.65, churn)));
   }
   // Whitewash piles against raised bed (rocks stamped into the shore sim).
   if (sh.inside > 0.5 && sh.bed > -0.35) {
@@ -2986,7 +3057,9 @@ fn hidden(clip: vec4<f32>) -> bool {
       * (0.35 + 0.65 * n2(in.xz0 * 3.4 + sh.vel * 0.2));
     foam = max(foam, rockWash * (0.45 + 0.7 * sh.foam));
   }
-  if (in.sheet > 0.5 && sh.bed < -0.02) { discard; }
+  // Dry inland sheet only — submerged surf must stay (hinge curl lives there).
+  if (in.sheet > 0.5 && sh.bed < -2.55) { discard; }
+  if (in.sheet > 0.5 && sh.bed > -0.02 && sh.h < 0.008 && sh.foam < 0.05) { discard; }
 
   if (F.under > 0.5) {
     let lit0 = cloudShade(in.xz0, 0.0);
@@ -3116,16 +3189,16 @@ fn hidden(clip: vec4<f32>) -> bool {
     }
   }
   base = mix(deepLit, base, sat(F.mat.w));
-  // Breaking face: Beer transmission through the lip, then a little sun on the steep side.
-  // Plunge/collapse crests keep a greener face; spill is already mostly foam.
-  let faceBrk = sat(S.brk * 1.25) * smoothstep(2.8, 0.35, max(-bed, 0.0)) * (1.0 - foam * 0.7);
+  // Breaking face: dark translucent wall under the lip (pitch/curl), then aerated collapse.
+  // Keep the face readable — do not turn the whole crest into white before it dumps.
+  let faceBrk = sat(S.brk * 1.05 + fold * 0.55) * smoothstep(2.8, 0.35, max(-bed, 0.0)) * (1.0 - foam * 0.55);
   if (faceBrk > 0.02) {
-    let path = 0.35 + 0.85 * sat(S.disp.y);
-    let beer = exp(-W_KD * path * 6.2);
-    // Wavelength-aware face: turquoise through thin water, cooler as the lip thickens.
-    let faceCol = (shalLit * vec3<f32>(0.48, 1.08, 0.92) + F.sunCol * sat(1.0 - N.y) * sunLit * 0.32) * beer;
-    let faceAmt = faceBrk * mix(0.36, 0.52, sat(1.0 - foam * 1.2));
-    base = mix(base, faceCol + shalLit * 0.1, faceAmt);
+    let path = 0.4 + 1.05 * sat(S.disp.y) + 0.35 * fold;
+    let beer = exp(-W_KD * path * 6.8);
+    // Steep face: cooler/darker transmission; foam only where collapse has already aerated.
+    let faceCol = (shalLit * vec3<f32>(0.32, 0.78, 0.72) + F.sunCol * sat(1.0 - N.y) * sunLit * 0.28) * beer;
+    let faceAmt = faceBrk * mix(0.42, 0.28, sat(foam)) * (0.55 + 0.45 * sat(1.0 - N.y));
+    base = mix(base, faceCol + shalLit * 0.06, faceAmt);
   }
   // Crest subsurface when the sun sits behind the wave. A wrap, not a scatter integral.
   // Green-gold transmission (chlorophyll / shallow scatter), falls off with foam.

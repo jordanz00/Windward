@@ -95,9 +95,16 @@ check('galactic centre', Math.abs(g.b) * D < 1.2 && Math.abs(gl) * D < 1.2,
 
 const cat = ctx.astroCatalog();
 check('star count', cat.stars.length === 5044, String(cat.stars.length));
-check('line count', cat.lines.length === 751, String(cat.lines.length));
+check('no stick-figure lines', !cat.lines || cat.lines.length === 0, cat.lines ? String(cat.lines.length) : 'absent');
 const sirius = cat.stars.find((s) => Math.abs(s.mag + 1.44) < 0.1 && Math.abs(s.dec * D + 16.72) < 0.08);
 check('sirius', !!sirius && Math.abs(sirius.ra * D - 101.29) < 0.05, sirius ? (sirius.ra * D).toFixed(3) + ' ' + (sirius.dec * D).toFixed(3) + ' mag ' + sirius.mag.toFixed(2) : 'missing');
+// Orion belt (Alnitak / Alnilam / Mintaka) and Big Dipper pointers stay lit without atlas lines.
+function nearStar(raD, decD, mag, tol) {
+  return cat.stars.find((s) => Math.abs(s.ra * D - raD) < tol && Math.abs(s.dec * D - decD) < tol && Math.abs(s.mag - mag) < 0.35);
+}
+check('orion belt alnilam', !!nearStar(84.05, -1.20, 1.69, 0.15));
+check('ursa major dubhe', !!nearStar(165.93, 61.75, 1.79, 0.2));
+check('no ASTRO_LINES_B64', typeof grab('typeof ASTRO_LINES_B64') === 'string' && grab('typeof ASTRO_LINES_B64') === 'undefined');
 
 runInContext('astroClock = () => new Date("2025-03-04T00:00:00Z")', ctx);
 ctx.applySpace7();
