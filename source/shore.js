@@ -358,17 +358,19 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
     let sea = ocean(cellPos(x, z), depthDrive);
     // Shared free-surface η ≈ sea.x (mean-sea frame); depth = η − bed.
     // Crest bias so positive phases push a coherent bore inland (visible run-up).
-    let hO = max(sea.x * 1.32 - b, 0.0);
-    hN = mix(hN, hO, w);
-    vel = mix(vel, sea.yz * 1.38, w);
-    // Boundary foam seed from local steepness — foam is transported by SWE, not painted.
+    let crestGate = smoothstep(0.005, 0.08, sea.x);
     let waveH = max(abs(sea.x) * 2.0, 0.02);
     let depthLim = smoothstep(0.28, 0.55, waveH / max(depthDrive, 0.2));
     let coupleSteep = abs(sea.x) * length(sea.yz) / max(depthDrive, 0.3);
     let steepLim = smoothstep(0.04, 0.28, coupleSteep);
-    let crestGate = smoothstep(0.005, 0.08, sea.x);
+    // Same break family as seaAt/breakerEvt — collapse dumps mass/foam into SWE.
     let brkEvt = max(depthLim, steepLim) * smoothstep(2.8, 0.15, depthDrive) * crestGate;
-    foamN = mix(foamN, max(foamN, brkEvt * 1.35), w * 0.9);
+    let dumpK = 1.0 + 0.55 * brkEvt;
+    let hO = max(sea.x * (1.32 + 0.28 * brkEvt) - b, 0.0);
+    hN = mix(hN, hO, w);
+    vel = mix(vel, sea.yz * (1.38 + 0.45 * brkEvt) * dumpK, w);
+    // Foam seed only when the drive crest is tripping — transported by SWE, not painted.
+    foamN = mix(foamN, max(foamN, brkEvt * 1.55), w * 0.95 * clamp(brkEvt + 0.15, 0.0, 1.0));
   }
   // Alongshore ends are closed walls (flux already zero outside). Do not destroy
   // mass with a fade — only damp foam that would otherwise pile on the rim.

@@ -2045,11 +2045,12 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     n.y -= Q * wa * s;
     // Localized depth-limited breaking. Trip only where H/h or steepness crosses a
     // Miche-like limit AND the along-crest pack is high — patches, not a beach-wide bar.
-    // signalGate: break/foam/spray/ribbon cue fires in the surf belt (0.4–2.5 m).
-    // tipGate: single-valued heightfield tip throw stays mid/deep so the sheet+ribbon own the lip.
+    // signalGate: break cue + face steepen/pitch/collapse Y (surf belt).
+    // tipGate: horizontal tip throw on the single-valued heightfield (mid/deep only).
+    // Ribbon owns multi-valued overhang; sheet keeps vertical crest stand-up from signalGate.
     if (i <= 2 && kUse * D < 2.35) {
-      let signalGate = smoothstep(0.35, 2.4, D);
-      let tipGate = smoothstep(1.05, 3.3, D);
+      let signalGate = smoothstep(0.28, 2.55, D);
+      let tipGate = smoothstep(1.15, 3.4, D);
       let crestS = sat(s * (1.15 + 0.2 * f32(1 - i)) - 0.1);
       let tip = pow(sat(s), 2.15) * signalGate;
       let faceHold = sat(0.55 + 0.55 * c) * (1.0 - tip * 0.78);
@@ -2082,45 +2083,45 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
       let plunge = trip * max(plungeW, plungeBias * (1.0 - surgeW * 0.3)) * signalGate;
       let crumpleBrk = trip * max(crumpleW, plungeBias * 0.3 * fall) * signalGate;
       let surge = trip * surgeW * (1.0 - plungeBias * 0.55) * signalGate;
-      // Heightfield tip throw: restrained band; ribbon owns multi-valued overhang.
-      let bandK = select(0.45, select(0.65, 1.0, i == 0), i == 1) * tipGate;
+      let faceBandK = select(0.5, select(0.75, 1.1, i == 0), i == 1) * signalGate;
+      let tipBandK = select(0.4, select(0.55, 0.85, i == 0), i == 1) * tipGate;
       let fold = sat(pitch * 0.5 + curl * 1.0 + fall * 0.15);
-      let ang = clamp(0.75 + fold * 1.05 * plunge * bandK, 0.85, 1.85);
-      let lipR = As * (3.2 + 2.2 * excess) * bandK;
+      // Vertical crest: steepen → pitch → curl lift → collapse dump (signalGate).
+      d.y += As * faceHold * plunge * (steepen * 0.55 + pitch * 0.85 + curl * 1.15) * faceBandK;
+      d.y += As * tip * plunge * curl * 0.55 * faceBandK;
+      let dump = (crumpleBrk * fall * 1.15 + plunge * fall * fall * 1.65 + spill * fall * 0.45) * faceBandK;
+      d.y -= As * dump * (0.8 + 0.4 * tip);
+      d.y -= As * spill * 0.1;
+      d.y += As * surge * crestS * 0.14;
+      let washBody = trip * fall * (0.5 + 0.5 * section) * (1.0 - tip * 0.6);
+      d.y += As * washBody * 0.2;
+      // Horizontal tip throw: mid/deep heightfield only; ribbon owns surf overhang.
+      let ang = clamp(0.75 + fold * 1.05 * plunge * tipBandK, 0.85, 1.85);
+      let lipR = As * (3.0 + 2.0 * excess) * tipBandK;
       let wLip = tip * (0.35 + 0.65 * max(section, 0.5));
       let ox = sin(ang) * lipR * wLip;
-      let oy = (cos(ang) - 1.0) * lipR * wLip * 0.7;
+      let oy = (cos(ang) - 1.0) * lipR * wLip * 0.55;
       d.x += dirN.x * ox;
       d.z += dirN.y * ox;
       d.y += oy;
-      d.y += As * faceHold * plunge * (pitch * 0.5 + curl * 0.95) * bandK;
-      d.x += dirN.x * As * tip * plunge * (0.9 + curl * 2.0 + fall * 1.0) * bandK;
-      d.z += dirN.y * As * tip * plunge * (0.9 + curl * 2.0 + fall * 1.0) * bandK;
-      d.y += As * tip * plunge * curl * 0.45 * bandK;
-      let dump = (crumpleBrk * fall * 1.0 + plunge * fall * fall * 1.45 + spill * fall * 0.4) * bandK;
-      d.y -= As * dump * (0.75 + 0.35 * tip);
-      d.x += dirN.x * As * (dump * 0.9 + spill * fall * 0.3 + surge * 0.3);
-      d.z += dirN.y * As * (dump * 0.9 + spill * fall * 0.3 + surge * 0.3);
-      d.y -= As * spill * 0.08;
-      d.y += As * surge * crestS * 0.12;
-      let washBody = trip * fall * (0.5 + 0.5 * section) * (1.0 - tip * 0.6);
-      d.y += As * washBody * 0.16;
-      d.x += dirN.x * As * washBody * 0.32;
-      d.z += dirN.y * As * washBody * 0.32;
-      let faceTilt = plunge * (steepen * 1.1 + pitch * 2.6 + curl * 3.6) + crumpleBrk * fall * (1.2 + fall)
-        + spill * 0.4 + surge * 0.22;
-      n.x -= dirN.x * faceTilt * wLip;
-      n.z -= dirN.y * faceTilt * wLip;
-      n.y -= plunge * (pitch * 0.55 + curl * 1.4) * wLip + dump * 0.7 + spill * 0.15 + surge * 0.08;
-      n.x -= dirN.x * tip * plunge * curl * 2.0 * bandK;
-      n.z -= dirN.y * tip * plunge * curl * 2.0 * bandK;
-      n.y -= tip * plunge * curl * 1.2 * bandK;
-      // Break cue (ribbon / foam / spray / SWE) — not gated by tipGate.
-      brk += trip * select(0.55, select(0.85, 1.15, i == 0), i == 1) * (0.4 + 0.6 * curl);
-      brk += plunge * (curl * 0.95 + fall * 2.2) + crumpleBrk * fall * (1.1 + fall) + spill * fall * 1.05;
-      brk += surge * 0.1 + washBody * 0.65;
-      jxx += plunge * curl * wLip * 0.85;
-      jzz += plunge * curl * wLip * 0.5;
+      d.x += dirN.x * As * tip * plunge * (0.7 + curl * 1.6 + fall * 0.85) * tipBandK;
+      d.z += dirN.y * As * tip * plunge * (0.7 + curl * 1.6 + fall * 0.85) * tipBandK;
+      d.x += dirN.x * As * (dump * 0.95 + spill * fall * 0.32 + surge * 0.32 + washBody * 0.35);
+      d.z += dirN.y * As * (dump * 0.95 + spill * fall * 0.32 + surge * 0.32 + washBody * 0.35);
+      let faceTilt = plunge * (steepen * 1.2 + pitch * 2.8 + curl * 3.8) + crumpleBrk * fall * (1.25 + fall)
+        + spill * 0.45 + surge * 0.25;
+      n.x -= dirN.x * faceTilt * wLip * signalGate;
+      n.z -= dirN.y * faceTilt * wLip * signalGate;
+      n.y -= plunge * (pitch * 0.65 + curl * 1.55) * wLip * signalGate + dump * 0.85 + spill * 0.18 + surge * 0.1;
+      n.x -= dirN.x * tip * plunge * curl * 1.6 * tipBandK;
+      n.z -= dirN.y * tip * plunge * curl * 1.6 * tipBandK;
+      n.y -= tip * plunge * curl * 1.0 * tipBandK;
+      // Break cue (ribbon / foam / spray / SWE) — signalGate, not tipGate.
+      brk += trip * select(0.6, select(0.9, 1.25, i == 0), i == 1) * (0.35 + 0.65 * curl + 0.35 * fall);
+      brk += plunge * (curl * 1.05 + fall * 2.35) + crumpleBrk * fall * (1.15 + fall) + spill * fall * 1.1;
+      brk += surge * 0.12 + washBody * 0.7;
+      jxx += plunge * curl * wLip * 0.9 * signalGate;
+      jzz += plunge * curl * wLip * 0.55 * signalGate;
     }
     jxx += Q * dirN.x * dirN.x * wa * s;
     jzz += Q * dirN.y * dirN.y * wa * s;
@@ -2347,14 +2348,16 @@ fn breakerEvt(xz: vec2<f32>) -> BrkEvt {
     o.vel = S.disp.xz * 0.35;
   }
   // Curl = overhang phase; collapse = dump/whitewater/spray phase — same event family.
-  o.curl = sat(S.brk * 1.35 + fold * 1.05 + sat(S.disp.y) * 0.4) * belt;
-  o.collapse = sat(S.brk * 1.55 + fold * 0.75) * belt * (0.45 + 0.55 * sat(length(o.vel) * 0.1));
+  o.curl = sat(S.brk * 1.45 + fold * 1.15 + sat(S.disp.y) * 0.5) * belt;
+  // Collapse needs break energy + shoreward dump — foam/spray read this, not a paint band.
+  o.collapse = sat(S.brk * 1.65 + fold * 0.85) * belt
+    * (0.35 + 0.65 * sat(length(o.vel) * 0.12 + sat(-dot(o.dirN, SH.sea)) * 0.4));
   let pack = max(crestPack(dot(vec2<f32>(-o.dirN.y, o.dirN.x), xz), 0.0),
                  crestPack(dot(vec2<f32>(-o.dirN.y, o.dirN.x), xz), 1.0) * 0.85);
-  let section = smoothstep(0.18, 0.52, pack);
-  // Live wakes on curl/collapse; mild belt floor so sparse packs still show a lip.
-  o.live = sat(max(o.curl, o.collapse * 0.95) * (0.4 + 0.6 * section) * belt
-    + belt * sat(S.brk + fold * 0.55) * 0.22);
+  let section = smoothstep(0.16, 0.5, pack);
+  // Live wakes on curl/collapse; belt floor only where brk already tripped.
+  o.live = sat(max(o.curl, o.collapse * 0.95) * (0.35 + 0.65 * section) * belt
+    + belt * sat(S.brk) * (0.18 + 0.22 * fold));
   return o;
 }
 fn ripAt(xz: vec2<f32>) -> vec3<f32> {
@@ -2490,9 +2493,9 @@ fn seaLod(dist: f32, depth: f32) -> vec2<f32> {
   let lod = seaLod(dist, depth);
   let gs = geom * ww.x * lod.x;
   // Depth-only coastal yield — never shoreFetch on the ocean disk (8 loads/vert tanked FPS).
-  // Soft yield nearshore so approaching swell keeps readable height into the ribbon belt.
-  let tipXZ = mix(1.0, 0.55, smoothstep(5.0, 0.7, depth));
-  let tipY = mix(1.0, 0.62, smoothstep(4.2, 0.55, depth));
+  // Soft yield nearshore — keep swell height into the break belt; sheet+ribbon own the lip.
+  let tipXZ = mix(1.0, 0.62, smoothstep(5.0, 0.7, depth));
+  let tipY = mix(1.0, 0.78, smoothstep(4.2, 0.55, depth));
   var w = vec3<f32>(
     xz.x + s.disp.x * gs * tipXZ,
     s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x) * lod.x * tipY,
@@ -2528,9 +2531,9 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
 }
 // ONE coastal free surface on the shore sheet:
 //   seaward rim — seaAt (phase-matched to ocean) so the handoff is continuous;
-//   mid/surf + wash — SWE η authoritative once Dirichlet energy is inside the domain;
-//   overturn lip — restrained breaker ribbon (vsBreaker) where breakerEvt is live.
-// Perf: skip full seaAt on fluid-owned verts (dense sheet); quality unchanged on the rim.
+//   break belt — seaAt crest stand-up/pitch held through curl; ribbon owns overhang;
+//   collapse / wash — SWE η authoritative for dump → run-up → retreat.
+// Perf: skip full seaAt only on dry wash (fluid-owned sand); crest belt always samples.
 @vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
   let suv = shoreWarp(uv);
   let fi = suv.x * max(SH.nx - 1.0, 1.0);
@@ -2545,9 +2548,12 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   let pastRim = 1.0 - smoothstep(0.58, 0.84, shoreOffV);
   let hasSheet = smoothstep(0.005, 0.09, sh.h + sh.foam * 0.35 + sh.wet * 0.02);
   let fluidW = sat(max(toSand, pastRim * max(hasSheet, 0.42))) * sh.inside;
+  // Crest belt: keep seaAt geometry through approach→curl even when SWE already wet.
+  let crestBelt = smoothstep(0.08, -0.15, bedUse) * smoothstep(-2.55, -0.45, bedUse);
   var xz = xz0;
   var y = sh.eta;
-  if (fluidW < 0.82) {
+  let needSea = fluidW < 0.88 || crestBelt > 0.12;
+  if (needSea) {
     let depth0 = max(-bedUse, 0.2);
     let s = seaAt(xz0, field0.y, depth0);
     let distSh = length(xz0 - F.camPos.xz);
@@ -2559,16 +2565,19 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
     let geomSh = smoothstep(mix(1100.0, 2600.0, sat(elevSh / 200.0)), 140.0, distSh);
     let lodSh = seaLod(distSh, depth0);
     let gs = geomSh * wwSh.x * lodSh.x;
-    // Keep more seaAt crest into the transition so approach → curl reads before SWE owns wash.
-    xz = xz0 + s.disp.xz * gs * (1.0 - fluidW) * 0.85;
-    var ySea = s.disp.y * mix(0.05, 1.0, geomSh) * mix(0.15, 1.0, wwSh.x) * lodSh.x;
-    ySea += shapeField(xz0).x * wwSh.y * lodSh.y;
-    // Crest bias on the approaching face — collapse dump still belongs to SWE + ribbon.
-    ySea += sat(s.brk) * sat(s.disp.y) * 0.08 * (1.0 - fluidW);
-    // Single mix toward SWE η — no double seaAt dilution that hides run-up/retreat.
+    // Hold approaching/curling crest; yield to SWE on collapse + sand wash.
+    let crestHold = sat(s.brk * 1.35 + sat(s.disp.y) * 0.7) * crestBelt
+      * (1.0 - toSand * 0.95) * (1.0 - sat(sh.foam * 0.7) * toSand);
+    let geomW = fluidW * (1.0 - crestHold * 0.96);
+    xz = xz0 + s.disp.xz * gs * (1.0 - geomW) * 1.05;
+    // Full crest height through shoal — do not let ww/lod mute the standing face.
+    var ySea = s.disp.y * mix(0.35, 1.0, geomSh) * mix(0.55, 1.0, max(wwSh.x, crestHold));
+    ySea += shapeField(xz0).x * wwSh.y * lodSh.y * (1.0 - crestHold * 0.5);
+    // Crest face bias from shared break state — not a second free surface.
+    ySea += sat(s.brk) * (0.1 + 0.45 * sat(s.disp.y)) * crestHold;
     let film = smoothstep(0.14, 0.02, sh.h);
     let yWash = mix(sh.eta, max(sh.eta, bedUse + 0.004), film * toSand);
-    y = mix(ySea, yWash, fluidW);
+    y = mix(ySea, yWash, geomW);
   } else if (sh.inside > 0.5) {
     let film = smoothstep(0.14, 0.02, sh.h);
     y = mix(sh.eta, max(sh.eta, bedUse + 0.004), film * toSand);
@@ -2595,16 +2604,33 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
 
 // Localized breaker ribbon: alongshore × cross-section. Multi-valued overhang lives here —
 // FFT/Gerstner sheets stay single-valued. Only draws where breakerEvt.live is high.
-// Tip throw restrained vs #52 so sheet ownership stays coherent (Milestone A lesson).
+// Crest track follows break-belt depth so the lip rides the shared event, not a fixed fj.
 @vertex fn vsBreaker(@location(0) uv: vec2<f32>) -> WaterV {
   let alongT = uv.x;
   let sec = uv.y;
   let nx = max(SH.nx, 1.0);
   let nz = max(SH.nz, 1.0);
-  let crestJ = 0.44 + 0.1 * n2(vec2<f32>(alongT * 11.0, F.time * 0.07));
   let fiB = alongT * max(nx - 1.0, 1.0);
+  // Probe seaward column for break-belt bed; place ribbon where depth matches trip.
+  let alongP = SH.origin + SH.along * (fiB + 0.5) * SH.dx;
+  let pLo = alongP + SH.sea * (0.28 * nz + 0.5) * SH.dx;
+  let pMid = alongP + SH.sea * (0.48 * nz + 0.5) * SH.dx;
+  let pHi = alongP + SH.sea * (0.66 * nz + 0.5) * SH.dx;
+  let dLo = max(-sampleField(pLo).x, 0.2);
+  let dMid = max(-sampleField(pMid).x, 0.2);
+  let dHi = max(-sampleField(pHi).x, 0.2);
+  // Prefer ~0.7–2.2 m depth for plunging crest; fall inland as bed shallows.
+  let sLo = smoothstep(2.6, 1.1, dLo) * smoothstep(0.35, 0.9, dLo);
+  let sMid = smoothstep(2.6, 1.1, dMid) * smoothstep(0.35, 0.9, dMid);
+  let sHi = smoothstep(2.6, 1.1, dHi) * smoothstep(0.35, 0.9, dHi);
+  var crestJ = 0.48;
+  var best = sMid;
+  if (sLo > best) { crestJ = 0.28; best = sLo; }
+  if (sHi > best) { crestJ = 0.66; best = sHi; }
+  crestJ += (n2(vec2<f32>(alongT * 11.0, F.time * 0.07)) - 0.5) * 0.08;
+  crestJ = clamp(crestJ, 0.22, 0.72);
   let fjB = crestJ * max(nz - 1.0, 1.0);
-  let home = SH.origin + SH.along * (fiB + 0.5) * SH.dx + SH.sea * (fjB + 0.5) * SH.dx;
+  let home = alongP + SH.sea * (fjB + 0.5) * SH.dx;
   let meander = (n2(vec2<f32>(alongT * 7.3, floor(F.time * 0.15))) - 0.5) * 1.6
     + (n2(vec2<f32>(alongT * 19.0, 3.1)) - 0.5) * 0.65;
   let homeM = home + SH.along * meander;
@@ -2618,27 +2644,28 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   let lip = smoothstep(0.2, 0.5, sec) * (1.0 - smoothstep(0.5, 0.78, sec));
   let fall = smoothstep(0.6, 1.0, sec);
   let root = 1.0 - smoothstep(0.0, 0.16, sec);
-  let live = ev.live;
-  let ang = clamp(0.65 + (ev.curl * 1.25 + lip * 0.55) * max(live, 0.35), 0.65, 1.75);
-  let amp = max(abs(S.disp.y), 0.18);
-  let lipR = (0.85 + 1.8 * amp + 1.35 * ev.curl) * (0.5 + 0.75 * live);
-  let wLip = lip * max(live, 0.25);
+  // Only wake a lip where the shared event is clearly live — avoids flat white shards.
+  let live = sat(ev.live * 1.15 + sat(ev.brk * 0.7 + ev.curl * 0.55) * 0.4);
+  let ang = clamp(0.85 + (ev.curl * 1.55 + lip * 0.75) * max(live, 0.45), 0.85, 2.05);
+  let amp = max(abs(S.disp.y), 0.28) * (1.0 + 0.55 * sat(ev.brk) + 0.35 * ev.curl);
+  let lipR = (1.35 + 2.6 * amp + 1.9 * ev.curl) * (0.6 + 0.75 * live);
+  let wLip = lip * max(live, 0.4);
   let ox = sin(ang) * lipR * wLip;
-  let oy = (cos(ang) - 1.0) * lipR * wLip * 0.4;
-  let faceLift = face * max(live, 0.3) * (0.45 + 1.0 * ev.curl) * amp;
-  let tipThrow = ox + (1.15 + 2.4 * ev.curl) * lip * max(live, 0.3) * amp;
-  let dumpPush = fall * max(live, 0.25) * (0.9 + 1.6 * ev.collapse) * amp;
-  let dumpDrop = fall * max(live, 0.25) * (0.35 + 0.95 * ev.collapse) * amp;
-  let cross = (sec - 0.18) * (2.2 + 3.6 * live) + tipThrow * 0.18;
+  let oy = (cos(ang) - 1.0) * lipR * wLip * 0.55;
+  let faceLift = face * max(live, 0.45) * (0.75 + 1.45 * ev.curl + 0.55 * sat(ev.brk)) * amp;
+  let tipThrow = ox + (1.7 + 3.2 * ev.curl) * lip * max(live, 0.4) * amp;
+  let dumpPush = fall * max(live, 0.4) * (1.25 + 2.1 * ev.collapse) * amp;
+  let dumpDrop = fall * max(live, 0.4) * (0.55 + 1.35 * ev.collapse) * amp;
+  let cross = (sec - 0.15) * (2.8 + 4.2 * live) + tipThrow * 0.25;
   let inland = -SH.sea;
   var w = vec3<f32>(
-    baseXZ.x + inland.x * (cross + tipThrow * 0.55 + dumpPush * 0.75),
-    mix(baseY, baseY + faceLift + oy + lip * max(live, 0.3) * 0.45 * max(S.disp.y, 0.05) - dumpDrop, max(live, 0.2)),
-    baseXZ.y + inland.y * (cross + tipThrow * 0.55 + dumpPush * 0.75)
+    baseXZ.x + inland.x * (cross + tipThrow * 0.7 + dumpPush * 0.85),
+    mix(baseY, baseY + faceLift + oy + lip * max(live, 0.45) * 0.7 * max(S.disp.y, 0.08) - dumpDrop, max(live, 0.35)),
+    baseXZ.y + inland.y * (cross + tipThrow * 0.7 + dumpPush * 0.85)
   );
-  let shapeK = sat(live * (1.0 - root * 0.75) + (1.0 - root) * max(live, 0.2));
+  let shapeK = sat(live * (1.0 - root * 0.65) + (1.0 - root) * max(live, 0.35));
   w = mix(vec3<f32>(baseXZ.x, baseY, baseXZ.y), w, shapeK);
-  w = mix(vec3<f32>(baseXZ.x, baseY, baseXZ.y), w, smoothstep(0.04, 0.2, live));
+  w = mix(vec3<f32>(baseXZ.x, baseY, baseXZ.y), w, smoothstep(0.08, 0.28, live));
   var o: WaterV;
   o.world = w;
   o.xz0 = homeM;
@@ -3286,7 +3313,7 @@ fn hidden(clip: vec4<f32>) -> bool {
     if (in.sheet > 0.5 && sheetSoft < 0.015) { discard; }
     if (in.sheet < 0.5 && sheetSoft > 0.94) { discard; }
   } else {
-    if (in.live < 0.08) { discard; }
+    if (in.live < 0.1) { discard; }
   }
   let field = sampleField(in.xz0);
   let scale = field.y;
@@ -3403,23 +3430,26 @@ fn hidden(clip: vec4<f32>) -> bool {
   let crest = smoothstep(0.48, 0.16, S.jac) * smoothstep(0.2, 0.75, scale);
   // Open-ocean whitecaps stay sparse — do not bleach the whole sea to fake surf.
   let whitecap = sat(crest - 0.62) * (1.0 - shoal * 0.85) * smoothstep(0.4, 0.75, lace);
-  // Whitewater from collapse: lip + fold burst + sectional wake. Not uniform crest paint.
-  // Clear-water holes: foamCover lace + hole gate — never bleach the whole crest.
+  // Whitewater only from shared break/run-up state — not a waterline disguise.
   let stormFoam = 1.0 + 0.45 * sat(F.mood.y) + 0.25 * sat(F.wx.x);
-  let collapseFoam = sat(lipF * 1.25 + fold * 0.95) * sectionF;
   let holeGate = 0.4 + 0.6 * smoothstep(0.18, 0.62, n2(in.xz0 * 1.9 + vec2<f32>(F.time * 0.11, 2.0)));
-  var foamDens = sat(max(max(collapseFoam, wake), whitecap * 0.35)) * max(F.mood.w, 0.0) * stormFoam
+  let evF = breakerEvt(in.xz0);
+  let faceHole = smoothstep(0.25, 0.7, n2(in.xz0 * 3.2 + evF.dirN * F.time * 0.2));
+  // Collapse foam requires live break event; lipF alone no longer paints a beach bar.
+  let collapseFoam = sat(evF.collapse * 1.25 + evF.curl * 0.35 + lipF * 0.35 * sat(evF.live))
+    * (0.4 + 0.6 * sectionF) * (0.45 + 0.55 * faceHole);
+  let wakeBrk = wake * sat(evF.live * 0.85 + evF.collapse * 0.55 + lipF * 0.25);
+  var foamDens = sat(max(max(collapseFoam, wakeBrk), whitecap * 0.3)) * max(F.mood.w, 0.0) * stormFoam
     * (1.0 - smoothstep(0.45, 2.4, foot) * 0.8) * (1.0 - band.z * 0.55) * holeGate;
-  // Shared break event whitewater on sheet + ribbon — crash reads as foam dump, not cyan sheet.
-  {
-    let evF = breakerEvt(in.xz0);
-    let faceHole = smoothstep(0.25, 0.7, n2(in.xz0 * 3.2 + evF.dirN * F.time * 0.2));
-    let crashFoam = sat(evF.collapse * 1.1 + evF.curl * 0.45) * (0.45 + 0.55 * faceHole) * holeGate;
-    if (isBreaker) {
-      foamDens = sat(foamDens + crashFoam * in.live * 1.15);
-    } else if (in.sheet > 0.5 && shoal > 0.2) {
-      foamDens = sat(foamDens + crashFoam * max(evF.live, 0.25) * 0.75);
-    }
+  if (isBreaker) {
+    // Curl keeps a dark face; whitewater spikes on collapse dump (shared event).
+    let dumpFoam = sat(evF.collapse * 1.35 + evF.curl * 0.2);
+    foamDens = sat(foamDens * mix(0.25, 1.0, dumpFoam)
+      + collapseFoam * in.live * dumpFoam * 1.35);
+  } else if (in.sheet > 0.5 && shoal > 0.2) {
+    // Sheet whitewater from collapse + SWE foam transport — not edge paint.
+    foamDens = sat(foamDens * mix(0.4, 1.0, sat(evF.collapse + sh0.foam))
+      + collapseFoam * max(evF.live * sat(evF.collapse), sat(sh0.foam) * 0.55) * 0.9);
   }
   var foam = foamCover(in.xz0, foamDens, foot);
   var onSheet = 0.0;
