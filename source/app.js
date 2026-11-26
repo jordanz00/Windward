@@ -2864,12 +2864,12 @@ function walkStep(dt, time) {
     dive = Math.max(0, Math.min(dive, 0.7) - dt * 3.5);
   }
   // One height from dry land through wading to swimming and diving: the eye stands over the
-  // ground or floats, whichever is higher, and a dive lowers both. Nothing switches at the
-  // waterline, so a wave passing the walker's knees does not move the eye.
-  // A rock is a floor too: a wave that falls away under a swimmer over one leaves the eye
-  // resting on it, where a wall at the lower height would have pushed the swimmer off.
+  // ground or floats on calm MSL, whichever is higher, and a dive lowers both. waveY still
+  // drives swim/collision above; camera height ignores displacement so the view does not
+  // bob or toss with the ocean. A rock is a floor too: a trough under a swimmer over one
+  // leaves the eye resting on it, where a wall at the lower height would have pushed off.
   const top = walkTop(camX, camZ);
-  const eye = walkEye = Math.max(gh + 1.65 - 1.2 * Math.min(1, dive / 0.7), wh + 0.42 - dive, top);
+  const eye = walkEye = Math.max(gh + 1.65 - 1.2 * Math.min(1, dive / 0.7), 0.42 - dive, top);
   // Space on dry ground is a hop. It lifts the eye and nothing else: what the walker meets
   // is still met at standing height, so a hop carries nobody over a rock or into one.
   if (hop > 0 || hopV > 0) { hopV -= 13 * dt; hop = Math.max(0, hop + hopV * dt); if (hop === 0) hopV = 0; }
