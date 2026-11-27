@@ -914,9 +914,101 @@ fn astroRaDec(rd: vec3<f32>) -> vec2<f32> {
   let H = atan2(sinH, cosH);
   return vec2<f32>(F.astro.x - H, dec);
 }
-fn starUV(rd: vec3<f32>) -> vec2<f32> {
-  let eq = astroRaDec(rd);
-  return vec2<f32>(fract(eq.x * 0.15915494), clamp(eq.y * 0.31830989 + 0.5, 0.001, 0.999));
+const ASTRO_GN_RA: f32 = 3.36603292;
+const ASTRO_GN_DEC: f32 = 0.47347879;
+const ASTRO_GL0: f32 = 2.14556676;
+const STAR_GW: i32 = 64;
+const STAR_GH: i32 = 32;
+fn wrapPi(a: f32) -> f32 {
+  return a - floor(a * 0.15915494 + 0.5) * 6.2831853;
+}
+fn starBV(bv: f32) -> vec3<f32> {
+  let t = clamp(bv, -0.35, 1.9);
+  let r = select(1.0, 0.72 + (t + 0.35) * 0.45, t < 0.15);
+  let g = select(clamp(0.98 - (t - 0.2) * 0.28, 0.45, 1.0), 0.86 + t * 0.25, t < 0.2);
+  let b = select(clamp(1.0 - t * 0.48, 0.38, 1.0), 1.0, t < 0.0);
+  let m = max(r, max(g, b));
+  return vec3<f32>(r, g, b) / m;
+}
+fn milkyWay(eq: vec2<f32>) -> vec3<f32> {
+  let sd = sin(eq.y); let cd = cos(eq.y);
+  let cra = cos(eq.x - ASTRO_GN_RA); let sra = sin(eq.x - ASTRO_GN_RA);
+  let sb = sd * sin(ASTRO_GN_DEC) + cd * cos(ASTRO_GN_DEC) * cra;
+  let b = asin(clamp(sb, -1.0, 1.0));
+  let gl = ASTRO_GL0 - atan2(cd * sra, sd * cos(ASTRO_GN_DEC) - cd * sin(ASTRO_GN_DEC) * cra);
+  let dl = atan2(sin(gl), cos(gl));
+  let band = exp(-0.5 * (b * b) / 0.010);
+  let wide = exp(-0.5 * (b * b) / 0.078);
+  let center = exp(-0.5 * (dl * dl) / 0.30);
+  let dC = atan2(sin(gl - 1.40), cos(gl - 1.40));
+  let cyg = exp(-0.5 * (dC * dC) / 0.12) * exp(-0.5 * (b * b) / 0.014);
+  let rift = exp(-0.5 * ((b + 0.015) * (b + 0.015)) / 0.0020) * exp(-0.5 * ((dl - 0.35) * (dl - 0.35)) / 0.20);
+  let clump = 0.82 + 0.18 * sin(gl * 6.0 + b * 11.0);
+  let glow = (0.05 * wide + 0.13 * band * clump) * (0.38 + 1.15 * center) * (1.0 - 0.62 * rift) + 0.07 * cyg;
+  return vec3<f32>(0.62, 0.70, 0.95) * glow;
+}
+fn faintStars(eq: vec2<f32>) -> vec3<f32> {
+  var col = vec3<f32>(0.0);
+  let sd = sin(eq.y); let cd = cos(eq.y);
+  let cra = cos(eq.x - ASTRO_GN_RA);
+  let sb = sd * sin(ASTRO_GN_DEC) + cd * cos(ASTRO_GN_DEC) * cra;
+  let gate = exp(-0.5 * (sb * sb) / 0.045);
+  for (var layer = 0; layer < 2; layer++) {
+    let dens = select(220.0, 420.0, layer == 0);
+    let cell = vec2<f32>(eq.x * dens * 0.15915494, (eq.y * 0.31830989 + 0.5) * dens * 0.5);
+    let i = floor(cell);
+    let f = fract(cell);
+    let h = hash22(i + vec2<f32>(f32(layer) * 19.0, 7.3));
+    let thresh = select(0.045, 0.072, layer == 0) * (0.55 + 0.9 * gate);
+    if (h.x < thresh) {
+      let sp = hash22(i + vec2<f32>(3.1, 5.7 + f32(layer)));
+      let d = f - sp;
+      let scale = 6.2831853 / dens;
+      let d2 = dot(d * d, vec2<f32>(scale * scale * max(cd * cd, 0.04), (3.14159265 / dens) * (3.14159265 / dens)));
+      let mag = select(7.35, 6.4, layer == 0) + h.y * 1.4;
+      let amp = pow(10.0, -0.4 * mag) * 1.15;
+      let soft = 0.00022 + 0.00012 * f32(layer);
+      let tw = 0.82 + 0.18 * sin(F.time * (1.7 + h.x * 3.4) + h.y * 6.2831853);
+      let w = exp(-d2 / (2.0 * soft * soft));
+      let tint = mix(vec3<f32>(0.75, 0.82, 1.0), vec3<f32>(1.0, 0.92, 0.78), sp.x);
+      col += tint * amp * w * tw;
+    }
+  }
+  return col;
+}
+fn catalogStars(eq: vec2<f32>) -> vec3<f32> {
+  var col = vec3<f32>(0.0);
+  let u = fract(eq.x * 0.15915494);
+  let v = clamp(eq.y * 0.31830989 + 0.5, 0.0, 0.9999);
+  let cx = i32(u * f32(STAR_GW));
+  let cy = i32(v * f32(STAR_GH));
+  let cosDec = max(cos(eq.y), 0.04);
+  for (var j = -1; j <= 1; j++) {
+    for (var i = -1; i <= 1; i++) {
+      let x = (cx + i + STAR_GW) % STAR_GW;
+      let y = clamp(cy + j, 0, STAR_GH - 1);
+      let cellHdr = starCat[y * STAR_GW + x];
+      let start = i32(cellHdr.x);
+      let count = min(i32(cellHdr.y), 28);
+      for (var k = 0; k < count; k++) {
+        let s = starCat[start + k];
+        let dra = wrapPi(s.x - eq.x) * cosDec;
+        let ddec = s.y - eq.y;
+        let d2 = dra * dra + ddec * ddec;
+        let mag = s.z;
+        let flux = pow(10.0, -0.4 * mag) * 0.62;
+        let soft = 0.00028 + 0.00085 * sqrt(max(flux, 1e-5));
+        let soft2 = soft * soft;
+        if (d2 > soft2 * 18.0) { continue; }
+        let core = exp(-d2 / (2.0 * soft2 * 0.55));
+        let halo = exp(-d2 / (2.0 * soft2 * 3.2)) * 0.22;
+        let seed = hash21(vec2<f32>(s.x * 17.0, s.y * 13.0));
+        let tw = 0.78 + 0.22 * sin(F.time * (1.3 + seed * 4.5 + flux * 8.0) + seed * 6.2831853);
+        col += starBV(s.w) * flux * (core + halo) * tw;
+      }
+    }
+  }
+  return col;
 }
 // The moon's own face. Phase is the angle between the real sun and the outward normal,
 // so a crescent is a crescent and a full moon is not a flat disc scaled down.
@@ -958,16 +1050,17 @@ fn moonDisc(rd: vec3<f32>) -> vec3<f32> {
   }
   return col;
 }
-// Stars and the Milky Way live in one map (catalog points + galactic band; no stick figures).
-// cover is how much of this view the clouds leave open.
 fn nightSky(rd: vec3<f32>, cover: f32) -> vec3<f32> {
   var col = vec3<f32>(0.0);
   let night = sat(F.sunTrue.w);
   if (night > 0.02 && rd.y > 0.0) {
-    let s = textureSampleLevel(starMap, starSamp, starUV(rd), 0.0).rgb;
-    // Decode the bake's sqrt encoding; a mild lift keeps faint stars under moonless skies.
-    let flux = s * s;
-    col += (flux * 4.35 + flux * flux * 1.6) * night * sat(rd.y * 5.0) * cover;
+    let eq = astroRaDec(rd);
+    let horizon = sat(rd.y * 5.0);
+    let moonWash = sat(F.astroB.w * 14.0);
+    let field = milkyWay(eq) * (0.85 + 0.15 * (1.0 - moonWash))
+      + catalogStars(eq)
+      + faintStars(eq) * (1.0 - 0.55 * moonWash);
+    col += (field * 4.2 + field * field * 1.35) * night * horizon * cover;
   }
   // The iris opens for the dark ground. Divide it back out so the disc keeps its shape
   // instead of the whole face clipping to white. Same trick as the insects.

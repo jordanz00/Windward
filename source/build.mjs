@@ -8,12 +8,14 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(join(root, 'source', name), 'utf8');
 const css = read('ui.css');
 // Critical path: first interactive frame (Enter / walk). Deferred stays out of critical gzip.
-const parts = ['gpu.js', 'island.js', 'sky.js', 'shaders.js', 'ocean.js', 'shore.js', 'fish.js', 'astro-data.js', 'astro.js', 'env.js', 'insects.js', 'birds.js', 'stream.js', 'app.js'];
-// Lazy chunks (AEI Continuous): deep-sea/sharks + bench stay off critical-load gzip.
+const parts = ['gpu.js', 'island.js', 'sky.js', 'shaders.js', 'ocean.js', 'shore.js', 'fish.js', 'astro-data.js', 'astro.js', 'env.js', 'insects.js', 'birds.js', 'app.js'];
+// Lazy chunks (AEI Continuous): score/deep-sea/bench/stream stay off critical-load gzip.
+// Stream still boots during load (before Enter) via eval — same pattern as deep-sea.
 const deferred = [
   { id: 'ww-deferred-score', files: ['score.js'] },
   { id: 'ww-deferred-deep-sea', files: ['deep-sea.js'] },
   { id: 'ww-deferred-bench', files: ['bench.js'] },
+  { id: 'ww-deferred-stream', files: ['stream.js'] },
 ];
 // Source stays readable. The shipped page is compacted: comments and spare whitespace
 // are removed, but names and template-literal structure stay intact so errors still

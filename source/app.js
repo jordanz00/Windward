@@ -7,14 +7,15 @@ const PRESETS = {
 };
 
 const WAVES = [
-  [1.00, 0.02, 2.15, 48, 0.78],
-  [1.00, 0.02, 0.55, 24, 0.92],
-  [0.996, 0.09, 0.12, 68, 0.28],
-  [0.996, -0.09, 0.07, 33, 0.18],
+  // Primary swell ~1.65 m — prior 2.15 + shoal stacks made nearshore walls.
+  [1.00, 0.02, 1.65, 48, 0.72],
+  [1.00, 0.02, 0.42, 24, 0.85],
+  [0.996, 0.09, 0.1, 68, 0.28],
+  [0.996, -0.09, 0.06, 33, 0.18],
   [0.86, 0.42, 0.022, 17, 0.1],
   [0.72, -0.62, 0.014, 11, 0.07],
-  [0.22, 0.97, 0.2, 52, 0.28],
-  [-0.38, 0.92, 0.12, 29, 0.2]
+  [0.22, 0.97, 0.16, 52, 0.28],
+  [-0.38, 0.92, 0.1, 29, 0.2]
 ];
 
 // Metres. Above the cirrus sheet (10.5 km) and the tallest convective top, so fly
@@ -1785,14 +1786,14 @@ function waveY(world, x, z, time) {
     const len = w[3] / frq;
     const k = Math.PI * 2 / len;
     const feel = 1 - smooth01(len * 0.08, len * 0.45, D);
-    let As = w[2] * wp.amp * env.sea * damp * (1 + feel * 0.85);
+    let As = w[2] * wp.amp * env.sea * damp * (1 + feel * 0.55);
     if (i < 2) As *= 1 - 0.58 * smooth01(1.6, 7.5, D);
     if (i >= 4) As *= wp.cx;
     if (i >= 3 && i < 6) As *= 0.22;
     const Q = Math.min(w[4] + feel * 0.45, 1.05);
     const steep = k * As * Q;
     if (steep > 0.72) As *= 0.72 / steep;
-    As *= 1 - (1 - smooth01(0.35, 2.2, D)) * 0.16;
+    As *= 1 - (1 - smooth01(0.35, 2.2, D)) * 0.18;
     const kh = Math.min(k * D, 8);
     const th = Math.max(Math.tanh(kh), 0.045);
     const kUse = k / Math.max(Math.sqrt(th), 0.2);
@@ -1800,7 +1801,7 @@ function waveY(world, x, z, time) {
       const kh2 = Math.min(kUse * D * 2, 10);
       const cgFrac = 0.5 * (1 + kh2 / Math.max(Math.sinh(kh2), 1e-3));
       const cgRel = Math.max(Math.sqrt(th) * cgFrac, 0.08) / 0.5;
-      const grow = Math.min(1.75, Math.max(1, Math.sqrt(1 / Math.min(cgRel, 1))));
+      const grow = Math.min(1.45, Math.max(1, Math.sqrt(1 / Math.min(cgRel, 1))));
       As *= 1 + (grow - 1) * smooth01(1.95, 0.15, Math.min(kUse * D, 6));
     }
     const omega = (i === 1 ? wP * (kUse / kP) : Math.sqrt(9.81 * kUse)) * wp.spd * Math.sqrt(th);
@@ -1808,9 +1809,9 @@ function waveY(world, x, z, time) {
     y += As * s;
     if (i <= 2 && kUse * D < 2.35) {
       const tip = Math.pow(Math.max(0, Math.min(1, s)), 2.05);
-      const bandK = i === 0 ? 1.5 : i === 1 ? 0.9 : 0.6;
-      const plunge = tip * smooth01(2.8, 0.5, D) * 0.55;
-      y += As * tip * plunge * (0.35 + 0.55 * tip) * bandK;
+      const bandK = i === 0 ? 0.72 : i === 1 ? 0.5 : 0.35;
+      const plunge = tip * smooth01(2.8, 0.5, D) * 0.35;
+      y += As * tip * plunge * (0.22 + 0.35 * tip) * bandK;
     }
   }
   return y;
@@ -3152,12 +3153,13 @@ async function main() {
     const VS = GPUShaderStage.VERTEX, FS = GPUShaderStage.FRAGMENT;
     // One letter a binding; the letters are listed in gpu.js.
     const ubLayout = layoutOf(device, VS | FS, 'u');
-    const geoLayout = layoutOf(device, VS | FS, 'uttdcuttasdffs');
+    // Trailing `r` is the Hipparcos star catalog (storage); stars are procedural, not a map.
+    const geoLayout = layoutOf(device, VS | FS, 'uttdcuttasdfr');
     const simLayout = layoutOf(device, FS, 'tu');
     const zLetter = MS > 1 ? 'm' : 'd';
     const waterLayout = layoutOf(device, VS | FS, 't' + zLetter + 'fstttf-----');
     // The air pass reads the scene's depth and nothing else from the second group.
-    // Binding 13 is the cloud buffer. The air pass folds it in so water stays at 16 sampled textures.
+    // Binding 13 is the cloud buffer. The air pass folds it in so water stays under 16 sampled textures.
     const airLayout = layoutOf(device, FS, zLetter + '-----------f', 1);
     // Volume clouds: scene depth, then the noise volume, its sampler, and the weather map.
     const cloudLayout = layoutOf(device, FS, zLetter + '------vsf', 1);
@@ -3985,8 +3987,16 @@ async function main() {
     const abyssIB = upload(abyss.idx, GPUBufferUsage.INDEX);
     const abyssIndexCount = abyss.idx.length;
     // ?stream=0 or ?no=stream keeps the single mesh and the full grass list.
+    // WorldStream lives in a deferred chunk (critical gzip); eval during load like deep-sea.
+    if (typeof WorldStream !== 'function') {
+      const el = document.getElementById('ww-deferred-stream');
+      if (el) (0, eval)(el.textContent);
+    }
     const streamOn = qstr.get('stream') !== '0' && !NO.stream;
-    const stream = new WorldStream({ enabled: streamOn });
+    const stream = typeof WorldStream === 'function' ? new WorldStream({ enabled: streamOn }) : {
+      enabled: false, patchN: 0, prepMs: 0, uploads: 0, fail: 'stream deferred missing',
+      patches: () => [], tick() {}, bindTerrain() {}, bindGrass() {}, grassKey: () => '', gatherGrass: () => 0, line: () => 'stream off', vegBias: () => 0
+    };
     window.__stream = stream;
     stream.sharedVB = terrainVB;
     stream.bindTerrain(q.terrain, q.textent, terrain.pos);
@@ -4106,9 +4116,7 @@ async function main() {
     const nearRows = [0, 0];
     const sky = createSky(device, { dim: q.sky, format: sceneFmt, layouts: skyLayouts });
     const skySamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
-    const starTex = astroStarTexture(device);
-    const starView = starTex.createView();
-    const starSamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
+    const starBuf = astroStarBuffer(device);
     const noiseView = sky.noise.createView();
     let skyFor = null, skyPace = 1, cloudOwn = false, cloudOwnBake = false;
     const shapeH0 = makeOceanH0(OCEAN_N, 220, [9.0, 0.6], 0.0006, [5, 56], 0.3, 0, 11);
@@ -4230,7 +4238,7 @@ async function main() {
       swapDepthView = swapDepth.createView();
       bgAir = groupOf(device, airLayout, [sd, null, null, null, null, null, null, null, null, null, null, null, cv], 1);
       const geoGroup = (buf, rip) => groupOf(device, geoLayout,
-        [buf, hview, rip, shadowView, shadowSamp, shoreSim.ubuf, shoreSim.stateView, shoreSim.wetView, sky.view, skySamp, nearView, sky.shade, starView, starSamp]);
+        [buf, hview, rip, shadowView, shadowSamp, shoreSim.ubuf, shoreSim.stateView, shoreSim.wetView, sky.view, skySamp, nearView, sky.shade, starBuf]);
       bgGeoSet = [geoGroup(ubuf, ripViews[0]), geoGroup(ubuf, ripViews[1])];
       bgGeoR = geoGroup(rbuf, ripViews[0]);
       bgUB = groupOf(device, ubLayout, [ubuf]);

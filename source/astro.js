@@ -2,8 +2,8 @@
 // time at Saint Lucia (13.9094 N, 60.9789 W). The moon's phase and place are the real
 // ones for that hour on the UTC date, from the truncated ELP series in Meeus,
 // Astronomical Algorithms, chapters 22, 25 and 47. Stars are Hipparcos through
-// magnitude 6 at real RA/Dec (so Orion, the Dipper, and the rest form from positions,
-// not stick-figure lines); the Milky Way follows the galactic plane.
+// magnitude 6 at real RA/Dec, uploaded as a spatial-hash storage buffer for procedural
+// shader discs (not a low-res equirect texture); the Milky Way is analytic in WGSL.
 // Space 7, Moonlit Island, uses this moon by default.
 
 const ASTRO_LAT_DEG = 13.9094;
@@ -363,115 +363,47 @@ function astroCatalog() {
   astroCatalog.cache = { stars: stars };
   return astroCatalog.cache;
 }
-function astroStarRGB(bv) {
-  const t = astroClamp(bv, -0.35, 1.9);
-  const r = t < 0.15 ? 0.72 + (t + 0.35) * 0.45 : 1;
-  const g = t < 0.2 ? 0.86 + t * 0.25 : astroClamp(0.98 - (t - 0.2) * 0.28, 0.45, 1);
-  const b = t < 0 ? 1 : astroClamp(1 - t * 0.48, 0.38, 1);
-  const m = Math.max(r, g, b);
-  return [r / m, g / m, b / m];
-}
-function astroHash(n) {
-  let x = (Math.imul(n, 747796405) + 2891336453) >>> 0;
-  x = Math.imul(x ^ (x >>> 16), 2246822519) >>> 0;
-  return ((x ^ (x >>> 13)) >>> 0) / 4294967296;
-}
-function astroSplat(acc, W, H, ra, dec, rgb, amp) {
-  const px = ra / (Math.PI * 2) * W - 0.5;
-  const py = (dec / Math.PI + 0.5) * H - 0.5;
-  // Tight core + soft diffraction halo. Bright stars read as points, not blobs;
-  // faint ones stay single-pixel so the field keeps a real magnitude ladder.
-  const core = astroClamp(0.55 + Math.sqrt(Math.max(amp, 0)) * 0.95, 0.55, 2.4);
-  const halo = core * (1.55 + Math.min(amp, 2.5) * 0.35);
-  const r = Math.ceil(halo * 2.1);
-  const cx = Math.round(px), cy = Math.round(py);
-  const sCore = 2 * core * core * 0.28;
-  const sHalo = 2 * halo * halo * 0.55;
-  for (let dy = -r; dy <= r; dy++) {
-    const j = cy + dy;
-    if (j < 0 || j >= H) continue;
-    const ddy = py - j;
-    for (let dx = -r; dx <= r; dx++) {
-      const ddx = px - (cx + dx);
-      const d2 = ddx * ddx + ddy * ddy;
-      const w = Math.exp(-d2 / sCore) + 0.18 * Math.exp(-d2 / sHalo);
-      if (w < 0.025) continue;
-      const i = ((cx + dx) % W + W) % W;
-      const o = (j * W + i) * 3;
-      acc[o] += rgb[0] * amp * w;
-      acc[o + 1] += rgb[1] * amp * w;
-      acc[o + 2] += rgb[2] * amp * w;
-    }
-  }
-}
-// Equirectangular celestial map. u is right ascension, v runs from the south pole to the north.
-// Only catalog stars + Milky Way — no constellation stick figures.
-function astroBake(W, H) {
-  const acc = new Float32Array(W * H * 3);
-  const sD = Math.sin(ASTRO_GN_DEC), cD = Math.cos(ASTRO_GN_DEC);
-  for (let y = 0; y < H; y++) {
-    const dec = ((y + 0.5) / H) * Math.PI - Math.PI / 2;
-    const sd = Math.sin(dec), cd = Math.cos(dec);
-    for (let x = 0; x < W; x++) {
-      const ra = ((x + 0.5) / W) * Math.PI * 2;
-      const cra = Math.cos(ra - ASTRO_GN_RA), sra = Math.sin(ra - ASTRO_GN_RA);
-      const sb = sd * sD + cd * cD * cra;
-      const b = Math.asin(astroClamp(sb, -1, 1));
-      const gl = astroWrap(ASTRO_GL0 - Math.atan2(cd * sra, sd * cD - cd * sD * cra));
-      const dl = Math.atan2(Math.sin(gl), Math.cos(gl));
-      const band = Math.exp(-0.5 * (b * b) / 0.010);
-      const wide = Math.exp(-0.5 * (b * b) / 0.078);
-      const center = Math.exp(-0.5 * (dl * dl) / 0.30);
-      const dC = Math.atan2(Math.sin(gl - 1.40), Math.cos(gl - 1.40));
-      const cyg = Math.exp(-0.5 * (dC * dC) / 0.12) * Math.exp(-0.5 * (b * b) / 0.014);
-      const rift = Math.exp(-0.5 * ((b + 0.015) * (b + 0.015)) / 0.0020) * Math.exp(-0.5 * ((dl - 0.35) * (dl - 0.35)) / 0.20);
-      const clump = 0.82 + 0.18 * Math.sin(gl * 6.0 + b * 11.0);
-      let glow = (0.05 * wide + 0.13 * band * clump) * (0.38 + 1.15 * center) * (1 - 0.62 * rift) + 0.07 * cyg;
-      const o = (y * W + x) * 3;
-      acc[o] += glow * 0.62;
-      acc[o + 1] += glow * 0.70;
-      acc[o + 2] += glow * 0.95;
-      if (Math.abs(b) < 0.5) {
-        const h = astroHash(x + y * W);
-        const gate = Math.exp(-0.5 * (b / 0.18) * (b / 0.18));
-        if (h < 0.03 * gate) {
-          const mag = 6.15 + astroHash(x * 17 + y * 3) * 1.35;
-          const amp = Math.pow(10, -0.4 * mag) * 1.1;
-          const tint = 0.75 + 0.25 * h;
-          acc[o] += amp * tint * 0.85;
-          acc[o + 1] += amp * tint * 0.9;
-          acc[o + 2] += amp * tint;
-        }
-      }
-    }
-  }
+// Spatial hash of Hipparcos for procedural nightSky (STAR_GW×STAR_GH in sky.js).
+// Layout: [0 .. GW*GH) vec4(start, count, 0, 0); then star records vec4(ra, dec, mag, bv).
+const ASTRO_STAR_GW = 64;
+const ASTRO_STAR_GH = 32;
+function astroStarBuffer(device) {
   const cat = astroCatalog();
+  const GW = ASTRO_STAR_GW, GH = ASTRO_STAR_GH;
+  const cells = new Array(GW * GH);
+  for (let i = 0; i < cells.length; i++) cells[i] = [];
   for (let i = 0; i < cat.stars.length; i++) {
     const s = cat.stars[i];
-    // Pogson flux, slightly lifted so mag ≤2 asterisms read under showcase exposure.
-    const amp = Math.pow(10, -0.4 * s.mag) * 0.58;
-    astroSplat(acc, W, H, s.ra, s.dec, astroStarRGB(s.bv), amp);
+    const cx = Math.min(GW - 1, Math.max(0, (s.ra / (Math.PI * 2) * GW) | 0));
+    const cy = Math.min(GH - 1, Math.max(0, ((s.dec / Math.PI + 0.5) * GH) | 0));
+    cells[cy * GW + cx].push(s);
   }
-  const out = new Uint8Array(W * H * 4);
-  for (let i = 0, p = 0; i < acc.length; i += 3, p += 4) {
-    for (let c = 0; c < 3; c++) {
-      const x = Math.sqrt(Math.min(Math.max(acc[i + c], 0), 4)) * 0.5;
-      out[p + c] = Math.max(0, Math.min(255, Math.round(x * 255)));
+  let total = 0;
+  for (let i = 0; i < cells.length; i++) total += cells[i].length;
+  const data = new Float32Array(GW * GH * 4 + total * 4);
+  let cursor = GW * GH;
+  for (let i = 0; i < cells.length; i++) {
+    const list = cells[i];
+    data[i * 4] = cursor;
+    data[i * 4 + 1] = list.length;
+    for (let k = 0; k < list.length; k++) {
+      const s = list[k];
+      const o = cursor * 4;
+      data[o] = s.ra;
+      data[o + 1] = s.dec;
+      data[o + 2] = s.mag;
+      data[o + 3] = s.bv;
+      cursor++;
     }
-    out[p + 3] = 255;
   }
-  return out;
-}
-function astroStarTexture(device) {
-  const W = 1024, H = 512;
-  const rgba = astroBake(W, H);
-  const tex = device.createTexture({
-    size: [W, H],
-    format: 'rgba8unorm',
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+  const buf = device.createBuffer({
+    size: data.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    mappedAtCreation: true
   });
-  device.queue.writeTexture({ texture: tex }, rgba, { bytesPerRow: W * 4, rowsPerImage: H }, { width: W, height: H });
-  return tex;
+  new Float32Array(buf.getMappedRange()).set(data);
+  buf.unmap();
+  return buf;
 }
 
 function astroPhaseName(phase, illum) {

@@ -29,6 +29,7 @@ function smooth01(e0, e1, x) {
 load('env.js');
 load('astro-data.js');
 load('astro.js');
+load('astro-bake.js');
 
 const D = 180 / Math.PI;
 const grab = (expr) => runInContext(expr, ctx);

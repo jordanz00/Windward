@@ -111,8 +111,7 @@ struct ShoreU {
 @group(0) @binding(9) var skySamp: sampler;
 @group(0) @binding(10) var shadowNear: texture_depth_2d;
 @group(0) @binding(11) var cshMap: texture_2d<f32>;
-@group(0) @binding(12) var starMap: texture_2d<f32>;
-@group(0) @binding(13) var starSamp: sampler;
+@group(0) @binding(12) var<storage, read> starCat: array<vec4<f32>>;
 
 @group(1) @binding(0) var sceneTex: texture_2d<f32>;
 @group(1) @binding(1) var sceneDepth: texture_depth_${samples > 1 ? 'multisampled_' : ''}2d;
@@ -1949,8 +1948,8 @@ fn shoalAmp(kUse: f32, th: f32, depth: f32) -> f32 {
   let kh2 = min(kh * 2.0, 10.0);
   let cgFrac = 0.5 * (1.0 + kh2 / max(sinh(kh2), 1e-3));
   let cgRel = max(sqrt(th) * cgFrac, 0.08) / 0.5;
-  // Stronger mid-depth growth so approaching crests stand up before the hinge trips.
-  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.75);
+  // Moderate shoal growth — prior 1.75 + stacked stand-ups made nearshore walls.
+  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.45);
   return mix(1.0, grow, smoothstep(1.95, 0.15, kh));
 }
 
@@ -1982,7 +1981,7 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     let k = 6.2831853 / len;
     let fade = waveGain(len, dist) * select(1.0, detailK, i >= 4);
     let feel = 1.0 - smoothstep(len * 0.08, len * 0.45, D);
-    var As = w.z * ampK * scaleUse * fade * (1.0 + feel * 0.85);
+    var As = w.z * ampK * scaleUse * fade * (1.0 + feel * 0.55);
     let Q = min(steepQ(i) + feel * 0.45, 1.05);
     // Offshore the swell is long and low. It only stands up where the bottom shoals,
     // so the open sea is not a row of identical steep ridges.
@@ -1995,12 +1994,11 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     if (i >= 6) { As *= 0.65 + 0.35 * sin(dot(dir, xz) * 0.041 + F.time * 0.03); }
     let steep = k * As * Q;
     if (steep > 0.72) { As *= 0.72 / steep; }
-    // Soften ankle-depth collapse so approaching crests still have height to curl —
-    // prior 0.38 cut left the beach sheet looking dead-flat in captures.
+    // Soften ankle-depth collapse; keep a little height without walling the beach.
     let collapse = 1.0 - smoothstep(0.35, 2.2, D);
-    As *= 1.0 - collapse * 0.08;
-    // Extra shoal stand-up so the face reads before ribbon/SWE dump.
-    if (i < 2) { As *= mix(1.0, 1.28, smoothstep(4.5, 0.6, D)); }
+    As *= 1.0 - collapse * 0.18;
+    // Mild mid-depth stand-up only — stacked 1.28× + shoalAmp made jagged walls.
+    if (i < 2) { As *= mix(1.0, 1.08, smoothstep(4.5, 0.6, D)); }
     // The spectral field owns the mid and short waves. These layers were the repeating ripples.
     if (i >= 3 && i < 6) { As *= 0.22; }
     // Depth-aware dispersion. Deep water (tanh → 1) matches the old sqrt(gk).
@@ -2083,39 +2081,40 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
       let plunge = trip * max(plungeW, plungeBias * (1.0 - surgeW * 0.3)) * signalGate;
       let crumpleBrk = trip * max(crumpleW, plungeBias * 0.3 * fall) * signalGate;
       let surge = trip * surgeW * (1.0 - plungeBias * 0.55) * signalGate;
-      let faceBandK = select(0.5, select(0.75, 1.1, i == 0), i == 1) * signalGate;
-      let tipBandK = select(0.4, select(0.55, 0.85, i == 0), i == 1) * tipGate;
+      // Restrained face/tip — prior tipBandK×lipR shards self-intersected the heightfield.
+      let faceBandK = select(0.35, select(0.5, 0.72, i == 0), i == 1) * signalGate;
+      let tipBandK = select(0.22, select(0.32, 0.48, i == 0), i == 1) * tipGate;
       let fold = sat(pitch * 0.5 + curl * 1.0 + fall * 0.15);
-      // Vertical crest: steepen → pitch → curl lift → collapse dump (signalGate).
-      d.y += As * faceHold * plunge * (steepen * 0.55 + pitch * 0.85 + curl * 1.15) * faceBandK;
-      d.y += As * tip * plunge * curl * 0.55 * faceBandK;
-      let dump = (crumpleBrk * fall * 1.15 + plunge * fall * fall * 1.65 + spill * fall * 0.45) * faceBandK;
-      d.y -= As * dump * (0.8 + 0.4 * tip);
-      d.y -= As * spill * 0.1;
-      d.y += As * surge * crestS * 0.14;
+      // Vertical crest: steepen → pitch → mild curl lift → collapse dump (signalGate).
+      d.y += As * faceHold * plunge * (steepen * 0.35 + pitch * 0.55 + curl * 0.7) * faceBandK;
+      d.y += As * tip * plunge * curl * 0.28 * faceBandK;
+      let dump = (crumpleBrk * fall * 1.0 + plunge * fall * fall * 1.25 + spill * fall * 0.35) * faceBandK;
+      d.y -= As * dump * (0.75 + 0.35 * tip);
+      d.y -= As * spill * 0.08;
+      d.y += As * surge * crestS * 0.1;
       let washBody = trip * fall * (0.5 + 0.5 * section) * (1.0 - tip * 0.6);
-      d.y += As * washBody * 0.2;
+      d.y += As * washBody * 0.12;
       // Horizontal tip throw: mid/deep heightfield only; ribbon owns surf overhang.
-      let ang = clamp(0.75 + fold * 1.05 * plunge * tipBandK, 0.85, 1.85);
-      let lipR = As * (3.0 + 2.0 * excess) * tipBandK;
-      let wLip = tip * (0.35 + 0.65 * max(section, 0.5));
+      let ang = clamp(0.7 + fold * 0.75 * plunge * tipBandK, 0.7, 1.45);
+      let lipR = As * (1.6 + 1.1 * excess) * tipBandK;
+      let wLip = tip * (0.3 + 0.55 * max(section, 0.5));
       let ox = sin(ang) * lipR * wLip;
-      let oy = (cos(ang) - 1.0) * lipR * wLip * 0.55;
+      let oy = (cos(ang) - 1.0) * lipR * wLip * 0.4;
       d.x += dirN.x * ox;
       d.z += dirN.y * ox;
       d.y += oy;
-      d.x += dirN.x * As * tip * plunge * (0.7 + curl * 1.6 + fall * 0.85) * tipBandK;
-      d.z += dirN.y * As * tip * plunge * (0.7 + curl * 1.6 + fall * 0.85) * tipBandK;
-      d.x += dirN.x * As * (dump * 0.95 + spill * fall * 0.32 + surge * 0.32 + washBody * 0.35);
-      d.z += dirN.y * As * (dump * 0.95 + spill * fall * 0.32 + surge * 0.32 + washBody * 0.35);
-      let faceTilt = plunge * (steepen * 1.2 + pitch * 2.8 + curl * 3.8) + crumpleBrk * fall * (1.25 + fall)
-        + spill * 0.45 + surge * 0.25;
+      d.x += dirN.x * As * tip * plunge * (0.35 + curl * 0.85 + fall * 0.4) * tipBandK;
+      d.z += dirN.y * As * tip * plunge * (0.35 + curl * 0.85 + fall * 0.4) * tipBandK;
+      d.x += dirN.x * As * (dump * 0.55 + spill * fall * 0.2 + surge * 0.2 + washBody * 0.2);
+      d.z += dirN.y * As * (dump * 0.55 + spill * fall * 0.2 + surge * 0.2 + washBody * 0.2);
+      let faceTilt = plunge * (steepen * 0.75 + pitch * 1.6 + curl * 2.2) + crumpleBrk * fall * (0.85 + fall)
+        + spill * 0.3 + surge * 0.15;
       n.x -= dirN.x * faceTilt * wLip * signalGate;
       n.z -= dirN.y * faceTilt * wLip * signalGate;
-      n.y -= plunge * (pitch * 0.65 + curl * 1.55) * wLip * signalGate + dump * 0.85 + spill * 0.18 + surge * 0.1;
-      n.x -= dirN.x * tip * plunge * curl * 1.6 * tipBandK;
-      n.z -= dirN.y * tip * plunge * curl * 1.6 * tipBandK;
-      n.y -= tip * plunge * curl * 1.0 * tipBandK;
+      n.y -= plunge * (pitch * 0.4 + curl * 0.95) * wLip * signalGate + dump * 0.55 + spill * 0.12 + surge * 0.08;
+      n.x -= dirN.x * tip * plunge * curl * 0.85 * tipBandK;
+      n.z -= dirN.y * tip * plunge * curl * 0.85 * tipBandK;
+      n.y -= tip * plunge * curl * 0.55 * tipBandK;
       // Break cue (ribbon / foam / spray / SWE) — signalGate, not tipGate.
       brk += trip * select(0.6, select(0.9, 1.25, i == 0), i == 1) * (0.35 + 0.65 * curl + 0.35 * fall);
       brk += plunge * (curl * 1.05 + fall * 2.35) + crumpleBrk * fall * (1.15 + fall) + spill * fall * 1.1;
@@ -2493,9 +2492,9 @@ fn seaLod(dist: f32, depth: f32) -> vec2<f32> {
   let lod = seaLod(dist, depth);
   let gs = geom * ww.x * lod.x;
   // Depth-only coastal yield — never shoreFetch on the ocean disk (8 loads/vert tanked FPS).
-  // Soft yield nearshore — keep swell height into the break belt; sheet+ribbon own the lip.
-  let tipXZ = mix(1.0, 0.62, smoothstep(5.0, 0.7, depth));
-  let tipY = mix(1.0, 0.78, smoothstep(4.2, 0.55, depth));
+  // Strong XZ yield nearshore so sheet owns the free surface; keep Y for continuous height.
+  let tipXZ = mix(1.0, 0.22, smoothstep(5.0, 0.55, depth));
+  let tipY = mix(1.0, 0.9, smoothstep(3.8, 0.45, depth));
   var w = vec3<f32>(
     xz.x + s.disp.x * gs * tipXZ,
     s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x) * lod.x * tipY,
@@ -2530,10 +2529,9 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   return uv;
 }
 // ONE coastal free surface on the shore sheet:
-//   seaward rim — seaAt (phase-matched to ocean) so the handoff is continuous;
-//   break belt — seaAt crest stand-up/pitch held through curl; ribbon owns overhang;
-//   collapse / wash — SWE η authoritative for dump → run-up → retreat.
-// Perf: skip full seaAt only on dry wash (fluid-owned sand); crest belt always samples.
+//   seaward rim — seaAt (phase-matched to ocean);
+//   foreshore / wash — SWE η = bed + h;
+//   blend weight from bed/depth/wet only — never brk-flip between shapes (that popped).
 @vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
   let suv = shoreWarp(uv);
   let fi = suv.x * max(SH.nx - 1.0, 1.0);
@@ -2544,16 +2542,15 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   let bedUse = select(field0.x, sh.bed, sh.inside > 0.5);
   let toSand = smoothstep(-0.28, 0.04, bedUse);
   let shoreOffV = fj / max(SH.nz - 1.0, 1.0);
-  // Past the Dirichlet rim (~0.72+), prefer fluid as soon as any sheet water exists.
-  let pastRim = 1.0 - smoothstep(0.58, 0.84, shoreOffV);
-  let hasSheet = smoothstep(0.005, 0.09, sh.h + sh.foam * 0.35 + sh.wet * 0.02);
-  let fluidW = sat(max(toSand, pastRim * max(hasSheet, 0.42))) * sh.inside;
-  // Crest belt: keep seaAt geometry through approach→curl even when SWE already wet.
-  let crestBelt = smoothstep(0.08, -0.15, bedUse) * smoothstep(-2.55, -0.45, bedUse);
+  // Interior of domain prefers fluid once any sheet water exists; rim stays seaAt-led.
+  let pastRim = 1.0 - smoothstep(0.62, 0.9, shoreOffV);
+  let hasSheet = smoothstep(0.004, 0.07, sh.h + sh.foam * 0.3 + sh.wet * 0.015);
+  // Continuous fluid ownership — bed + wet only (no brk crestHold flip).
+  let fluidW = sat(max(toSand, pastRim * max(hasSheet, 0.35))) * sh.inside;
   var xz = xz0;
-  var y = sh.eta;
-  let needSea = fluidW < 0.88 || crestBelt > 0.12;
-  if (needSea) {
+  var y = select(field0.x, sh.eta, sh.inside > 0.5);
+  // Sample seaAt whenever the sheet is not fully fluid-owned sand (continuous rim).
+  if (sh.inside > 0.5 && fluidW < 0.97) {
     let depth0 = max(-bedUse, 0.2);
     let s = seaAt(xz0, field0.y, depth0);
     let distSh = length(xz0 - F.camPos.xz);
@@ -2565,33 +2562,24 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
     let geomSh = smoothstep(mix(1100.0, 2600.0, sat(elevSh / 200.0)), 140.0, distSh);
     let lodSh = seaLod(distSh, depth0);
     let gs = geomSh * wwSh.x * lodSh.x;
-    // Hold approaching/curling crest; yield to SWE on collapse + sand wash.
-    let crestHold = sat(s.brk * 1.35 + sat(s.disp.y) * 0.7) * crestBelt
-      * (1.0 - toSand * 0.95) * (1.0 - sat(sh.foam * 0.7) * toSand);
-    let geomW = fluidW * (1.0 - crestHold * 0.96);
-    xz = xz0 + s.disp.xz * gs * (1.0 - geomW) * 1.05;
-    // Full crest height through shoal — do not let ww/lod mute the standing face.
-    var ySea = s.disp.y * mix(0.35, 1.0, geomSh) * mix(0.55, 1.0, max(wwSh.x, crestHold));
-    ySea += shapeField(xz0).x * wwSh.y * lodSh.y * (1.0 - crestHold * 0.5);
-    // Crest face bias from shared break state — not a second free surface.
-    ySea += sat(s.brk) * (0.1 + 0.45 * sat(s.disp.y)) * crestHold;
-    let film = smoothstep(0.14, 0.02, sh.h);
-    let yWash = mix(sh.eta, max(sh.eta, bedUse + 0.004), film * toSand);
-    y = mix(ySea, yWash, geomW);
+    // Cap tip XZ on the sheet — large tip throw was the shard/pop source.
+    let tipCap = mix(0.55, 0.12, smoothstep(3.5, 0.4, depth0));
+    xz = xz0 + s.disp.xz * gs * (1.0 - fluidW) * tipCap;
+    var ySea = s.disp.y * mix(0.2, 1.0, geomSh) * mix(0.35, 1.0, wwSh.x) * lodSh.x;
+    ySea += shapeField(xz0).x * wwSh.y * lodSh.y * (1.0 - fluidW * 0.7);
+    let film = smoothstep(0.12, 0.015, sh.h);
+    let yWash = mix(sh.eta, max(sh.eta, bedUse + 0.003), film * toSand);
+    // Soft bed/wet mix only — one continuous η, no shape popping.
+    y = mix(ySea, yWash, fluidW);
   } else if (sh.inside > 0.5) {
-    let film = smoothstep(0.14, 0.02, sh.h);
-    y = mix(sh.eta, max(sh.eta, bedUse + 0.004), film * toSand);
-  } else {
-    y = field0.x;
+    let film = smoothstep(0.12, 0.015, sh.h);
+    y = mix(sh.eta, max(sh.eta, bedUse + 0.003), film * toSand);
   }
-  if (sh.inside > 0.5 && toSand > 0.12) {
-    let tongueN = n2(xz0 * 1.35 + SH.along * F.time * 0.08) * 0.55
-      + n2(xz0 * 3.8 + vec2<f32>(F.time * 0.12, 4.0)) * 0.45;
-    let runK = smoothstep(0.15, 0.85, toSand) * smoothstep(0.003, 0.08, sh.h + sh.foam * 0.35);
-    // Run-up / backwash silhouette from SWE velocity — readable tongue, not noise.
-    y += (tongueN - 0.42) * 0.04 * runK;
-    y -= sat(dot(sh.vel, SH.sea)) * runK * 0.028 * (0.35 + 0.65 * tongueN);
-    y += sat(-dot(sh.vel, SH.sea)) * runK * 0.02 * smoothstep(0.02, 0.12, sh.h);
+  // Mild run-up silhouette from SWE velocity — not noise-jagged tongues.
+  if (sh.inside > 0.5 && toSand > 0.18) {
+    let runK = smoothstep(0.2, 0.9, toSand) * smoothstep(0.004, 0.06, sh.h + sh.foam * 0.25);
+    y -= sat(dot(sh.vel, SH.sea)) * runK * 0.014;
+    y += sat(-dot(sh.vel, SH.sea)) * runK * 0.01 * smoothstep(0.02, 0.1, sh.h);
   }
   var o: WaterV;
   o.world = vec3<f32>(xz.x, y, xz.y);
@@ -2644,19 +2632,19 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   let lip = smoothstep(0.2, 0.5, sec) * (1.0 - smoothstep(0.5, 0.78, sec));
   let fall = smoothstep(0.6, 1.0, sec);
   let root = 1.0 - smoothstep(0.0, 0.16, sec);
-  // Only wake a lip where the shared event is clearly live — avoids flat white shards.
-  let live = sat(ev.live * 1.15 + sat(ev.brk * 0.7 + ev.curl * 0.55) * 0.4);
-  let ang = clamp(0.85 + (ev.curl * 1.55 + lip * 0.75) * max(live, 0.45), 0.85, 2.05);
-  let amp = max(abs(S.disp.y), 0.28) * (1.0 + 0.55 * sat(ev.brk) + 0.35 * ev.curl);
-  let lipR = (1.35 + 2.6 * amp + 1.9 * ev.curl) * (0.6 + 0.75 * live);
-  let wLip = lip * max(live, 0.4);
+  // Restrained lip — prior tipThrow×amp self-intersected into sky shards through foliage.
+  let live = sat(ev.live * 1.05 + sat(ev.brk * 0.55 + ev.curl * 0.4) * 0.3);
+  let ang = clamp(0.75 + (ev.curl * 1.05 + lip * 0.55) * max(live, 0.35), 0.7, 1.55);
+  let amp = max(abs(S.disp.y), 0.18) * (1.0 + 0.35 * sat(ev.brk) + 0.22 * ev.curl);
+  let lipR = (0.75 + 1.35 * amp + 1.0 * ev.curl) * (0.45 + 0.55 * live);
+  let wLip = lip * max(live, 0.35);
   let ox = sin(ang) * lipR * wLip;
-  let oy = (cos(ang) - 1.0) * lipR * wLip * 0.55;
-  let faceLift = face * max(live, 0.45) * (0.75 + 1.45 * ev.curl + 0.55 * sat(ev.brk)) * amp;
-  let tipThrow = ox + (1.7 + 3.2 * ev.curl) * lip * max(live, 0.4) * amp;
-  let dumpPush = fall * max(live, 0.4) * (1.25 + 2.1 * ev.collapse) * amp;
-  let dumpDrop = fall * max(live, 0.4) * (0.55 + 1.35 * ev.collapse) * amp;
-  let cross = (sec - 0.15) * (2.8 + 4.2 * live) + tipThrow * 0.25;
+  let oy = (cos(ang) - 1.0) * lipR * wLip * 0.4;
+  let faceLift = face * max(live, 0.35) * (0.45 + 0.85 * ev.curl + 0.3 * sat(ev.brk)) * amp;
+  let tipThrow = ox + (0.85 + 1.5 * ev.curl) * lip * max(live, 0.3) * amp;
+  let dumpPush = fall * max(live, 0.3) * (0.7 + 1.15 * ev.collapse) * amp;
+  let dumpDrop = fall * max(live, 0.3) * (0.35 + 0.85 * ev.collapse) * amp;
+  let cross = (sec - 0.15) * (1.8 + 2.6 * live) + tipThrow * 0.18;
   let inland = -SH.sea;
   var w = vec3<f32>(
     baseXZ.x + inland.x * (cross + tipThrow * 0.7 + dumpPush * 0.85),
@@ -3081,8 +3069,8 @@ fn motes(p: vec3<f32>, fld: vec2<f32>) -> f32 {
   }
   return foldCloud(vec4<f32>(L, T), in.clip.xy);
 }
-// The cloud buffer is the same size as this pass. Folding it here leaves the water
-// shader at 16 sampled textures: the star map already took the last slot.
+// The cloud buffer is the same size as this pass. Folding it here keeps water under
+// the 16-sampled-texture limit (stars are procedural storage, not a sampled map).
 // Cross + diagonal blur hides residual march grain without a spatial dither pattern.
 fn foldCloud(air: vec4<f32>, px: vec2<f32>) -> vec4<f32> {
   let p = vec2<i32>(px);
@@ -3303,17 +3291,17 @@ fn hidden(clip: vec4<f32>) -> bool {
   // Continuous ownership: soft bed/wet weights (no knife-edge on noisy sim bed).
   // Wide seaward fade so ocean↔sheet is one surface, not a cyan strip seam.
   let deepFade = smoothstep(-3.1, -2.2, sh0.bed);
-  let wetSand = smoothstep(0.003, 0.018, sh0.h) + smoothstep(0.03, 0.1, sh0.foam) * 0.65;
+  let wetSand = smoothstep(0.003, 0.018, sh0.h) + smoothstep(0.03, 0.1, sh0.foam) * 0.55;
   let sandW = smoothstep(-0.18, 0.05, sh0.bed) * sat(wetSand);
   let surfW = (1.0 - smoothstep(-0.18, 0.05, sh0.bed)) * deepFade;
   let sheetOwn = sh0.inside * max(sandW, surfW);
-  let sheetSoft = sheetOwn * (1.0 - smoothstep(0.72, 1.05, shoreOff));
+  let sheetSoft = sheetOwn * (1.0 - smoothstep(0.68, 1.02, shoreOff));
   if (!isBreaker) {
-    // Asymmetric soft clip — overlap band uses alpha, not a binary wall.
-    if (in.sheet > 0.5 && sheetSoft < 0.015) { discard; }
-    if (in.sheet < 0.5 && sheetSoft > 0.94) { discard; }
+    // Soft overlap — sheet fades out seaward; ocean yields only where sheet is strong.
+    if (in.sheet > 0.5 && sheetSoft < 0.012) { discard; }
+    if (in.sheet < 0.5 && sheetSoft > 0.88) { discard; }
   } else {
-    if (in.live < 0.1) { discard; }
+    if (in.live < 0.14) { discard; }
   }
   let field = sampleField(in.xz0);
   let scale = field.y;
@@ -3381,7 +3369,7 @@ fn hidden(clip: vec4<f32>) -> bool {
   // Reuse the shore sample from the sheet test (identical xz0).
   let sh = sh0;
   var bore = 0.0;
-  // Bore stencil only on the sheet (ocean disk already has seaAt normals).
+  // Bore stencil on sheet; jeantimex/fluid screen-space idea: SWE η normals when sheet owns.
   // shoreHAt = 4 loads/tap vs shoreFetch's 8 — same visual slope, half the bandwidth.
   if (in.sheet > 0.5 && sh.inside > 0.5 && sh.bed > -1.5 && shoreOff < 0.9) {
     let e = max(mix(0.28, 0.72, sat(foot * 0.9)), pix * 2.4);
@@ -3395,11 +3383,13 @@ fn hidden(clip: vec4<f32>) -> bool {
       let fj = dot(dmn, SH.sea) / SH.dx;
       let brim = smoothstep(2.0, 20.0, fi) * smoothstep(SH.nx - 2.0, SH.nx - 20.0, fi) * smoothstep(2.0, 14.0, fj);
       let onBeach = smoothstep(-0.15, 0.1, sh.bed);
-      // η ≈ centerBed + h (bed slow over stencil); on beach prefer h itself.
       let etax = spx.x - smx.x;
       let etaz = spz.x - smz.x;
       let slopeLen = length(vec2<f32>(etax, etaz)) / (e * 2.0);
-      let take = smoothstep(0.012, 0.1, slopeLen) * (1.0 - smoothstep(0.48, 0.92, shoreOff)) * brim;
+      let takeSlope = smoothstep(0.012, 0.1, slopeLen) * (1.0 - smoothstep(0.48, 0.92, shoreOff)) * brim;
+      let fluidOwnN = sat(max(smoothstep(-0.22, 0.04, sh.bed), smoothstep(0.005, 0.07, sh.h)))
+        * (1.0 - smoothstep(0.55, 0.92, shoreOff)) * brim;
+      let take = max(takeSlope, fluidOwnN * 0.78);
       let dhx = mix(etax, spx.x - smx.x, onBeach);
       let dhz = mix(etaz, spz.x - smz.x, onBeach);
       let sn = normalize(vec3<f32>(-dhx / (e * 2.0) + N.x, 1.0, -dhz / (e * 2.0) + N.z));
