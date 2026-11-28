@@ -1804,6 +1804,8 @@ function waveY(world, x, z, time) {
       const grow = Math.min(1.28, Math.max(1, Math.sqrt(1 / Math.min(cgRel, 1))));
       As *= 1 + (grow - 1) * smooth01(1.95, 0.15, Math.min(kUse * D, 6));
     }
+    // Helio/Rockstar depth amp cap — match GPU seaAt / shore couple.
+    As = Math.min(As, 0.42 * D + 0.14);
     const omega = (i === 1 ? wP * (kUse / kP) : Math.sqrt(9.81 * kUse)) * wp.spd * Math.sqrt(th);
     const s = Math.sin(kUse * (dx * x + dz * z) - omega * time);
     y += As * s;

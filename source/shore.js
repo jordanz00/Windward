@@ -108,6 +108,16 @@ fn coupleAmp(kUse: f32, th: f32, depth: f32) -> f32 {
   let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.28);
   return mix(1.0, grow, smoothstep(1.95, 0.15, kh));
 }
+// Helio/Rockstar shore: hard amp vs depth so cm-deep film cannot carry metre crests.
+fn depthAmpCap(As: f32, depth: f32) -> f32 {
+  return min(As, 0.42 * depth + 0.14);
+}
+// Rockstar DF / Helio travel-time proxy: crest phase follows shore-arrival, not open-ocean k·x alone.
+fn travelPhase(xz: vec2<f32>, depth: f32, omega: f32) -> f32 {
+  let dSea = dot(xz - U.origin, U.sea);
+  let c = max(sqrt(9.81 * max(depth, 0.08)), 0.45);
+  return omega * (dSea / c);
+}
 fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
   var eta = oceanSample(xz);
   var vel = vec2<f32>(0.0);
@@ -115,9 +125,11 @@ fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
   let D = max(depth, 0.25);
   // Keep kinematics aligned with seaAt so the wash is driven by the same swell family.
   let deepW = smoothstep(1.6, 7.5, D);
+  // Shore trains fade in as depth falls (Helio 5.3) — spectrum damp near land.
+  let shoreTrain = smoothstep(0.05, 0.55, D) * (1.0 - smoothstep(4.5, 9.0, D));
   for (var i = 0; i < 4; i++) {
     let w = U.waves[i];
-    let dir = rot2(w.xy);
+    let dir0 = rot2(w.xy);
     let len = w.w / frq;
     let k = 6.2831853 / len;
     let feel = 1.0 - smoothstep(len * 0.08, len * 0.45, D);
@@ -125,8 +137,8 @@ fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
     let Q = min(steepOf(i) + feel * 0.45, 1.05);
     // Keep more offshore swell energy so the rim drive reaches the surf belt.
     if (i < 2) { As *= mix(1.0, 0.42, deepW); }
-    if (i == 0) { As *= 0.45 + 0.5 * sin(dot(dir, xz) * 0.062 - U.time * 0.045); }
-    if (i == 1) { As *= 0.5 + 0.45 * sin(dot(dir, xz) * 0.09 + 1.3); }
+    if (i == 0) { As *= 0.45 + 0.5 * sin(dot(dir0, xz) * 0.062 - U.time * 0.045); }
+    if (i == 1) { As *= 0.5 + 0.45 * sin(dot(dir0, xz) * 0.09 + 1.3); }
     if (i >= 3) { As *= 0.22; }
     let st = k * As * Q;
     if (st > 0.72) { As *= 0.72 / st; }
@@ -137,19 +149,32 @@ fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
     let thK = sk.y;
     let slow = sqrt(thK);
     if (i < 3) { As *= coupleAmp(kUse, thK, D); }
+    As = depthAmpCap(As, D);
     let steepShore = kUse * As * Q;
     if (steepShore > 0.78) { As *= 0.78 / steepShore; }
+    // Snell toward shore-normal as phase speed drops (Rockstar shore waves // to coast).
+    var dir = dir0;
+    if (i < 3 && k * D < 2.15) {
+      let into = clamp(-dot(dir0, U.sea), 0.0, 1.0);
+      let turn = clamp((1.0 - slow) * 1.2, 0.0, 1.0) * shoreTrain;
+      dir = normalize(mix(dir0, -U.sea * max(into, 0.08) + U.along * dot(dir0, U.along), turn));
+    }
     // Noniv capillary dispersion on short bands: ω² = gk + σk³ (seamless mid/short handoff).
     let cap = select(0.0, 7.4e-5 * kUse * kUse * kUse, i >= 2);
     let omega = sqrt(9.81 * kUse + cap) * U.spd * slow;
-    let phase = kUse * dot(dir, xz) - omega * U.time;
+    // Helio T-field phase: crests wrap alongshore; open-ocean phase fades near beach.
+    let phOpen = kUse * dot(dir, xz);
+    let phShore = travelPhase(xz, D, omega) + kUse * dot(U.along, xz) * (0.08 + 0.12 * f32(i));
+    let phase = mix(phOpen, phShore, shoreTrain * select(0.55, 0.85, i < 2)) - omega * U.time;
     let s = sin(phase);
     eta += As * s;
     // Orbital + progressive shoreward flux so the bore carries mass inland.
-    vel += dir * Q * As * s * omega * 1.12;
+    vel += dir * Q * As * s * omega * 1.22;
+    // Shoreward mass bias on the rising face (GTA VI wash onto beach).
+    vel += (-U.sea) * Q * As * max(s, 0.0) * omega * 0.38 * shoreTrain;
   }
   let r = vec2<f32>(xz.x * 0.82 - xz.y * 0.57, xz.x * 0.57 + xz.y * 0.82);
-  eta += oceanSample(r * (220.0 / 151.0)) * 0.42;
+  eta += oceanSample(r * (220.0 / 151.0)) * 0.42 * mix(1.0, 0.35, shoreTrain);
   return vec3<f32>(eta, vel);
 }
 fn at(ix: i32, iz: i32) -> vec4<f32> {
@@ -392,8 +417,8 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   vel *= exp(-brk * 1.65 * dt);
 
   // Depth-aware Manning-like friction: stronger on walkable beach so run-up dies
-  // before covering standing eye height; mid-surf stays mild for a coherent bore.
-  let Cf = 0.0042 + 0.078 * smoothstep(-0.28, 0.14, b) + 0.055 * smoothstep(0.14, 0.01, hN);
+  // before covering standing eye height; mid-surf stays mild so wash tongues arrive.
+  let Cf = 0.0038 + 0.068 * smoothstep(-0.22, 0.16, b) + 0.048 * smoothstep(0.14, 0.01, hN);
   let sp2 = length(vel);
   if (sp2 > 0.02 && hN > 0.004) {
     vel *= 1.0 / (1.0 + dt * Cf * sp2 / max(hN, 0.02));
@@ -416,16 +441,24 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
     }
   }
   // Bound film depth on dry / barely-wet beach — walkable sand keeps eye above η.
+  // Allow a slightly taller swash tongue than #70 so wash reads, still below eye.
   let off = f32(z) / max(U.nz - 1.0, 1.0);
-  if (b > -0.12 && hN > 0.14) {
-    let hCap = mix(0.14, 0.055, smoothstep(-0.12, 0.18, b));
+  if (b > -0.12 && hN > 0.16) {
+    let hCap = mix(0.16, 0.07, smoothstep(-0.12, 0.18, b));
     hN = mix(hN, min(hN, hCap), smoothstep(-0.12, 0.1, b));
   }
   // Extra inland kill: once past the foreshore, shed height before dune climb.
-  let inlandK = smoothstep(0.42, 0.12, off) * smoothstep(-0.15, 0.2, b);
+  let inlandK = smoothstep(0.38, 0.1, off) * smoothstep(-0.12, 0.22, b);
   if (inlandK > 0.01) {
-    hN *= 1.0 - 0.55 * inlandK;
-    vel *= 1.0 - 0.4 * inlandK;
+    hN *= 1.0 - 0.48 * inlandK;
+    vel *= 1.0 - 0.35 * inlandK;
+  }
+  // Continuous free-surface: mild film Laplacian (Helio flat contact film) — kills
+  // cell-to-cell η sawteeth without raising mesh density or painting foam.
+  if (hN >= hDry && hN < 0.22) {
+    let hAvg = 0.25 * (max(l.x, 0.0) + max(r.x, 0.0) + max(dwn.x, 0.0) + max(up.x, 0.0));
+    let smoothK = smoothstep(0.2, 0.03, hN) * (0.35 + 0.45 * smoothstep(-0.25, 0.08, b));
+    hN = mix(hN, hAvg, smoothK * 0.42);
   }
 
   var foamN = 0.0;
@@ -476,11 +509,11 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   ground *= exp(-dt * 0.032);
   if (hN > 0.08) { ground *= exp(-dt * 0.28); }
 
-  // Authoritative coastal handoff: Dirichlet on a narrow seaward rim.
+  // Authoritative coastal handoff: Dirichlet on a seaward rim spanning full alongshore.
+  // Rockstar ocean→shore lerp: displacements + normals owned by SWE inland of rim.
   // Mild couple only — prior crest× / vel× dump still over-ran walkable beach.
-  // Interior cells stay HLL (no soft Gerstner overwrite).
-  let wRow = smoothstep(0.88, 0.99, off);
-  let wDepth = smoothstep(0.02, -0.65, b);
+  let wRow = smoothstep(0.84, 0.985, off);
+  let wDepth = smoothstep(0.05, -0.55, b);
   let w = wRow * wDepth;
   if (w > 0.001 && b < 0.25) {
     let posC = cellPos(x, z);
@@ -495,9 +528,10 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
     // Noniv Jacobian fold from FFT slopes — same open-sea fold family into shore couple.
     let fold = fftFold(posC);
     let brkEvt = max(max(depthLim, steepLim), fold * 0.8) * smoothstep(2.8, 0.2, depthDrive) * crestGate;
-    let hO = max(sea.x * (1.0 + 0.04 * brkEvt) - b, 0.0);
+    // Depth-capped couple height (Helio a ≤ 0.42d+0.14 family via ocean()).
+    let hO = max(sea.x * (1.0 + 0.05 * brkEvt) - b, 0.0);
     hN = mix(hN, hO, w);
-    vel = mix(vel, sea.yz * (1.0 + 0.06 * brkEvt), w);
+    vel = mix(vel, sea.yz * (1.0 + 0.08 * brkEvt), w);
     // Foam seed when the drive crest trips — transported by SWE, not painted.
     foamN = mix(foamN, max(foamN, brkEvt * 0.85), w * 0.55 * clamp(brkEvt + 0.1, 0.0, 1.0));
   }
@@ -776,8 +810,9 @@ async function createShore(device, world, anchor, shapeView, rocks) {
   const nx = SHORE_NX, nz = SHORE_NZ, dx = SHORE_DX;
   const seaX = anchor.fx, seaZ = anchor.fz;
   const alongX = -seaZ, alongZ = seaX;
-  // Keep wash domain on the foreshore — prior 18 m let over-driven bores climb the dune.
-  const inland = 12;
+  // Wash domain on foreshore — GTA VI-style run-up needs a few metres of sand;
+  // prior 18 m climbed the dune; 12 m was tight for continuous wash tongues.
+  const inland = 13;
   const originX = anchor.x - alongX * nx * dx * 0.5 - seaX * inland;
   const originZ = anchor.z - alongZ * nx * dx * 0.5 - seaZ * inland;
   const bedData = new Float32Array(nx * nz * 2);
@@ -787,12 +822,12 @@ async function createShore(device, world, anchor, shapeView, rocks) {
       const z = originZ + alongZ * (i + 0.5) * dx + seaZ * (j + 0.5) * dx;
       let h = fieldSample(world, x, z);
       const band = smooth01(1.15, 0.2, h) * smooth01(-1.1, -0.2, h);
-      // Cusps and ridges live only in the sim bed. The drawn beach stays smooth,
-      // so the run-up fingers without painting contour lines on the sand.
-      const cusp = (vnoise(x * 0.11, z * 0.11 + 3.0) - 0.5) * 0.42
-        + (vnoise(x * 0.29, z * 0.29 + 8.0) - 0.5) * 0.18;
-      const ridge = (vnoise(x * 0.55, z * 0.55) - 0.5) * 0.12;
-      const grain = (vnoise(x * 1.9 + 4.0, z * 1.9) - 0.5) * 0.05;
+      // Mild foreshore grain only — heavy cusp ridges faceted the free-surface mesh.
+      // Alongshore wash variation comes from travel-time phase + SWE, not bed sawteeth.
+      const cusp = (vnoise(x * 0.11, z * 0.11 + 3.0) - 0.5) * 0.22
+        + (vnoise(x * 0.29, z * 0.29 + 8.0) - 0.5) * 0.1;
+      const ridge = (vnoise(x * 0.55, z * 0.55) - 0.5) * 0.06;
+      const grain = (vnoise(x * 1.9 + 4.0, z * 1.9) - 0.5) * 0.03;
       h += (cusp + ridge + grain) * band;
       // Deeper than the surf zone, the cell is the ocean. The solver owns the wash.
       let drive = 0;

@@ -1952,6 +1952,10 @@ fn shoalAmp(kUse: f32, th: f32, depth: f32) -> f32 {
   let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.28);
   return mix(1.0, grow, smoothstep(1.95, 0.15, kh));
 }
+// Helio/Rockstar: centimetre film cannot carry metre crests (Green's-law hard cap).
+fn depthAmpCap(As: f32, depth: f32) -> f32 {
+  return min(As, 0.42 * depth + 0.14);
+}
 
 fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
   var d = vec3<f32>(0.0);
@@ -2008,6 +2012,7 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     let thK = sk.y;
     let slow = sqrt(thK);
     if (i < 3) { As *= shoalAmp(kUse, thK, D); }
+    As = depthAmpCap(As, D);
     let steepShore = kUse * As * Q;
     if (steepShore > 0.72) { As *= 0.72 / steepShore; }
     var omega = sqrt(G * kUse) * spdK * slow;
@@ -2528,10 +2533,11 @@ fn seaLod(dist: f32, depth: f32) -> vec2<f32> {
 fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   return uv;
 }
-// ONE coastal free surface on the shore sheet:
+// ONE coastal free surface on the shore sheet (GTA VI / Rockstar shoreline layer):
 //   seaward rim — seaAt (phase-matched to ocean);
-//   foreshore / wash — SWE η = bed + h;
+//   foreshore / wash — SWE η = bed + h owns geometry;
 //   blend from bed/h/wet only — never foam/brk ownership (that popped seams).
+//   XZ locked to sim grid inland of rim — tip throw = jagged facets.
 @vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
   let suv = shoreWarp(uv);
   let fi = suv.x * max(SH.nx - 1.0, 1.0);
@@ -2542,15 +2548,16 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   let bedUse = select(field0.x, sh.bed, sh.inside > 0.5);
   let toSand = smoothstep(-0.32, 0.02, bedUse);
   let shoreOffV = fj / max(SH.nz - 1.0, 1.0);
-  // Wider soft rim handoff; interior prefers sheet once any depth/wet exists.
-  let pastRim = 1.0 - smoothstep(0.7, 0.96, shoreOffV);
+  // Soft rim handoff; interior prefers sheet once any depth/wet exists (Helio film).
+  let pastRim = 1.0 - smoothstep(0.68, 0.95, shoreOffV);
   // NO foam in ownership — foam flicker was a waterline shape-pop source.
-  let hasSheet = smoothstep(0.002, 0.055, sh.h + sh.wet * 0.02);
+  let hasSheet = smoothstep(0.0015, 0.045, sh.h + sh.wet * 0.025);
   // Continuous fluid ownership — bed + depth/wet only (no brk/foam flip).
-  let fluidW = sat(max(toSand, pastRim * mix(0.55, 1.0, hasSheet))) * sh.inside;
+  let fluidW = sat(max(toSand, pastRim * mix(0.62, 1.0, hasSheet))) * sh.inside;
+  // Grid-locked XZ: residual tip throw was the jagged-poly source on the waterline.
   var xz = xz0;
   var y = select(field0.x, sh.eta, sh.inside > 0.5);
-  // Sample seaAt whenever the sheet is not fully fluid-owned sand (continuous rim).
+  // Sample seaAt whenever the sheet is not fully fluid-owned (continuous rim height only).
   if (sh.inside > 0.5 && fluidW < 0.985) {
     let depth0 = max(-bedUse, 0.2);
     let s = seaAt(xz0, field0.y, depth0);
@@ -2562,26 +2569,29 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
     let wwSh = waveWeights(distSh, footSh, footLongSh, field0.y);
     let geomSh = smoothstep(mix(1100.0, 2600.0, sat(elevSh / 200.0)), 140.0, distSh);
     let lodSh = seaLod(distSh, depth0);
-    let gs = geomSh * wwSh.x * lodSh.x;
-    // Near-zero tip XZ on sheet — residual tip throw still popped waterline facets.
-    let tipCap = mix(0.28, 0.04, smoothstep(3.2, 0.35, depth0));
-    xz = xz0 + s.disp.xz * gs * (1.0 - fluidW) * tipCap;
+    // Height-only ocean→shore lerp (Rockstar CGDC15). XZ never displaced on sheet.
     var ySea = s.disp.y * mix(0.2, 1.0, geomSh) * mix(0.35, 1.0, wwSh.x) * lodSh.x;
-    // Kill FFT height bleed as sheet takes over (seam chatter).
     ySea += shapeField(xz0).x * wwSh.y * lodSh.y * (1.0 - fluidW);
-    let film = smoothstep(0.1, 0.012, sh.h);
-    let yWash = mix(sh.eta, max(sh.eta, bedUse + 0.003), film * toSand);
-    // Soft bed/wet mix only — one continuous η, no shape popping.
-    y = mix(ySea, yWash, fluidW);
+    // Helio: dry ground → flat film at bed; wet → SWE η. Soft, no hard max facets.
+    let film = smoothstep(0.12, 0.01, sh.h);
+    let yFilm = mix(sh.eta, bedUse + sat(sh.h) * 0.02, film * toSand);
+    y = mix(ySea, yFilm, fluidW);
   } else if (sh.inside > 0.5) {
-    let film = smoothstep(0.1, 0.012, sh.h);
-    y = mix(sh.eta, max(sh.eta, bedUse + 0.003), film * toSand);
+    let film = smoothstep(0.12, 0.01, sh.h);
+    y = mix(sh.eta, bedUse + sat(sh.h) * 0.02, film * toSand);
   }
-  // Mild run-up silhouette from SWE velocity — not foam-weighted (no disguise).
-  if (sh.inside > 0.5 && toSand > 0.18) {
-    let runK = smoothstep(0.2, 0.9, toSand) * smoothstep(0.004, 0.055, sh.h);
-    y -= sat(dot(sh.vel, SH.sea)) * runK * 0.01;
-    y += sat(-dot(sh.vel, SH.sea)) * runK * 0.008 * smoothstep(0.02, 0.1, sh.h);
+  // Continuous dry edge: never sink below bed. Keep a thin wet film readable so the
+  // waterline is a soft η→bed handoff (Helio contact film), not a hard polygon cut.
+  if (sh.inside > 0.5) {
+    let dryEdge = smoothstep(-0.04, 0.12, bedUse) * (1.0 - smoothstep(0.001, 0.028, sh.h));
+    y = mix(y, bedUse + 0.004 * sh.wet, dryEdge * 0.55);
+    y = max(y, bedUse);
+  }
+  // Run-up / backwash silhouette from SWE velocity — stronger tongue read on sand.
+  if (sh.inside > 0.5 && toSand > 0.12) {
+    let runK = smoothstep(0.12, 0.8, toSand) * smoothstep(0.002, 0.07, sh.h + sh.wet * 0.02);
+    y -= sat(dot(sh.vel, SH.sea)) * runK * 0.014;
+    y += sat(-dot(sh.vel, SH.sea)) * runK * 0.02 * smoothstep(0.01, 0.1, sh.h);
   }
   var o: WaterV;
   o.world = vec3<f32>(xz.x, y, xz.y);
@@ -3702,16 +3712,17 @@ fn hidden(clip: vec4<f32>) -> bool {
     let dmn = in.xz0 - SH.origin;
     let fi = dot(dmn, SH.along) / SH.dx;
     let border = smoothstep(1.0, 28.0, fi) * smoothstep(SH.nx - 1.0, SH.nx - 28.0, fi);
-    // Soft waterline — multi-scale ragged edge kills stair-step facet silhouette.
-    let ragged = n2(in.xz0 * 1.6) * 0.07 + n2(in.xz0 * 4.2 + vec2<f32>(F.time * 0.04, 1.0)) * 0.04
-      + n2(in.xz0 * 11.0 + vec2<f32>(0.0, F.time * 0.06)) * 0.02;
-    let fade = smoothstep(-0.14 - ragged, 0.16 + ragged, sh.bed);
-    // Thin run-up / retreat film must stay readable — not discarded into dry sand.
-    let body = max(smoothstep(0.0025, 0.055, sh.h), smoothstep(0.06, 0.35, sh.foam) * 0.6 + smoothstep(0.25, 0.7, sh.wet) * 0.25);
-    let filmA = sheetFilm * 0.48;
+    // Soft waterline — wet-film + multi-scale edge so η→sand is not a hard polygon cut.
+    let ragged = n2(in.xz0 * 1.6) * 0.08 + n2(in.xz0 * 4.2 + vec2<f32>(F.time * 0.04, 1.0)) * 0.05
+      + n2(in.xz0 * 11.0 + vec2<f32>(0.0, F.time * 0.06)) * 0.025;
+    let fade = smoothstep(-0.16 - ragged, 0.2 + ragged, sh.bed);
+    // Thin run-up / retreat film must stay readable — wet channel softens the contact line.
+    let body = max(smoothstep(0.0015, 0.05, sh.h),
+      smoothstep(0.05, 0.32, sh.foam) * 0.55 + smoothstep(0.12, 0.65, sh.wet) * 0.42);
+    let filmA = sheetFilm * 0.55;
     // Ownership soft weight — keep sheet translucent; foam must not force an opaque white shelf.
-    let own = mix(0.32, 0.94, sat(sheetSoft));
-    alpha = border * fade * own * sat(mix(body * 0.28 + filmA, 0.45, smoothstep(0.28, 0.82, foam)));
+    let own = mix(0.28, 0.92, sat(sheetSoft));
+    alpha = border * fade * own * sat(mix(body * 0.32 + filmA, 0.42, smoothstep(0.28, 0.82, foam)));
   } else {
     // Ocean disk yields where the sheet owns the surf — soft handoff, not a hard strip.
     alpha = clear * (1.0 - sat(sheetSoft) * 0.96);
