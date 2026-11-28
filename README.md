@@ -50,6 +50,28 @@ Step into the water to swim; hold `Q` to dive. `Shift+6` puts you beside a coral
 
 Real frames from the running app — UI hidden, no AI art.
 
+### Current tip (`426f8bf` · shoreline #72)
+
+Cinematic viewpoints from the GTA VI shoreline tip, labeled with build version. SwiftShader GPU `__png` readbacks (not a discrete-GPU photoreal claim).
+
+![Cinematic viewpoints build 426f8bf](media/readme-showcase/cinematic-views.jpg)
+
+| Beach eye | Shore wash | Storm |
+|---|---|---|
+| ![Palm Beach eye level](media/readme-showcase/beach-eye.jpg) | ![Shore wash](media/readme-showcase/beach-wash.jpg) | ![Beach thunderstorm](media/readme-showcase/beach-storm.jpg) |
+
+### First build → current
+
+Side-by-side with early visitor stills from `media/before/`.
+
+![First build vs current showcase](media/readme-showcase/before-after-showcase.jpg)
+
+| Palm Beach | Coral garden |
+|---|---|
+| ![Palm Beach before after](media/readme-showcase/before-after-beach.jpg) | ![Coral before after](media/readme-showcase/before-after-coral.jpg) |
+
+### Places & skies
+
 ![Nine places and skies](media/nine-views.jpg)
 
 | Volumetric clouds | Through the cloud deck |
@@ -76,7 +98,7 @@ Real frames from the running app — UI hidden, no AI art.
 |---|---|---|
 | ![Abyssal basin](media/deep-ocean.jpg) | ![Sixgill under the wreck](media/shark-wreck.jpg) | ![Sixgill on basin patrol](media/shark-basin.jpg) |
 
-Individual views also live in `media/views/`. Early visitor stills remain in `media/before/` for comparison.
+Individual views also live in `media/views/`. Build-labeled tip stills are under `media/readme-showcase/` (`capture-meta.json`). Early visitor stills remain in `media/before/` for comparison.
 
 ## What is in the page
 

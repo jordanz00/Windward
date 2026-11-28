@@ -1,0 +1,31 @@
+{
+  "task": "WSR-117",
+  "build": "426f8bf",
+  "buildFull": "426f8bfac4bfc5ebb1d0119b7750b30825ebaec1",
+  "subject": "GTA VI shoreline: continuous \u03b7 wash along shore (#72)",
+  "adapter": "SwiftShader",
+  "note": "SwiftShader \u2260 photoreal / discrete-GPU accept. Beach outdoor ?read often hits OperationError on this VM; beach stills are same-tip GPU __png from the #72 capture session; coral stills freshly captured this run.",
+  "capturedAt": "2026-11-28T05:56:07.917832+00:00",
+  "files": [
+    "beach-eye.jpg",
+    "beach-storm.jpg",
+    "beach-wash.jpg",
+    "before-after-beach.jpg",
+    "before-after-coral.jpg",
+    "before-after-showcase.jpg",
+    "cinematic-views.jpg",
+    "coral-garden-alt.jpg",
+    "coral-garden.jpg",
+    "first-beach.jpg",
+    "first-coral.jpg",
+    "first-lagoon.jpg"
+  ],
+  "sources": {
+    "beach-eye": "media/gta-vi-shore/beach-eye.png (tip 54335cc / merge 426f8bf)",
+    "beach-wash": "media/gta-vi-shore/beach-wash.png",
+    "beach-storm": "media/gta-vi-shore/beach-storm.png",
+    "coral-garden": "/tmp/readme-showcase-raw/06-coral-garden.png fresh",
+    "coral-garden-alt": "/tmp/readme-showcase-raw/06b-coral-alt.png fresh",
+    "first": "repo media/before/{beach,coral,lagoon}.jpg"
+  }
+}
