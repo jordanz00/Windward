@@ -7,8 +7,8 @@ const PRESETS = {
 };
 
 const WAVES = [
-  // Primary swell ~1.65 m — prior 2.15 + shoal stacks made nearshore walls.
-  [1.00, 0.02, 1.65, 48, 0.72],
+  // Primary swell ~1.45 m — 1.65 + shoal still covered standing eye on foreshore.
+  [1.00, 0.02, 1.45, 48, 0.72],
   [1.00, 0.02, 0.42, 24, 0.85],
   [0.996, 0.09, 0.1, 68, 0.28],
   [0.996, -0.09, 0.06, 33, 0.18],
@@ -1767,7 +1767,7 @@ let downX = 0, downY = 0, moved = 0;
 
 function waveY(world, x, z, time) {
   // CPU walk/swim surface — track GPU seaAt height family (not tip XZ throw).
-  // Prior path muted ankle amp and skipped nearshore floor/shoaling → collision through the surf.
+  // Dry / barely-wet bed must not invent a high Gerstner free surface (underwater false +).
   const damp0 = fieldDamp(world, x, z);
   const bed = fieldSample(world, x, z);
   const D = Math.max(-bed, 0.25);
@@ -1801,7 +1801,7 @@ function waveY(world, x, z, time) {
       const kh2 = Math.min(kUse * D * 2, 10);
       const cgFrac = 0.5 * (1 + kh2 / Math.max(Math.sinh(kh2), 1e-3));
       const cgRel = Math.max(Math.sqrt(th) * cgFrac, 0.08) / 0.5;
-      const grow = Math.min(1.45, Math.max(1, Math.sqrt(1 / Math.min(cgRel, 1))));
+      const grow = Math.min(1.28, Math.max(1, Math.sqrt(1 / Math.min(cgRel, 1))));
       As *= 1 + (grow - 1) * smooth01(1.95, 0.15, Math.min(kUse * D, 6));
     }
     const omega = (i === 1 ? wP * (kUse / kP) : Math.sqrt(9.81 * kUse)) * wp.spd * Math.sqrt(th);
@@ -1809,10 +1809,16 @@ function waveY(world, x, z, time) {
     y += As * s;
     if (i <= 2 && kUse * D < 2.35) {
       const tip = Math.pow(Math.max(0, Math.min(1, s)), 2.05);
-      const bandK = i === 0 ? 0.72 : i === 1 ? 0.5 : 0.35;
-      const plunge = tip * smooth01(2.8, 0.5, D) * 0.35;
-      y += As * tip * plunge * (0.22 + 0.35 * tip) * bandK;
+      const bandK = i === 0 ? 0.55 : i === 1 ? 0.38 : 0.28;
+      const plunge = tip * smooth01(2.8, 0.5, D) * 0.28;
+      y += As * tip * plunge * (0.18 + 0.28 * tip) * bandK;
     }
+  }
+  // Walkable foreshore: collapse phantom crest toward bed/film so dry sand ≠ underwater.
+  if (bed > -0.15) {
+    const dryK = smooth01(-0.15, 0.12, bed);
+    const filmCap = Math.max(bed - 0.02, -0.08);
+    y = y * (1 - dryK) + Math.min(y, filmCap) * dryK;
   }
   return y;
 }
@@ -4712,16 +4718,20 @@ async function main() {
         yaw = lp[0]; pitch = lp[1];
       }
       // Enter under ~12 cm below the local surface; leave ~10 cm above — hysteresis kills flicker.
+      // Require real inundation (bed below surface or diving) — dry shore must not latch UW.
       const waterGap = waveHere - camY;
-      if (!underLatch && waterGap > 0.12) underLatch = true;
-      else if (underLatch && waterGap < -0.1) underLatch = false;
+      const groundHere = fieldSample(world, camX, camZ);
+      const inundated = groundHere < waveHere - 0.2 || dive > 0.08;
+      if (!underLatch && waterGap > 0.12 && inundated) underLatch = true;
+      else if (underLatch && (waterGap < -0.1 || (!inundated && waterGap < 0.35))) underLatch = false;
       const under = underLatch ? 1 : 0;
       // Lazy-load deep-sea once the eye is in a deep basin (bed under −6 m).
       if (under && !deepSea && fieldSample(world, camX, camZ) < -6) ensureDeepSea();
       if (deepSea) deepSea.update(dt, time, camX, camY, camZ);
       // Continuous immersion for shaders (fog/fill/caustics) — no forced jump across 0.5.
       // Latch still gates discrete app paths (reflections, bugs, audio).
-      let immersion = Math.min(1, Math.max(0, (waterGap + 0.22) / 0.7));
+      // Zero immersion on dry foreshore even if phantom waveY briefly exceeds the eye.
+      let immersion = inundated ? Math.min(1, Math.max(0, (waterGap + 0.22) / 0.7)) : 0;
       // Ease ends so the first/last centimetres do not pop tone.
       immersion = immersion * immersion * (3 - 2 * immersion);
       // Disk centred on the eye. The old square stopped at 6.4 km, so from altitude its

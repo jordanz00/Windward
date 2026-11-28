@@ -1948,8 +1948,8 @@ fn shoalAmp(kUse: f32, th: f32, depth: f32) -> f32 {
   let kh2 = min(kh * 2.0, 10.0);
   let cgFrac = 0.5 * (1.0 + kh2 / max(sinh(kh2), 1e-3));
   let cgRel = max(sqrt(th) * cgFrac, 0.08) / 0.5;
-  // Moderate shoal growth — prior 1.75 + stacked stand-ups made nearshore walls.
-  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.45);
+  // Restrained shoal growth — match coupleAmp; prior 1.45 still wall-high nearshore.
+  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.28);
   return mix(1.0, grow, smoothstep(1.95, 0.15, kh));
 }
 
@@ -1997,8 +1997,8 @@ fn seaAt(xz: vec2<f32>, scale: f32, depth: f32) -> Sea {
     // Soften ankle-depth collapse; keep a little height without walling the beach.
     let collapse = 1.0 - smoothstep(0.35, 2.2, D);
     As *= 1.0 - collapse * 0.18;
-    // Mild mid-depth stand-up only — stacked 1.28× + shoalAmp made jagged walls.
-    if (i < 2) { As *= mix(1.0, 1.08, smoothstep(4.5, 0.6, D)); }
+    // Mild mid-depth stand-up only — prior 1.08 + shoalAmp still tall nearshore.
+    if (i < 2) { As *= mix(1.0, 1.04, smoothstep(4.5, 0.6, D)); }
     // The spectral field owns the mid and short waves. These layers were the repeating ripples.
     if (i >= 3 && i < 6) { As *= 0.22; }
     // Depth-aware dispersion. Deep water (tanh → 1) matches the old sqrt(gk).
@@ -2492,9 +2492,9 @@ fn seaLod(dist: f32, depth: f32) -> vec2<f32> {
   let lod = seaLod(dist, depth);
   let gs = geom * ww.x * lod.x;
   // Depth-only coastal yield — never shoreFetch on the ocean disk (8 loads/vert tanked FPS).
-  // Strong XZ yield nearshore so sheet owns the free surface; keep Y for continuous height.
-  let tipXZ = mix(1.0, 0.22, smoothstep(5.0, 0.55, depth));
-  let tipY = mix(1.0, 0.9, smoothstep(3.8, 0.45, depth));
+  // Near-zero tip XZ nearshore so sheet owns free surface; keep mild Y for continuous height.
+  let tipXZ = mix(1.0, 0.08, smoothstep(5.0, 0.55, depth));
+  let tipY = mix(1.0, 0.82, smoothstep(3.8, 0.45, depth));
   var w = vec3<f32>(
     xz.x + s.disp.x * gs * tipXZ,
     s.disp.y * mix(0.05, 1.0, geom) * mix(0.15, 1.0, ww.x) * lod.x * tipY,
@@ -2531,7 +2531,7 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
 // ONE coastal free surface on the shore sheet:
 //   seaward rim — seaAt (phase-matched to ocean);
 //   foreshore / wash — SWE η = bed + h;
-//   blend weight from bed/depth/wet only — never brk-flip between shapes (that popped).
+//   blend from bed/h/wet only — never foam/brk ownership (that popped seams).
 @vertex fn vsShore(@location(0) uv: vec2<f32>) -> WaterV {
   let suv = shoreWarp(uv);
   let fi = suv.x * max(SH.nx - 1.0, 1.0);
@@ -2540,17 +2540,18 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
   let sh = shoreFetch(xz0);
   let field0 = sampleField(xz0);
   let bedUse = select(field0.x, sh.bed, sh.inside > 0.5);
-  let toSand = smoothstep(-0.28, 0.04, bedUse);
+  let toSand = smoothstep(-0.32, 0.02, bedUse);
   let shoreOffV = fj / max(SH.nz - 1.0, 1.0);
-  // Interior of domain prefers fluid once any sheet water exists; rim stays seaAt-led.
-  let pastRim = 1.0 - smoothstep(0.62, 0.9, shoreOffV);
-  let hasSheet = smoothstep(0.004, 0.07, sh.h + sh.foam * 0.3 + sh.wet * 0.015);
-  // Continuous fluid ownership — bed + wet only (no brk crestHold flip).
-  let fluidW = sat(max(toSand, pastRim * max(hasSheet, 0.35))) * sh.inside;
+  // Wider soft rim handoff; interior prefers sheet once any depth/wet exists.
+  let pastRim = 1.0 - smoothstep(0.7, 0.96, shoreOffV);
+  // NO foam in ownership — foam flicker was a waterline shape-pop source.
+  let hasSheet = smoothstep(0.002, 0.055, sh.h + sh.wet * 0.02);
+  // Continuous fluid ownership — bed + depth/wet only (no brk/foam flip).
+  let fluidW = sat(max(toSand, pastRim * mix(0.55, 1.0, hasSheet))) * sh.inside;
   var xz = xz0;
   var y = select(field0.x, sh.eta, sh.inside > 0.5);
   // Sample seaAt whenever the sheet is not fully fluid-owned sand (continuous rim).
-  if (sh.inside > 0.5 && fluidW < 0.97) {
+  if (sh.inside > 0.5 && fluidW < 0.985) {
     let depth0 = max(-bedUse, 0.2);
     let s = seaAt(xz0, field0.y, depth0);
     let distSh = length(xz0 - F.camPos.xz);
@@ -2562,24 +2563,25 @@ fn shoreWarp(uv: vec2<f32>) -> vec2<f32> {
     let geomSh = smoothstep(mix(1100.0, 2600.0, sat(elevSh / 200.0)), 140.0, distSh);
     let lodSh = seaLod(distSh, depth0);
     let gs = geomSh * wwSh.x * lodSh.x;
-    // Cap tip XZ on the sheet — large tip throw was the shard/pop source.
-    let tipCap = mix(0.55, 0.12, smoothstep(3.5, 0.4, depth0));
+    // Near-zero tip XZ on sheet — residual tip throw still popped waterline facets.
+    let tipCap = mix(0.28, 0.04, smoothstep(3.2, 0.35, depth0));
     xz = xz0 + s.disp.xz * gs * (1.0 - fluidW) * tipCap;
     var ySea = s.disp.y * mix(0.2, 1.0, geomSh) * mix(0.35, 1.0, wwSh.x) * lodSh.x;
-    ySea += shapeField(xz0).x * wwSh.y * lodSh.y * (1.0 - fluidW * 0.7);
-    let film = smoothstep(0.12, 0.015, sh.h);
+    // Kill FFT height bleed as sheet takes over (seam chatter).
+    ySea += shapeField(xz0).x * wwSh.y * lodSh.y * (1.0 - fluidW);
+    let film = smoothstep(0.1, 0.012, sh.h);
     let yWash = mix(sh.eta, max(sh.eta, bedUse + 0.003), film * toSand);
     // Soft bed/wet mix only — one continuous η, no shape popping.
     y = mix(ySea, yWash, fluidW);
   } else if (sh.inside > 0.5) {
-    let film = smoothstep(0.12, 0.015, sh.h);
+    let film = smoothstep(0.1, 0.012, sh.h);
     y = mix(sh.eta, max(sh.eta, bedUse + 0.003), film * toSand);
   }
-  // Mild run-up silhouette from SWE velocity — not noise-jagged tongues.
+  // Mild run-up silhouette from SWE velocity — not foam-weighted (no disguise).
   if (sh.inside > 0.5 && toSand > 0.18) {
-    let runK = smoothstep(0.2, 0.9, toSand) * smoothstep(0.004, 0.06, sh.h + sh.foam * 0.25);
-    y -= sat(dot(sh.vel, SH.sea)) * runK * 0.014;
-    y += sat(-dot(sh.vel, SH.sea)) * runK * 0.01 * smoothstep(0.02, 0.1, sh.h);
+    let runK = smoothstep(0.2, 0.9, toSand) * smoothstep(0.004, 0.055, sh.h);
+    y -= sat(dot(sh.vel, SH.sea)) * runK * 0.01;
+    y += sat(-dot(sh.vel, SH.sea)) * runK * 0.008 * smoothstep(0.02, 0.1, sh.h);
   }
   var o: WaterV;
   o.world = vec3<f32>(xz.x, y, xz.y);

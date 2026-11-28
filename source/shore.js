@@ -4,8 +4,15 @@
 const SHORE_NX = 320;
 const SHORE_NZ = 176;
 const SHORE_DX = 0.32;
-// Sparse SPH/FLIP carriers in the break/run-up belt only — subordinate to the SWE η sheet.
-const SHORE_PART_N = 2048;
+// Full-shore SPH/PBF carriers (jeantimex density/pressure/XSPH + moebis compression-only λ / vorticity).
+// Subordinate to the SWE η sheet — never a second free surface. N covers the entire alongshore belt.
+const SHORE_PART_N = 4096;
+const SHORE_SPH_H = 1.05;
+const SHORE_SPH_RHO0 = 9.2;
+const SHORE_SPH_KP = 52.0;
+const SHORE_SPH_KN = 9.5;
+const SHORE_SPH_XSPH = 0.085;
+const SHORE_SPH_VORT = 0.14;
 
 function shoreWgsl() {
   return `
@@ -34,10 +41,26 @@ struct ShoreU {
 @group(0) @binding(5) var<uniform> U: ShoreU;
 @group(0) @binding(6) var shapeTex: texture_2d<f32>;
 @group(0) @binding(7) var<storage, read_write> parts: array<vec4<f32>>;
+@group(0) @binding(8) var<storage, read_write> dens: array<vec2<f32>>;
+@group(0) @binding(9) var<storage, read_write> heads: array<atomic<u32>>;
+@group(0) @binding(10) var<storage, read_write> nextP: array<u32>;
 
 const NX: u32 = ${SHORE_NX}u;
 const NZ: u32 = ${SHORE_NZ}u;
 const PN: u32 = ${SHORE_PART_N}u;
+const SPH_H: f32 = ${SHORE_SPH_H};
+const SPH_H2: f32 = ${SHORE_SPH_H * SHORE_SPH_H};
+const SPH_RHO0: f32 = ${SHORE_SPH_RHO0};
+const SPH_KP: f32 = ${SHORE_SPH_KP};
+const SPH_KN: f32 = ${SHORE_SPH_KN};
+const SPH_XSPH: f32 = ${SHORE_SPH_XSPH};
+const SPH_VORT: f32 = ${SHORE_SPH_VORT};
+const K_SPIKY2: f32 = ${6 / (Math.PI * Math.pow(SHORE_SPH_H, 4))};
+const K_SPIKY3: f32 = ${10 / (Math.PI * Math.pow(SHORE_SPH_H, 5))};
+const K_DSP2: f32 = ${12 / (Math.PI * Math.pow(SHORE_SPH_H, 4))};
+const K_DSP3: f32 = ${30 / (Math.PI * Math.pow(SHORE_SPH_H, 5))};
+const K_POLY6: f32 = ${4 / (Math.PI * Math.pow(SHORE_SPH_H, 8))};
+const EMPTY: u32 = 0xffffffffu;
 
 fn rot2(p: vec2<f32>) -> vec2<f32> {
   let cs = cos(U.dir);
@@ -47,6 +70,12 @@ fn rot2(p: vec2<f32>) -> vec2<f32> {
 ${OCEAN_TAP_WGSL}
 fn oceanSample(xz: vec2<f32>) -> f32 {
   return oceanTap(shapeTex, rot2(xz) / 220.0).x;
+}
+// Noniv/web-ocean: FFT slope Jacobian fold proxy (break energy cue — not foam paint).
+fn fftFold(xz: vec2<f32>) -> f32 {
+  let s = oceanTap(shapeTex, rot2(xz) / 220.0).yz;
+  let jApprox = 1.0 - (s.x * s.x + s.y * s.y);
+  return smoothstep(0.55, 0.12, jApprox);
 }
 fn steepOf(i: i32) -> f32 {
   if (i == 0) { return U.steep.x; }
@@ -75,8 +104,8 @@ fn coupleAmp(kUse: f32, th: f32, depth: f32) -> f32 {
   let kh2 = min(kh * 2.0, 10.0);
   let cgFrac = 0.5 * (1.0 + kh2 / max(sinh(kh2), 1e-3));
   let cgRel = max(sqrt(th) * cgFrac, 0.08) / 0.5;
-  // Match seaAt shoalAmp — prior 2.35× drove over-run and wall-high bores.
-  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.45);
+  // Restrained shoal growth — 1.45 still let bores climb walkable beach / cover eye.
+  let grow = clamp(sqrt(1.0 / min(cgRel, 1.0)), 1.0, 1.28);
   return mix(1.0, grow, smoothstep(1.95, 0.15, kh));
 }
 fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
@@ -110,7 +139,9 @@ fn ocean(xz: vec2<f32>, depth: f32) -> vec3<f32> {
     if (i < 3) { As *= coupleAmp(kUse, thK, D); }
     let steepShore = kUse * As * Q;
     if (steepShore > 0.78) { As *= 0.78 / steepShore; }
-    let omega = sqrt(9.81 * kUse) * U.spd * slow;
+    // Noniv capillary dispersion on short bands: ω² = gk + σk³ (seamless mid/short handoff).
+    let cap = select(0.0, 7.4e-5 * kUse * kUse * kUse, i >= 2);
+    let omega = sqrt(9.81 * kUse + cap) * U.spd * slow;
     let phase = kUse * dot(dir, xz) - omega * U.time;
     let s = sin(phase);
     eta += As * s;
@@ -209,6 +240,12 @@ fn collideBed(xz: ptr<function, vec2<f32>>, vel: ptr<function, vec2<f32>>, h: f3
   }
   if (b > -0.02 && nLen > 0.12) { *xz = *xz + n2 * (0.08 + 0.2 * solid) * e; }
 }
+fn hashCell(cell: vec2<i32>) -> u32 {
+  return (u32(cell.x * 15823 + cell.y * 9737333)) % PN;
+}
+fn cellOf(p: vec2<f32>) -> vec2<i32> {
+  return vec2<i32>(i32(floor(p.x / SPH_H)), i32(floor(p.y / SPH_H)));
+}
 
 @compute @workgroup_size(8, 8)
 fn seed(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -283,8 +320,8 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 
   var hN = h - dt * invDx * (fR.x - fL.x + fU.x - fD.x);
-  // Positivity: never allow negative depth; cap only at a physical storm ceiling.
-  hN = clamp(hN, 0.0, 2.0);
+  // Positivity: never allow negative depth; storm ceiling kept modest nearshore.
+  hN = clamp(hN, 0.0, 1.55);
   let srcA = g2 * (sRx * sRx - sLy * sLy);
   let srcS = g2 * (sUx * sUx - sDy * sDy);
   var pA = h * dot(vel, A) + dt * invDx * (-(fR.y - fL.y) - (fU.z - fD.z) + srcA);
@@ -354,14 +391,14 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   // Dissipate supercritical momentum. The bore speed is the local wave speed, not a constant.
   vel *= exp(-brk * 1.65 * dt);
 
-  // Depth-aware Manning-like friction: strong on the beach film so run-up dies inland
-  // instead of climbing the dune; mid-surf stays mild enough for a coherent bore.
-  let Cf = 0.0036 + 0.055 * smoothstep(-0.22, 0.18, b) + 0.04 * smoothstep(0.12, 0.01, hN);
+  // Depth-aware Manning-like friction: stronger on walkable beach so run-up dies
+  // before covering standing eye height; mid-surf stays mild for a coherent bore.
+  let Cf = 0.0042 + 0.078 * smoothstep(-0.28, 0.14, b) + 0.055 * smoothstep(0.14, 0.01, hN);
   let sp2 = length(vel);
   if (sp2 > 0.02 && hN > 0.004) {
     vel *= 1.0 / (1.0 + dt * Cf * sp2 / max(hN, 0.02));
   }
-  if (length(vel) > 6.5) { vel *= 6.5 / length(vel); }
+  if (length(vel) > 5.2) { vel *= 5.2 / length(vel); }
   // Bed/rock sheet collision (bedTex mounds): normal + friction, no clip-through.
   {
     let n2 = vec2<f32>((br - bl) * invDx * 0.5, (bu - bd) * invDx * 0.5);
@@ -378,8 +415,18 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
       }
     }
   }
-  // Bound film depth on dry beach — stops wall-high over-run onto the dune.
-  if (b > -0.02 && hN > 0.22) { hN = mix(hN, 0.22, smoothstep(-0.02, 0.12, b)); }
+  // Bound film depth on dry / barely-wet beach — walkable sand keeps eye above η.
+  let off = f32(z) / max(U.nz - 1.0, 1.0);
+  if (b > -0.12 && hN > 0.14) {
+    let hCap = mix(0.14, 0.055, smoothstep(-0.12, 0.18, b));
+    hN = mix(hN, min(hN, hCap), smoothstep(-0.12, 0.1, b));
+  }
+  // Extra inland kill: once past the foreshore, shed height before dune climb.
+  let inlandK = smoothstep(0.42, 0.12, off) * smoothstep(-0.15, 0.2, b);
+  if (inlandK > 0.01) {
+    hN *= 1.0 - 0.55 * inlandK;
+    vel *= 1.0 - 0.4 * inlandK;
+  }
 
   var foamN = 0.0;
   if (hN > 0.006) { foamN = clamp(hf / hN, 0.0, 1.25); }
@@ -408,6 +455,13 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let dilute = smoothstep(0.28, 0.035, foamN);
   let retreat = clamp(dot(vel, S) / max(sp, 0.15), 0.0, 1.0);
   foamN *= exp(-dt * (0.16 + 3.4 * max(div, 0.0) + 1.2 * abs(shear) + dilute * 1.15 + retreat * 0.55));
+  // Noniv semi-Lagrangian downwind drift of break energy (scalar transport, not foam paint).
+  {
+    let windD = rot2(vec2<f32>(1.0, 0.0));
+    let back = cellPos(x, z) - windD * (dt * 0.4);
+    let aged = sampleSheet(back).w;
+    foamN = mix(foamN, aged, 0.07 * smoothstep(0.02, 0.15, foamN));
+  }
   foamN = clamp(foamN, 0.0, 1.25);
 
   var ground = wet0.z;
@@ -423,27 +477,29 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   if (hN > 0.08) { ground *= exp(-dt * 0.28); }
 
   // Authoritative coastal handoff: Dirichlet on a narrow seaward rim.
-  // Prior wide rim + ×1.3–2× dump over-drove run-up onto the dune.
+  // Mild couple only — prior crest× / vel× dump still over-ran walkable beach.
   // Interior cells stay HLL (no soft Gerstner overwrite).
-  let off = f32(z) / max(U.nz - 1.0, 1.0);
-  let wRow = smoothstep(0.86, 0.98, off);
-  let wDepth = smoothstep(0.05, -0.55, b);
+  let wRow = smoothstep(0.88, 0.99, off);
+  let wDepth = smoothstep(0.02, -0.65, b);
   let w = wRow * wDepth;
-  if (w > 0.001 && b < 0.35) {
+  if (w > 0.001 && b < 0.25) {
+    let posC = cellPos(x, z);
     let depthDrive = max(-b, 0.25);
-    let sea = ocean(cellPos(x, z), depthDrive);
-    // Shared free-surface η ≈ sea.x; mild crest bias only — match seaAt scale.
-    let crestGate = smoothstep(0.008, 0.1, sea.x);
+    let sea = ocean(posC, depthDrive);
+    // Shared free-surface η ≈ sea.x; almost no crest amplify on the rim.
+    let crestGate = smoothstep(0.01, 0.12, sea.x);
     let waveH = max(abs(sea.x) * 2.0, 0.02);
-    let depthLim = smoothstep(0.35, 0.65, waveH / max(depthDrive, 0.2));
+    let depthLim = smoothstep(0.4, 0.75, waveH / max(depthDrive, 0.2));
     let coupleSteep = abs(sea.x) * length(sea.yz) / max(depthDrive, 0.3);
-    let steepLim = smoothstep(0.06, 0.32, coupleSteep);
-    let brkEvt = max(depthLim, steepLim) * smoothstep(2.8, 0.2, depthDrive) * crestGate;
-    let hO = max(sea.x * (1.05 + 0.08 * brkEvt) - b, 0.0);
+    let steepLim = smoothstep(0.08, 0.36, coupleSteep);
+    // Noniv Jacobian fold from FFT slopes — same open-sea fold family into shore couple.
+    let fold = fftFold(posC);
+    let brkEvt = max(max(depthLim, steepLim), fold * 0.8) * smoothstep(2.8, 0.2, depthDrive) * crestGate;
+    let hO = max(sea.x * (1.0 + 0.04 * brkEvt) - b, 0.0);
     hN = mix(hN, hO, w);
-    vel = mix(vel, sea.yz * (1.08 + 0.12 * brkEvt), w);
+    vel = mix(vel, sea.yz * (1.0 + 0.06 * brkEvt), w);
     // Foam seed when the drive crest trips — transported by SWE, not painted.
-    foamN = mix(foamN, max(foamN, brkEvt * 0.95), w * 0.7 * clamp(brkEvt + 0.1, 0.0, 1.0));
+    foamN = mix(foamN, max(foamN, brkEvt * 0.85), w * 0.55 * clamp(brkEvt + 0.1, 0.0, 1.0));
   }
   // Alongshore ends are closed walls (flux already zero outside). Do not destroy
   // mass with a fade — only damp foam that would otherwise pile on the rim.
@@ -452,22 +508,44 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
     foamN *= mix(0.35, 1.0, edge);
   }
 
-  // Particle belt → sheet gather (carriers subordinate; no second free surface).
+  // Full SPH gather (9-cell hash walk) → sheet. Carriers subordinate; η stays SWE-owned.
   {
-    let belt = smoothstep(0.18, 0.32, off) * (1.0 - smoothstep(0.72, 0.88, off))
-      * smoothstep(0.004, 0.05, hN) * smoothstep(0.35, -0.05, b);
-    if (belt > 0.02) {
+    let belt = smoothstep(0.05, 0.18, off) * (1.0 - smoothstep(0.8, 0.95, off))
+      * smoothstep(0.002, 0.04, hN) * smoothstep(0.28, -0.12, b);
+    if (belt > 0.015) {
       let pos = cellPos(x, z);
       var pull = vec2<f32>(0.0);
       var wP = 0.0;
-      let base = (x * 1103515245u + z * 12345u) % PN;
-      for (var k = 0u; k < 3u; k++) {
-        let p = parts[(base + k * 509u) % PN];
-        let r2 = dot(p.xy - pos, p.xy - pos);
-        if (r2 < 1.85) { let wk = 1.85 - r2; pull += p.zw * wk; wP += wk; }
+      var massP = 0.0;
+      let oc = cellOf(pos);
+      for (var oy = -1; oy <= 1; oy++) {
+        for (var ox = -1; ox <= 1; ox++) {
+          let key = hashCell(oc + vec2<i32>(ox, oy));
+          var j = atomicLoad(&heads[key]);
+          var guard = 0u;
+          loop {
+            if (j == EMPTY || guard >= 48u) { break; }
+            let p = parts[j];
+            let d = p.xy - pos;
+            let r2 = dot(d, d);
+            if (r2 < SPH_H2) {
+              let v = SPH_H2 - r2;
+              let wk = v * v * v * K_POLY6;
+              pull += p.zw * wk;
+              wP += wk;
+              massP += dens[j].x * wk;
+            }
+            j = nextP[j];
+            guard = guard + 1u;
+          }
+        }
       }
-      if (wP > 1e-4) {
-        vel = mix(vel, pull / wP, mix(0.22, 0.55, smoothstep(0.03, 0.16, hN)) * belt);
+      if (wP > 1e-5) {
+        let filmG = smoothstep(0.14, 0.02, hN);
+        // FLIP/PIC fluidity (jeantimex) + mild density couple into sheet velocity (moebis continuity).
+        let densGate = smoothstep(SPH_RHO0 * 0.45, SPH_RHO0 * 1.15, massP / wP);
+        vel = mix(vel, pull / wP, mix(0.3, 0.72, smoothstep(0.025, 0.14, hN))
+          * (1.0 - 0.35 * filmG) * belt * (0.55 + 0.45 * densGate));
       }
     }
   }
@@ -480,7 +558,133 @@ fn shoreStep(@builtin(global_invocation_id) id: vec3<u32>) {
   textureStore(dstW, ip, vec4<f32>(wet, b, ground, 0.0));
 }
 
-// Sparse SPH/FLIP carriers: feed/read SWE η — never a competing free surface.
+// --- Full SPH/PBF belt (jeantimex + moebis transferable) ---
+// Spatial hash via atomic linked lists (9-cell neighbor walks). Particles never draw η.
+@compute @workgroup_size(64)
+fn partClear(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x;
+  if (i >= PN) { return; }
+  atomicStore(&heads[i], EMPTY);
+  nextP[i] = EMPTY;
+}
+
+@compute @workgroup_size(64)
+fn partHash(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x;
+  if (i >= PN) { return; }
+  // Predict a half-step (jeantimex externalForces→predicted) for neighbor queries.
+  let p = parts[i];
+  let pred = p.xy + p.zw * (U.dt * 0.25);
+  let key = hashCell(cellOf(pred));
+  nextP[i] = atomicExchange(&heads[key], i);
+}
+
+@compute @workgroup_size(64)
+fn partDens(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x;
+  if (i >= PN) { return; }
+  let p = parts[i];
+  let pos = p.xy + p.zw * (U.dt * 0.25);
+  let oc = cellOf(pos);
+  var density = 0.0;
+  var nearD = 0.0;
+  for (var oy = -1; oy <= 1; oy++) {
+    for (var ox = -1; ox <= 1; ox++) {
+      let key = hashCell(oc + vec2<i32>(ox, oy));
+      var j = atomicLoad(&heads[key]);
+      var guard = 0u;
+      loop {
+        if (j == EMPTY || guard >= 48u) { break; }
+        let q = parts[j];
+        let npos = q.xy + q.zw * (U.dt * 0.25);
+        let r2 = dot(npos - pos, npos - pos);
+        if (r2 < SPH_H2) {
+          let dst = sqrt(max(r2, 1e-10));
+          let v = SPH_H - dst;
+          density = density + v * v * K_SPIKY2;
+          nearD = nearD + v * v * v * K_SPIKY3;
+        }
+        j = nextP[j];
+        guard = guard + 1u;
+      }
+    }
+  }
+  dens[i] = vec2<f32>(density, nearD);
+}
+
+@compute @workgroup_size(64)
+fn partForce(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x;
+  if (i >= PN) { return; }
+  let p = parts[i];
+  let pos = p.xy + p.zw * (U.dt * 0.25);
+  var vel = p.zw;
+  let densI = dens[i];
+  let density = densI.x;
+  let nearD = densI.y;
+  // moebis/PBF free-surface: only correct compression (C>0); λ≈0 when under-dense.
+  let press = max(density - SPH_RHO0, 0.0) * SPH_KP;
+  let nearP = nearD * SPH_KN;
+  let oc = cellOf(pos);
+  var fP = vec2<f32>(0.0);
+  var fV = vec2<f32>(0.0);
+  var omega = 0.0;
+  var gradW = vec2<f32>(0.0);
+  if (density > 1e-5) {
+    for (var oy = -1; oy <= 1; oy++) {
+      for (var ox = -1; ox <= 1; ox++) {
+        let key = hashCell(oc + vec2<i32>(ox, oy));
+        var j = atomicLoad(&heads[key]);
+        var guard = 0u;
+        loop {
+          if (j == EMPTY || guard >= 48u) { break; }
+          if (j != i) {
+            let q = parts[j];
+            let npos = q.xy + q.zw * (U.dt * 0.25);
+            let d = npos - pos;
+            let r2 = dot(d, d);
+            if (r2 < SPH_H2 && r2 > 1e-12) {
+              let dst = sqrt(r2);
+              let dir = d / dst;
+              let densJ = dens[j];
+              let nDens = densJ.x;
+              let nNear = densJ.y;
+              let nPress = max(nDens - SPH_RHO0, 0.0) * SPH_KP;
+              let nNearP = nNear * SPH_KN;
+              if (nDens > 1e-5) {
+                let sp = (press + nPress) * 0.5;
+                let sn = (nearP + nNearP) * 0.5;
+                let v = SPH_H - dst;
+                fP += dir * ((-v * K_DSP2) * (sp / nDens) + (-v * v * K_DSP3) * (sn / max(nNear, 1e-5)));
+              }
+              // XSPH (jeantimex/moebis) + Müller Laplacian viscosity (matsuoka SPH force).
+              let wPoly = (SPH_H2 - r2);
+              let w6 = wPoly * wPoly * wPoly * K_POLY6;
+              let lap = (SPH_H - dst) * K_DSP2;
+              fV += (q.zw - vel) * (w6 + lap * 0.22 / nDens);
+              // Compact 2D vorticity confinement (moebis vorticity).
+              let cross = (q.zw.x - vel.x) * dir.y - (q.zw.y - vel.y) * dir.x;
+              omega = omega + cross * w6;
+              gradW += dir * w6;
+            }
+          }
+          j = nextP[j];
+          guard = guard + 1u;
+        }
+      }
+    }
+    vel = vel + (fP / density) * U.dt;
+    vel = vel + fV * SPH_XSPH * U.dt;
+    let gLen = length(gradW);
+    if (gLen > 1e-5 && abs(omega) > 1e-5) {
+      let nHat = gradW / gLen;
+      // Force restores swirl: N × ω (2D → perpendicular to density-color gradient).
+      vel = vel + vec2<f32>(-nHat.y, nHat.x) * (omega * SPH_VORT * U.dt);
+    }
+  }
+  parts[i] = vec4<f32>(p.xy, vel);
+}
+
 @compute @workgroup_size(64)
 fn partStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x;
@@ -491,12 +695,14 @@ fn partStep(@builtin(global_invocation_id) id: vec3<u32>) {
   let f0 = worldToCell(xz);
   let off0 = f0.y / max(U.nz - 1.0, 1.0);
   let s0 = sampleSheet(xz);
+  let bed0 = sampleBed(xz);
   let dead = f0.x < 1.0 || f0.y < 1.0 || f0.x > f32(NX) - 2.0 || f0.y > f32(NZ) - 2.0
-    || s0.x < 0.004 || off0 < 0.16 || off0 > 0.9 || sampleBed(xz) > 0.45;
+    || s0.x < 0.003 || off0 < 0.04 || off0 > 0.97 || bed0 > 0.35;
   if (dead) {
     let seed = f32(i) * 0.017 + U.time * 0.31;
     let alongT = fract(sin(seed * 12.9898) * 43758.17);
-    let seaT = mix(0.28, 0.74, fract(sin(seed * 78.233) * 43758.17));
+    // Full shoreline length × sea→film band (seamless with Dirichlet / wet-film handoff).
+    let seaT = mix(0.1, 0.88, fract(sin(seed * 78.233) * 43758.17));
     let ix = u32(clamp(alongT * (f32(NX) - 2.0) + 1.0, 1.0, f32(NX) - 2.0));
     let iz = u32(clamp(seaT * (f32(NZ) - 2.0) + 1.0, 1.0, f32(NZ) - 2.0));
     xz = cellPos(ix, iz);
@@ -504,10 +710,42 @@ fn partStep(@builtin(global_invocation_id) id: vec3<u32>) {
   }
   let sheet = sampleSheet(xz);
   let h = max(sheet.x, 0.0);
-  let gV = sheet.yz;
-  let fl = clamp(1.0 - smoothstep(0.16, 0.02, h) * 0.7, 0.15, 0.95);
+  // matsuoka MLS-MPM G2P idea: quadratic-ish 3×3 weighted gather from SWE (η still sheet-owned).
+  var gV = sheet.yz;
+  {
+    let f = worldToCell(xz);
+    let ix0 = i32(floor(f.x));
+    let iz0 = i32(floor(f.y));
+    let fx = f.x - f32(ix0);
+    let fz = f.y - f32(iz0);
+    var wSum = 0.0;
+    var vSum = vec2<f32>(0.0);
+    for (var gz = -1; gz <= 1; gz++) {
+      for (var gx = -1; gx <= 1; gx++) {
+        let wx = select(select(0.5 * (0.5 + fx) * (0.5 + fx), 0.75 - fx * fx, gx == 0), 0.5 * (0.5 - fx) * (0.5 - fx), gx == -1);
+        let wz = select(select(0.5 * (0.5 + fz) * (0.5 + fz), 0.75 - fz * fz, gz == 0), 0.5 * (0.5 - fz) * (0.5 - fz), gz == -1);
+        let ww = wx * wz;
+        let c = at(ix0 + gx, iz0 + gz);
+        vSum += c.yz * ww;
+        wSum += ww;
+      }
+    }
+    if (wSum > 1e-5) { gV = vSum / wSum; }
+  }
+  // PIC/FLIP (jeantimex) + density-aware free-surface lean (matsuoka/MPM): under-dense → PIC.
+  let densI = dens[i].x;
+  let densFlip = smoothstep(SPH_RHO0 * 0.35, SPH_RHO0 * 1.05, densI);
+  let fl = clamp((1.0 - smoothstep(0.14, 0.018, h) * 0.78) * densFlip, 0.1, 0.96);
   vel = mix(gV, vel, fl);
-  vel += (gV - vel) * (0.35 * (1.0 - fl));
+  vel += (gV - vel) * (0.4 * (1.0 - fl));
+  // Mild seaAt/SWE couple at seaward rim so particles inherit ocean drive without owning η.
+  let rim = smoothstep(0.82, 0.95, off0);
+  if (rim > 0.01) {
+    let depthDrive = max(-bed0, 0.25);
+    let sea = ocean(xz, depthDrive);
+    let foldP = fftFold(xz);
+    vel = mix(vel, sea.yz * (1.0 + 0.08 * foldP), rim * 0.35);
+  }
   xz += vel * dt;
   collideBed(&xz, &vel, h);
   let f1 = worldToCell(xz);
@@ -515,7 +753,10 @@ fn partStep(@builtin(global_invocation_id) id: vec3<u32>) {
     vel *= 0.2;
     xz = cellPos(u32(clamp(f1.x, 1.0, f32(NX) - 2.0)), u32(clamp(f1.y, 1.0, f32(NZ) - 2.0)));
   }
-  if (sampleBed(xz) > -0.02) { vel *= 0.82; }
+  let bed1 = sampleBed(xz);
+  // Wet-film handoff + moebis-style adhesion damp on dry bed (sheet owns η).
+  if (bed1 > -0.08) { vel *= mix(0.88, 0.5, smoothstep(-0.08, 0.2, bed1)); }
+  if (h < 0.03) { vel *= 0.78; }
   parts[i] = vec4<f32>(xz, vel);
 }
 
@@ -618,23 +859,50 @@ async function createShore(device, world, anchor, shapeView, rocks) {
 
   const partData = new Float32Array(SHORE_PART_N * 4);
   for (let i = 0; i < SHORE_PART_N; i++) {
+    // Seed across full alongshore × sea→film band (entire shoreline belt).
     const ix = 1 + ((i * 17) % (nx - 2));
-    const iz = 1 + ((((i / 7) | 0) % Math.max(1, ((nz * 0.46) | 0))));
-    const iz2 = Math.min(nz - 2, Math.max(1, ((0.28 * nz) | 0) + iz));
+    const band = Math.max(1, ((nz * 0.78) | 0));
+    const iz = 1 + ((((i / 7) | 0) % band));
+    const iz2 = Math.min(nz - 2, Math.max(1, ((0.1 * nz) | 0) + iz));
     partData[i * 4] = originX + alongX * (ix + 0.5) * dx + seaX * (iz2 + 0.5) * dx;
     partData[i * 4 + 1] = originZ + alongZ * (ix + 0.5) * dx + seaZ * (iz2 + 0.5) * dx;
   }
-  const partBuf = device.createBuffer({ size: partData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const partBuf = device.createBuffer({
+    size: partData.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  });
   device.queue.writeBuffer(partBuf, 0, partData);
+  const densBuf = device.createBuffer({
+    size: SHORE_PART_N * 8,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
+  const headsBuf = device.createBuffer({
+    size: SHORE_PART_N * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
+  const nextBuf = device.createBuffer({
+    size: SHORE_PART_N * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
 
   const module = device.createShaderModule({ code: shoreWgsl() });
   const info = await module.getCompilationInfo();
   const errs = info.messages.filter((m) => m.type === 'error');
   if (errs.length) throw new Error(errs.map((e) => e.lineNum + ':' + e.message).join('\n'));
-  const layout = layoutOf(device, GPUShaderStage.COMPUTE, 'tottoutw');
+  // textures + uniform + shape + parts/dens/heads/next
+  const layout = layoutOf(device, GPUShaderStage.COMPUTE, 'tottoutwwww');
   const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
   const pipe = (name) => device.createComputePipeline({ layout: pl, compute: { module: module, entryPoint: name } });
-  const pipes = { seed: pipe('seed'), step: pipe('shoreStep'), part: pipe('partStep'), copy: pipe('copy') };
+  const pipes = {
+    seed: pipe('seed'),
+    step: pipe('shoreStep'),
+    partClear: pipe('partClear'),
+    partHash: pipe('partHash'),
+    partDens: pipe('partDens'),
+    partForce: pipe('partForce'),
+    part: pipe('partStep'),
+    copy: pipe('copy')
+  };
 
   const ubuf = device.createBuffer({ size: 144, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const u = new Float32Array(36);
@@ -643,7 +911,10 @@ async function createShore(device, world, anchor, shapeView, rocks) {
   u[13] = nz;
   const bedView = bedTex.createView();
   const shape = shapeView;
-  const group = (src, dst, srcW, dstW) => groupOf(device, layout, [src.createView(), dst.createView(), bedView, srcW.createView(), dstW.createView(), ubuf, shape, partBuf]);
+  const group = (src, dst, srcW, dstW) => groupOf(device, layout, [
+    src.createView(), dst.createView(), bedView, srcW.createView(), dstW.createView(),
+    ubuf, shape, partBuf, densBuf, headsBuf, nextBuf
+  ]);
   const stepBG = [
     group(state[0], state[1], wet[0], wet[1]),
     group(state[1], state[0], wet[1], wet[0])
@@ -657,9 +928,8 @@ async function createShore(device, world, anchor, shapeView, rocks) {
   function writeWaves(time, dt) {
     u[8] = time;
     u[9] = dt;
-    // Shore breakers track weather wind strength; mild couple so Dirichlet
-    // matches seaAt scale (prior ×1.32 over-drove foreshore height / over-run).
-    u[10] = wp.amp * (typeof env !== 'undefined' ? env.sea : 1) * 1.06;
+    // Shore breakers track weather wind strength; couple ≤ seaAt (no amp boost).
+    u[10] = wp.amp * (typeof env !== 'undefined' ? env.sea : 1) * 0.98;
     u[11] = wp.spd;
     u[12] = wp.dir;
     u[14] = Math.max(wp.frq, 0.2);
@@ -684,21 +954,30 @@ async function createShore(device, world, anchor, shapeView, rocks) {
     }
     p.end();
   }
+  // One SPH substep: clear → hash → density → pressure/XSPH/vorticity → PIC/FLIP integrate.
+  function sphChain(bg) {
+    return [
+      [pipes.partClear, bg, 'part'],
+      [pipes.partHash, bg, 'part'],
+      [pipes.partDens, bg, 'part'],
+      [pipes.partForce, bg, 'part'],
+      [pipes.part, bg, 'part']
+    ];
+  }
   function seed(enc) {
     writeWaves(0, 0.02);
-    run(enc, [[pipes.seed, stepBG[0]], [pipes.part, stepBG[0], 'part'], [pipes.copy, copyBG[1]]]);
+    run(enc, [[pipes.seed, stepBG[0]], ...sphChain(stepBG[0]), [pipes.copy, copyBG[1]]]);
     ping = 1;
   }
   function encode(enc, time, dt) {
     // CFL at dx 0.32 m and a ~8 m/s bore is about 0.016 s. Stay under it.
-    // Cap at 3 substeps: at ~30 fps (dt≈0.033) that is still full CFL coverage; allowing
-    // 5 on hitch frames made slow frames do more SWE work and dig a deeper hole.
+    // Cap at 3 substeps: at ~30 fps (dt≈0.033) that is still full CFL coverage.
     const n = Math.max(1, Math.min(3, Math.ceil(dt / 0.012)));
     writeWaves(time, dt / n);
     const steps = [];
     for (let s = 0; s < n; s++) {
-      // Particles advance on the current src sheet, then shoreStep gathers them into η.
-      steps.push([pipes.part, stepBG[ping], 'part']);
+      // Full SPH on current src sheet, then shoreStep gathers neighbors into η.
+      steps.push(...sphChain(stepBG[ping]));
       steps.push([pipes.step, stepBG[ping]]);
       ping = 1 - ping;
     }
@@ -711,6 +990,10 @@ async function createShore(device, world, anchor, shapeView, rocks) {
     stateView: showS.createView(),
     wetView: showW.createView(),
     module: module,
+    partBuf: partBuf,
+    partN: SHORE_PART_N,
+    sphH: SHORE_SPH_H,
+    solverSteps: ['partClear', 'partHash', 'partDens', 'partForce', 'partStep', 'shoreStep'],
     seed: seed,
     encode: encode
   };
